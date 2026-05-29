@@ -72,9 +72,10 @@ Goal: clone the repo, set up the venv, run static checks. **Do not** attempt to 
 ```bash
 git clone https://github.com/<your-fork>/agentic-test-automation.git
 cd agentic-test-automation
-uv sync                                        # creates .venv, installs Phase 0 deps
+uv sync                                        # creates .venv, installs deps, editable-installs ai_test_gen
+uv run python -c 'import ai_test_gen'          # smoke-check the package layout imports
 uv run python -m py_compile scripts/*.py       # syntax check
-uv run ruff check scripts/                     # lint
+uv run ruff check scripts/ src/                # lint
 ```
 
 If `uv sync` errors with "no interpreter found for Python 3.12", install Python 3.12 (see [Prerequisites](#1-prerequisites-both-machines)) — `uv` reads [`.python-version`](.python-version) and refuses to substitute a different minor version.

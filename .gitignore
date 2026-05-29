@@ -36,6 +36,9 @@ storage_state*.json
 # ─── Generated artifacts ─────────────────────────────────────────
 output/
 
+# ─── RAG / Qdrant (Phase 2.5) ────────────────────────────────────
+qdrant_storage/
+
 # ─── IDE / OS junk ───────────────────────────────────────────────
 .DS_Store
 Thumbs.db

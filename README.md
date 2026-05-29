@@ -21,6 +21,11 @@ This release covers **access, tooling, and gateway verification only**. There is
 - Filled-in `project_context.md` / `project_map.md`
 - Dockerfile, GitLab CI, RAG indexing
 
+> **Phase 1.A is now in progress.** The `src/ai_test_gen/` package skeleton has been scaffolded as
+> stubs (each module names the guide section + the task that implements it), and `pyproject.toml` is
+> now an installable package (`uv run python -c 'import ai_test_gen'` succeeds). The items above
+> remain unimplemented — stubs are not behavior.
+
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 
 ## Where to look next
