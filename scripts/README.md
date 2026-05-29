@@ -27,6 +27,9 @@ Step 0 is the most important — if any candidate model fails tool calling, stop
 | `JIRA_EMAIL` | — | — | required |
 | `JIRA_TOKEN` | — | — | required |
 | `XRAY_IS_CLOUD` | — | — | optional (auto-detect) |
+| `USE_HTTP_PROXY` | optional | optional | optional |
+
+All scripts connect **directly by default** and ignore the environment's `HTTP(S)_PROXY` / `NO_PROXY` (the gateway is reached over the VPN; this does not bypass the VPN). Set `USE_HTTP_PROXY=true` only if your gateway/Jira is reachable solely through a proxy.
 
 ## Expected output
 
@@ -91,6 +94,7 @@ If `--issue-key` is omitted, the steps-field check is skipped and only flavor is
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Any script: TLS/mTLS handshake OK, then "server disconnected without sending a response" | Routing through the environment-configured proxy drops the request — a direct `curl` works, the same `curl` via the proxy fails identically | Scripts ignore the env proxy **by default**; just don't set `USE_HTTP_PROXY` (and connect over the VPN). If the endpoint is only reachable through a proxy, set `USE_HTTP_PROXY=true`. If it still drops when direct, the gateway may fingerprint Python's TLS ClientHello — fall back to a libcurl-backed client (`curl_cffi`) |
 | step0: "Model did not call any tool" | Gateway not forwarding `tools` param | Ask platform team; some gateways need `X-Use-Tools: true` header |
 | step0: HTTP 404 with model name in error | Wrong model name | `GET /v1/models` to list available |
 | step0b: HTTP 404 on `/rerank` | Rerank lives outside `/v1` | Set `RERANK_ENDPOINT=https://gw/rerank` in `.env` |

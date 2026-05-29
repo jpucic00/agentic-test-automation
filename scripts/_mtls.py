@@ -17,17 +17,30 @@ And optionally for server-side trust when the gateway uses a private CA:
 
     SSL_CERT_FILE           corporate root CA bundle (PEM)
 
+Proxy behavior:
+
+    USE_HTTP_PROXY          if "true"/"1"/"yes"/"on", httpx honors the
+                            environment's HTTP(S)_PROXY / NO_PROXY (trust_env=True).
+                            DEFAULT is direct: the scripts ignore the env proxy and
+                            connect straight to the endpoint (reached over the VPN
+                            on the company laptop — this does NOT bypass the VPN).
+                            Routing through an env-configured proxy is a common
+                            cause of "server disconnected without sending a
+                            response" even when the handshake succeeds — a direct
+                            `curl` works while the same request proxied drops.
+
 Usage (matches the platform team's reference example for this gateway):
 
     from openai import DefaultHttpxClient, OpenAI
     import _mtls
 
+    # Always build an explicit client so the proxy policy (and CA bundle) apply
+    # even when no client cert is configured.
+    http_kwargs = {"trust_env": _mtls.get_trust_env(), "verify": _mtls.get_verify_arg()}
     cert = _mtls.get_cert_arg()
     if cert is not None:
-        http_client = DefaultHttpxClient(cert=cert, verify=_mtls.get_verify_arg())
-        client = OpenAI(base_url=..., api_key=..., http_client=http_client)
-    else:
-        client = OpenAI(base_url=..., api_key=...)
+        http_kwargs["cert"] = cert
+    client = OpenAI(base_url=..., api_key=..., http_client=DefaultHttpxClient(**http_kwargs))
 
 `get_cert_arg()` returns a value suitable for `httpx`'s native `cert=` parameter:
   - None: no mTLS configured (caller uses defaults)
@@ -77,6 +90,29 @@ def get_verify_arg() -> str | bool:
     """Return `verify=` for httpx.Client. Points at the corp CA bundle if
     SSL_CERT_FILE is set, else True (httpx uses certifi's default bundle)."""
     return os.environ.get("SSL_CERT_FILE") or True
+
+
+def get_trust_env() -> bool:
+    """Whether httpx may read proxy/CA/netrc settings from the environment.
+
+    Defaults to False: these verification scripts connect DIRECTLY to the gateway
+    (and Jira) and IGNORE the environment's HTTP(S)_PROXY / NO_PROXY vars. On the
+    company laptop the endpoint is reached over the VPN; routing the request
+    through the env-configured proxy is what dropped it ("server disconnected
+    without sending a response" even though the TLS/mTLS handshake succeeds — a
+    direct `curl` works while the same request through the proxy drops
+    identically). This does NOT bypass the VPN, which is still required for
+    connectivity. Set USE_HTTP_PROXY=true to opt back into the environment proxy
+    (e.g. when the endpoint is only reachable THROUGH a proxy). The CA bundle is
+    unaffected — it is always passed explicitly via get_verify_arg()."""
+    return os.environ.get("USE_HTTP_PROXY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def describe_trust_env() -> str:
+    """One-line proxy-mode summary for pre-flight prints."""
+    if get_trust_env():
+        return "env proxy honored (USE_HTTP_PROXY=true)"
+    return "direct — ignoring env HTTP(S)_PROXY (set USE_HTTP_PROXY=true to use it)"
 
 
 def describe() -> str:

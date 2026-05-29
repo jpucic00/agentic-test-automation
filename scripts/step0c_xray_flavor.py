@@ -15,6 +15,8 @@ Reads from .env:
   MTLS_PKCS12_FILE/PASSWORD   — optional: mTLS client cert as a .pfx/.p12 bundle
   MTLS_CERT_FILE / KEY_FILE   — optional: same as above but separate PEM files
   SSL_CERT_FILE               — optional: corporate root CA bundle
+  USE_HTTP_PROXY              — optional: "true" honors env HTTP(S)_PROXY;
+                                default is DIRECT (env HTTP(S)_PROXY ignored)
 
 Must run on the company laptop.
 
@@ -51,10 +53,15 @@ except Exception as e:
     print(f"[fail] mTLS setup failed: {type(e).__name__}: {e}")
     sys.exit(2)
 
-_client_kwargs: dict = {"timeout": 15.0}
+# Default is direct — the env HTTP(S)_PROXY is ignored unless USE_HTTP_PROXY=true
+# (trust_env). The CA bundle (verify) is always applied. See _mtls.get_trust_env.
+_client_kwargs: dict = {
+    "timeout": 15.0,
+    "trust_env": _mtls.get_trust_env(),
+    "verify": _mtls.get_verify_arg(),
+}
 if _cert is not None:
     _client_kwargs["cert"] = _cert
-    _client_kwargs["verify"] = _mtls.get_verify_arg()
 HTTP = httpx.Client(**_client_kwargs)
 
 
@@ -167,6 +174,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"mTLS: {_mtls.describe()}")
+    print(f"Proxy: {_mtls.describe_trust_env()}")
 
     flavor = detect_flavor()
     if flavor is None:

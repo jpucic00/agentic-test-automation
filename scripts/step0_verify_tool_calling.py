@@ -11,6 +11,8 @@ Reads from .env:
   MTLS_PKCS12_FILE/PASSWORD   — optional: mTLS client cert as a .pfx/.p12 bundle
   MTLS_CERT_FILE / KEY_FILE   — optional: same as above but separate PEM files
   SSL_CERT_FILE               — optional: corporate root CA bundle
+  USE_HTTP_PROXY              — optional: "true" honors env HTTP(S)_PROXY;
+                                default is DIRECT (env HTTP(S)_PROXY ignored)
 
 Must run on the company laptop (the gateway is not reachable from the private PC).
 
@@ -26,6 +28,7 @@ import sys
 
 from dotenv import load_dotenv
 from openai import DefaultHttpxClient, OpenAI
+from openai.types.chat import ChatCompletionFunctionToolParam
 
 load_dotenv()
 
@@ -43,18 +46,24 @@ except Exception as e:
     print(f"[fail] mTLS setup failed: {type(e).__name__}: {e}")
     sys.exit(2)
 
+# Always build an explicit httpx client so the proxy policy (trust_env) and CA
+# bundle apply even when no client cert is configured. Default is direct — the
+# env HTTP(S)_PROXY is ignored unless USE_HTTP_PROXY=true. See _mtls.get_trust_env.
+_http_kwargs: dict = {
+    "trust_env": _mtls.get_trust_env(),
+    "verify": _mtls.get_verify_arg(),
+}
 if _cert is not None:
-    client = OpenAI(
-        base_url=os.environ["LLM_BASE_URL"],
-        api_key=os.environ["LLM_API_KEY"],
-        http_client=DefaultHttpxClient(cert=_cert, verify=_mtls.get_verify_arg()),
-    )
-else:
-    client = OpenAI(base_url=os.environ["LLM_BASE_URL"], api_key=os.environ["LLM_API_KEY"])
+    _http_kwargs["cert"] = _cert
+client = OpenAI(
+    base_url=os.environ["LLM_BASE_URL"],
+    api_key=os.environ["LLM_API_KEY"],
+    http_client=DefaultHttpxClient(**_http_kwargs),
+)
 
 # A dummy tool the model can call. Deliberately simple so failure means the
 # gateway/model can't do tool calling, not that the tool was too complex.
-TOOLS = [
+TOOLS: list[ChatCompletionFunctionToolParam] = [
     {
         "type": "function",
         "function": {
@@ -97,16 +106,20 @@ def test_model(model: str) -> bool:
             return False
 
         call = msg.tool_calls[0]
+        if call.type != "function":
+            print(f"  [fail] Expected a function tool call, got type {call.type!r}")
+            return False
         print(f"  [ok] Tool called: {call.function.name}")
         print(f"  [ok] Arguments:   {call.function.arguments}")
         return True
     except Exception as e:
-        print(f"  [fail] Error: {e}")
+        print(f"  [fail] Error: {type(e).__name__}: {e}")
         return False
 
 
 def main() -> int:
     print(f"mTLS: {_mtls.describe()}")
+    print(f"Proxy: {_mtls.describe_trust_env()}")
     results = {m: test_model(m) for m in MODELS_TO_TEST}
     print("\n=== Summary ===")
     for m, ok in results.items():

@@ -126,6 +126,7 @@ Each section in [`.env.example`](.env.example) names the script that consumes it
 - `XRAY_IS_CLOUD` — `true` for `*.atlassian.net`, `false` for self-hosted.
 - `JIRA_TOKEN` — for Cloud this is an **API token**, not your Jira password.
 - `GITLAB_PROJECT_ID` — `group/subgroup/project` path or the numeric ID. URL-encoded path is also accepted (`group%2Fproject`).
+- `USE_HTTP_PROXY` — leave **unset** (the default) to connect **directly** and ignore the environment's `HTTP(S)_PROXY` (the gateway is reached over the VPN; this does not bypass the VPN). Set to `true` only if your gateway/Jira is reachable solely through a proxy. Routing through the env proxy is a common cause of "server disconnected without sending a response" even when the handshake succeeds.
 
 `.env` is in [`.gitignore`](.gitignore) — it will never be staged.
 
@@ -177,7 +178,7 @@ Detailed expected output and failure-mode table is in [`scripts/README.md`](scri
 | Symptom | Where | Fix |
 |---|---|---|
 | `uv sync` says "no Python 3.12 interpreter found" | Either machine | Install Python 3.12 via the platform installer in section 1; `uv` will not substitute another minor version |
-| `uv run python …` works on private PC but `step0*` scripts time out | Company laptop | Corporate proxy may be blocking the gateway — check with networking team |
+| `step0*` scripts fail with "server disconnected without sending a response" (the TLS/mTLS handshake succeeds first) | Company laptop | Routing through the environment-configured proxy drops the request. The scripts ignore the env proxy **by default** and connect directly — verify you have **not** set `USE_HTTP_PROXY=true`, and that you are on the VPN (which provides the route; this does not bypass the VPN). A direct `curl` should return 200; the same `curl` through the proxy fails identically. If the endpoint is reachable **only** through a proxy, set `USE_HTTP_PROXY=true`. If even a direct Python call still drops, the gateway may fingerprint Python's TLS ClientHello — use a libcurl-backed client (`curl_cffi`) |
 | Step 0 reports `Model did not call any tool` | Company laptop | Gateway is not forwarding `tools` parameter; some gateways need a custom header like `X-Use-Tools: true` — ask platform team |
 | Step 0c lists every `customfield_*` for the issue | Company laptop | The Xray steps field has a non-standard human name; record the right ID manually and feed it into Phase 1.A config |
 | `git check-ignore .env` exits non-zero | Either machine | `.gitignore` was edited; restore `.env` line so secrets stay untracked |
