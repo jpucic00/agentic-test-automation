@@ -8,6 +8,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",
     "requests>=2.31",
+    "cryptography>=42.0",   # decrypt PKCS#12 (.p12/.pfx) mTLS bundles when MTLS_PKCS12_FILE is set
 ]
 
 [dependency-groups]

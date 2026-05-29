@@ -6,8 +6,11 @@ on-prem gateways don't properly proxy `tools` / `tool_choice` even when the
 underlying model supports function calling. Find out now, not at week 3.
 
 Reads from .env:
-  LLM_BASE_URL   — OpenAI-compatible endpoint
-  LLM_API_KEY    — gateway secret
+  LLM_BASE_URL                — OpenAI-compatible endpoint
+  LLM_API_KEY                 — gateway secret
+  MTLS_PKCS12_FILE/PASSWORD   — optional: mTLS client cert as a .pfx/.p12 bundle
+  MTLS_CERT_FILE / KEY_FILE   — optional: same as above but separate PEM files
+  SSL_CERT_FILE               — optional: corporate root CA bundle
 
 Must run on the company laptop (the gateway is not reachable from the private PC).
 
@@ -22,15 +25,32 @@ import os
 import sys
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import DefaultHttpxClient, OpenAI
 
 load_dotenv()
+
+# Local mTLS helper; must be imported AFTER load_dotenv() because it reads env.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _mtls  # noqa: E402
 
 if not os.environ.get("LLM_BASE_URL") or not os.environ.get("LLM_API_KEY"):
     print("[fail] LLM_BASE_URL and LLM_API_KEY must be set in .env")
     sys.exit(2)
 
-client = OpenAI(base_url=os.environ["LLM_BASE_URL"], api_key=os.environ["LLM_API_KEY"])
+try:
+    _cert = _mtls.get_cert_arg()
+except Exception as e:
+    print(f"[fail] mTLS setup failed: {type(e).__name__}: {e}")
+    sys.exit(2)
+
+if _cert is not None:
+    client = OpenAI(
+        base_url=os.environ["LLM_BASE_URL"],
+        api_key=os.environ["LLM_API_KEY"],
+        http_client=DefaultHttpxClient(cert=_cert, verify=_mtls.get_verify_arg()),
+    )
+else:
+    client = OpenAI(base_url=os.environ["LLM_BASE_URL"], api_key=os.environ["LLM_API_KEY"])
 
 # A dummy tool the model can call. Deliberately simple so failure means the
 # gateway/model can't do tool calling, not that the tool was too complex.
@@ -86,6 +106,7 @@ def test_model(model: str) -> bool:
 
 
 def main() -> int:
+    print(f"mTLS: {_mtls.describe()}")
     results = {m: test_model(m) for m in MODELS_TO_TEST}
     print("\n=== Summary ===")
     for m, ok in results.items():

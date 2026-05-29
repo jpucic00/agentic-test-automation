@@ -4,11 +4,14 @@ Step 0b — verify the internal LLM gateway exposes /embeddings and a rerank end
 RAG (Phase 2.5) needs both. Confirming today saves a multi-week surprise later.
 
 Reads from .env:
-  LLM_BASE_URL      — OpenAI-compatible base, e.g. https://gw/v1
-  LLM_API_KEY       — gateway secret
-  EMBEDDING_MODEL   — e.g. mxbai-embed-large
-  RERANKER_MODEL    — e.g. bge-reranker-v2-m3
-  RERANK_ENDPOINT   — optional full URL override if /rerank lives outside /v1
+  LLM_BASE_URL                — OpenAI-compatible base, e.g. https://gw/v1
+  LLM_API_KEY                 — gateway secret
+  EMBEDDING_MODEL             — e.g. mxbai-embed-large
+  RERANKER_MODEL              — e.g. bge-reranker-v2-m3
+  RERANK_ENDPOINT             — optional: full URL override if /rerank is elsewhere
+  MTLS_PKCS12_FILE/PASSWORD   — optional: mTLS client cert as a .pfx/.p12 bundle
+  MTLS_CERT_FILE / KEY_FILE   — optional: same as above but separate PEM files
+  SSL_CERT_FILE               — optional: corporate root CA bundle
 
 Must run on the company laptop.
 
@@ -25,6 +28,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _mtls  # noqa: E402
+
 if not os.environ.get("LLM_BASE_URL") or not os.environ.get("LLM_API_KEY"):
     print("[fail] LLM_BASE_URL and LLM_API_KEY must be set in .env")
     sys.exit(2)
@@ -35,6 +41,17 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "mxbai-embed-large")
 RERANKER_MODEL = os.environ.get("RERANKER_MODEL", "bge-reranker-v2-m3")
 RERANK_ENDPOINT = os.environ.get("RERANK_ENDPOINT") or None
 
+try:
+    _cert = _mtls.get_cert_arg()
+except Exception as e:
+    print(f"[fail] mTLS setup failed: {type(e).__name__}: {e}")
+    sys.exit(2)
+
+_client_kwargs: dict = {"timeout": 30.0}
+if _cert is not None:
+    _client_kwargs["cert"] = _cert
+    _client_kwargs["verify"] = _mtls.get_verify_arg()
+HTTP = httpx.Client(**_client_kwargs)
 
 HEADERS = {
     "Authorization": f"Bearer {LLM_API_KEY}",
@@ -47,11 +64,10 @@ def test_embeddings() -> bool:
     print(f"\n=== /embeddings ({EMBEDDING_MODEL}) ===")
     print(f"  POST {url}")
     try:
-        resp = httpx.post(
+        resp = HTTP.post(
             url,
             headers=HEADERS,
             json={"model": EMBEDDING_MODEL, "input": ["smoke test"]},
-            timeout=30.0,
         )
     except Exception as e:
         print(f"  [fail] Request failed: {e}")
@@ -90,7 +106,7 @@ def test_rerank() -> bool:
         ],
     }
     try:
-        resp = httpx.post(url, headers=HEADERS, json=payload, timeout=30.0)
+        resp = HTTP.post(url, headers=HEADERS, json=payload)
     except Exception as e:
         print(f"  [fail] Request failed: {e}")
         return False
@@ -130,6 +146,7 @@ def test_rerank() -> bool:
 
 
 def main() -> int:
+    print(f"mTLS: {_mtls.describe()}")
     emb_ok = test_embeddings()
     rerank_ok = test_rerank()
     print("\n=== Summary ===")

@@ -129,6 +129,23 @@ Each section in [`.env.example`](.env.example) names the script that consumes it
 
 `.env` is in [`.gitignore`](.gitignore) — it will never be staged.
 
+#### Optional: mTLS client certificate
+
+If the corporate gateway requires mutual TLS (the platform team will have given you a `.pfx` or `.p12` bundle plus a password), uncomment the mTLS block at the top of `.env`:
+
+```
+MTLS_PKCS12_FILE=/absolute/path/to/client.pfx
+MTLS_PKCS12_PASSWORD=<password from IT>
+```
+
+`.pfx` and `.p12` are the same file format — `MTLS_PKCS12_FILE` accepts either extension. The path must be **absolute** (`.env` does not expand `~`). Sanity-check the bundle outside Python with:
+
+```bash
+openssl pkcs12 -in /absolute/path/to/client.pfx -info -noout -passin pass:"$MTLS_PKCS12_PASSWORD"
+```
+
+If your gateway also uses a private CA (rare for cloud-hosted gateways), point `SSL_CERT_FILE` at the corp root CA PEM bundle in the same block.
+
 ### 3.5 Run Step 0 verification
 
 In order:
