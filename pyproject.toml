@@ -1,0 +1,29 @@
+[project]
+name = "agentic-test-automation"
+version = "0.0.1"
+description = "AI-driven Playwright test generation scaffold (Phase 0 — Access, Tooling & Gateway Verification)"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.0",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "requests>=2.31",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+include = ["scripts"]
