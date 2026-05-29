@@ -67,18 +67,26 @@ If any of these fail, fix before moving on.
 
 ## 2. Private PC (authoring) setup
 
-Goal: clone the repo, set up the venv, run static checks. **Do not** attempt to run any `scripts/step0*` script here — they all need the corporate network.
+Goal: clone the repo, set up the venv, run static checks. **Do not** run any `scripts/step0*` or `scripts/test_xray.py` here — they all need the corporate network.
 
 ```bash
 git clone https://github.com/<your-fork>/agentic-test-automation.git
 cd agentic-test-automation
 uv sync                                        # creates .venv, installs deps, editable-installs ai_test_gen
 uv run python -c 'import ai_test_gen'          # smoke-check the package layout imports
-uv run python -m py_compile scripts/*.py       # syntax check
-uv run ruff check scripts/ src/                # lint
+uv run ruff check src tests scripts            # lint
+uvx pyright src scripts                        # type-check
+uv run pytest                                  # offline unit suite (config, models, xray client) — no network
 ```
 
 If `uv sync` errors with "no interpreter found for Python 3.12", install Python 3.12 (see [Prerequisites](#1-prerequisites-both-machines)) — `uv` reads [`.python-version`](.python-version) and refuses to substitute a different minor version.
+
+### 2.1 Dependency guardrail (Claude Code hook)
+
+If you drive this repo with Claude Code, a `PreToolUse` hook ([`.claude/hooks/guard-deps.py`](.claude/hooks/guard-deps.py), wired in [`.claude/settings.json`](.claude/settings.json)) pauses for your explicit approval whenever a tool call would add or change a dependency — any `uv add` / `uv remove` / `uv lock` / `pip install` / `poetry add` / `conda install`, or a direct edit to `pyproject.toml` or `uv.lock`. It never blocks; it forces an "ask" prompt so a human vets the package (real name, actually needed, no typosquat) **before** it reaches the hash-pinned `uv.lock` and gets installed — including on the company laptop. `uv sync` (install-from-lock) is intentionally not gated.
+
+- **Activate:** the first time you open this repo in Claude Code, approve the project hook when prompted, or run `/hooks` once to load it. Pure stdlib — it needs only `python3` on PATH.
+- **Extend / disable:** edit the `DEP_COMMAND_MARKERS` and `DEP_FILES` lists at the top of the script (e.g. add `requirements.txt`), or remove the `hooks` block from `.claude/settings.json` (toggle via `/hooks`).
 
 ---
 
@@ -171,6 +179,20 @@ open "$STAGING_BASE_URL"   # macOS; use xdg-open on Linux or start on Windows
 ```
 
 Detailed expected output and failure-mode table is in [`scripts/README.md`](scripts/README.md).
+
+### 3.6 Phase 1.A runtime check — Xray client
+
+Phase 1.A adds one runtime check beyond Step 0. `step0c` only *detects* the steps
+field; this exercises the actual client (`XrayClient.fetch()` → `ManualTestCase`).
+Needs `XRAY_IS_CLOUD=false` and `JIRA_TOKEN` set to your PAT (sent as Bearer):
+
+```bash
+uv run python scripts/test_xray.py --issue-key <one-real-QA-key>
+```
+
+Expect a `ManualTestCase` JSON with **non-empty `steps` and `expected_results`**. If
+your tenant's steps field isn't `customfield_11006`, set `XRAY_STEPS_FIELD_ID` to the
+ID that `step0c_xray_flavor.py --issue-key` reports.
 
 ---
 

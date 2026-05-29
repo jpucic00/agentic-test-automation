@@ -1,5 +1,163 @@
 """Fetch test cases from Jira/Xray and normalize to ManualTestCase.
 
-Stub from Phase 1.A scaffolding. Implemented in the "Xray client (Cloud + Server)"
-task (AI_TEST_GENERATION_GUIDE.md §3.6).
+Supports both Xray Cloud (GraphQL/custom fields) and Xray Server/Data Center
+(REST) behind a single ``XrayClient.fetch(issue_key) -> ManualTestCase``
+interface, selected by ``config.xray_is_cloud`` (AI_TEST_GENERATION_GUIDE.md §3.6).
+
+Server/DC specifics were resolved in Phase 0 (task j1cnfng, runtime-confirmed on
+the company laptop) and differ from the guide template:
+
+- Auth is a **Bearer Personal Access Token** (``JIRA_TOKEN``). The atlassian
+  client sends Bearer only when username/password are omitted.
+- Manual test steps live in a **custom field on the issue** (default
+  ``customfield_11006``, "Manual Test Steps"), read via
+  ``/rest/api/2/issue/<KEY>?expand=names`` — not the ``/rest/raven/...`` endpoint
+  the template uses. Override the field ID per adopter with ``XRAY_STEPS_FIELD_ID``.
 """
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from atlassian import Jira
+
+from .config import Config
+from .models import ManualTestCase
+
+# Server/DC custom field holding the manual test steps. Phase 0 finding (j1cnfng):
+# "Manual Test Steps" on the company tenant. Override per adopter via env.
+DEFAULT_STEPS_FIELD_ID = "customfield_11006"
+
+
+class XrayClient:
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        # Read after config has loaded .env. Default keeps the company tenant
+        # working with zero extra config; the env var keeps the scaffold shareable.
+        self.steps_field_id = os.environ.get("XRAY_STEPS_FIELD_ID", DEFAULT_STEPS_FIELD_ID)
+        self.jira = _build_jira(config)
+
+    def fetch(self, issue_key: str) -> ManualTestCase:
+        if self.config.xray_is_cloud:
+            return self._fetch_cloud(issue_key)
+        return self._fetch_server(issue_key)
+
+    def _get_issue(self, issue_key: str, expand: str | None = None) -> dict[str, Any]:
+        issue = self.jira.issue(issue_key, expand=expand)
+        if not isinstance(issue, dict):
+            raise RuntimeError(f"Jira returned no issue for {issue_key!r}")
+        return issue
+
+    def _fetch_server(self, issue_key: str) -> ManualTestCase:
+        # expand=names so the raw response carries the custom field's display name,
+        # which lets a human confirm the steps field on first run via scripts/test_xray.py.
+        issue = self._get_issue(issue_key, expand="names")
+        fields = issue["fields"]
+        steps, expected_results = _parse_manual_steps(fields.get(self.steps_field_id))
+        return ManualTestCase(
+            key=issue_key,
+            title=fields.get("summary") or "",
+            description=_strip_adf(fields.get("description")),
+            preconditions=[],
+            steps=steps,
+            expected_results=expected_results,
+            labels=fields.get("labels") or [],
+        )
+
+    def _fetch_cloud(self, issue_key: str) -> ManualTestCase:
+        # Path exists for completeness; the company tenant is Server/DC, so this is
+        # not exercised today (AC #3). Kept faithful to the guide template.
+        issue = self._get_issue(issue_key)
+        fields = issue["fields"]
+        steps = self._xray_cloud_steps(issue_key)
+        return ManualTestCase(
+            key=issue_key,
+            title=fields.get("summary") or "",
+            description=_strip_adf(fields.get("description")),
+            # Xray preconditions live in linked issues; fetch separately if needed.
+            preconditions=[],
+            steps=[s.get("action", "") for s in steps],
+            expected_results=[s.get("result", "") for s in steps],
+            labels=fields.get("labels") or [],
+        )
+
+    def _xray_cloud_steps(self, issue_key: str) -> list[dict[str, Any]]:
+        """Best-effort Xray Cloud step extraction (placeholder, per §3.6).
+
+        The proper Xray Cloud path authenticates with separate API client
+        credentials and queries GraphQL at ``/api/v2/graphql``. For the PoC we read
+        common step custom fields off the issue; replace with a real GraphQL call
+        when the Cloud flavor is actually needed.
+        """
+        issue = self._get_issue(issue_key)
+        for cf in ("customfield_10100", "customfield_10200"):
+            steps = issue["fields"].get(cf)
+            if steps:
+                return [
+                    {"action": s.get("step", ""), "result": s.get("result", "")}
+                    for s in steps
+                ]
+        return []
+
+
+def _build_jira(config: Config) -> Jira:
+    if config.xray_is_cloud:
+        # Xray Cloud: HTTP Basic with the Atlassian account email + API token.
+        return Jira(
+            url=config.jira_base_url,
+            username=config.jira_email,
+            password=config.jira_token,
+            cloud=True,
+        )
+    # Xray Server/DC: Bearer PAT. The atlassian client uses Bearer only when
+    # username/password are omitted. If a Server/DC instance needs Basic instead,
+    # pass username=config.jira_email, password=config.jira_token.
+    return Jira(url=config.jira_base_url, token=config.jira_token, cloud=False)
+
+
+def _parse_manual_steps(raw: Any) -> tuple[list[str], list[str]]:
+    """Split a "Manual Test Steps" custom-field value into (steps, expected_results).
+
+    The value is a list of step objects (confirmed shape: step / data / result).
+    Defensive about key names and value types — each cell may be a plain string or
+    an ADF dict, so every cell is flattened through ``_strip_adf``.
+    """
+    if not isinstance(raw, list):
+        return [], []
+    steps: list[str] = []
+    expected_results: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        steps.append(_first_text(item, ("step", "action", "field")))
+        expected_results.append(_first_text(item, ("result", "expectedResult", "expected")))
+    return steps, expected_results
+
+
+def _first_text(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """Return the first present, non-empty key's value, flattened to plain text."""
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, ""):
+            return _strip_adf(value)
+    return ""
+
+
+def _strip_adf(value: Any) -> str:
+    """Atlassian Document Format -> plain text (lossy but adequate for PoC)."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    # ADF is a nested JSON structure; grab all text nodes.
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                out.append(node.get("text", ""))
+            for child in node.get("content", []) or []:
+                walk(child)
+
+    walk(value)
+    return "\n".join(out)

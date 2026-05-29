@@ -17,7 +17,7 @@ This release covers **access, tooling, and gateway verification only**. There is
 
 - Planner / Generator / Healer agents
 - Playwright MCP wiring, browser orchestration
-- Xray client, GitLab MR opener, end-to-end orchestrator
+- GitLab MR opener, end-to-end orchestrator
 - Filled-in `project_context.md` / `project_map.md`
 - Dockerfile, GitLab CI, RAG indexing
 
@@ -25,11 +25,20 @@ This release covers **access, tooling, and gateway verification only**. There is
 > stubs (each module names the guide section + the task that implements it), `pyproject.toml` is
 > now an installable package (`uv run python -c 'import ai_test_gen'` succeeds), and the full pipeline
 > dependency set is pinned to exact versions (`pydantic-ai`, `python-gitlab`, `atlassian-python-api`,
-> dev `pytest`). First module implemented beyond a stub:
-> [`config.py`](src/ai_test_gen/config.py) — centralized config (`load_config()`) with a fail-closed
-> **prod-URL guardrail** (refuses to start unless `STAGING_BASE_URL`'s host carries a non-prod marker;
-> extend via `NON_PROD_URL_MARKERS`), covered by [`tests/test_config.py`](tests/test_config.py)
-> (`uv run pytest`). The remaining items above are still unimplemented — stubs are not behavior.
+> dev `pytest`). Modules implemented beyond stubs so far:
+>
+> - [`config.py`](src/ai_test_gen/config.py) — centralized config (`load_config()`) with a fail-closed
+>   **prod-URL guardrail** (refuses to start unless `STAGING_BASE_URL`'s host carries a non-prod marker;
+>   extend via `NON_PROD_URL_MARKERS`). Covered by [`tests/test_config.py`](tests/test_config.py).
+> - [`models.py`](src/ai_test_gen/models.py) — the six Pydantic models that flow between agents (§3.5);
+>   every field carries a `description` so they serialize into Pydantic AI structured-output schemas.
+>   Covered by [`tests/test_models.py`](tests/test_models.py).
+> - [`xray_client.py`](src/ai_test_gen/xray_client.py) — fetches a manual test case from Jira/Xray into a
+>   `ManualTestCase`. This tenant is **Server/DC**: Bearer PAT, steps read from `customfield_11006` via
+>   `/rest/api/2/issue?expand=names`. Offline tests in [`tests/test_xray_client.py`](tests/test_xray_client.py);
+>   a live fetch is a company-laptop check (`uv run python scripts/test_xray.py --issue-key <KEY>`).
+>
+> Run the local suite with `uv run pytest`. The remaining items above are still unimplemented — stubs are not behavior.
 
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 

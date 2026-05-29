@@ -75,17 +75,17 @@ Vector length depends on the model (mxbai-embed-large is 1024).
 
 ```
 === Detecting flavor ===
-  Hint from XRAY_IS_CLOUD: cloud
-  Trying Cloud: GET https://yourcompany.atlassian.net/rest/api/3/myself (Basic auth)
-  [ok] Cloud authenticated as: Jana Pucic
+  Hint from XRAY_IS_CLOUD: server/dc
+  Trying Server/DC: GET https://jira.yourcompany.internal/rest/api/2/myself (Bearer PAT)
+  [ok] Server/DC authenticated as: Jana Pucic
 
 === Inspecting QA-1234 ===
-  GET .../rest/api/3/issue/QA-1234?expand=names,renderedFields,schema
-  [ok] Steps field: customfield_10100 ("Manual Test Steps")
+  GET .../rest/api/2/issue/QA-1234?expand=names,renderedFields,schema
+  [ok] Steps field: customfield_11006 ("Manual Test Steps")
 
 === Summary ===
-  Flavor: Cloud
-  Steps custom field ID: customfield_10100  (named "Manual Test Steps")
+  Flavor: Server/DC
+  Steps custom field ID: customfield_11006  (named "Manual Test Steps")
 ```
 
 If `--issue-key` is omitted, the steps-field check is skipped and only flavor is printed.
@@ -100,6 +100,6 @@ If `--issue-key` is omitted, the steps-field check is skipped and only flavor is
 | step0b: HTTP 404 on `/rerank` | Rerank lives outside `/v1` | Set `RERANK_ENDPOINT=https://gw/rerank` in `.env` |
 | step0b: empty vector returned | Wrong model name or model not loaded | Confirm with platform team |
 | step0c: both flavors return 401 | Token doesn't have read access | Regenerate with proper scopes |
-| step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, set field ID manually in Phase 1.A config |
+| step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, then set `XRAY_STEPS_FIELD_ID` in `.env` for the Phase 1.A Xray client |
 
 The same gotchas are documented in [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md) §3.2.
