@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-deps.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking for dependency changes…"
+          }
+        ]
+      }
+    ]
+  }
+}
