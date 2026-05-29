@@ -42,3 +42,6 @@ venvPath = "."
 venv = ".venv"
 pythonVersion = "3.12"
 include = ["scripts", "src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

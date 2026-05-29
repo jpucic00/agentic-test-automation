@@ -25,7 +25,11 @@ This release covers **access, tooling, and gateway verification only**. There is
 > stubs (each module names the guide section + the task that implements it), `pyproject.toml` is
 > now an installable package (`uv run python -c 'import ai_test_gen'` succeeds), and the full pipeline
 > dependency set is pinned to exact versions (`pydantic-ai`, `python-gitlab`, `atlassian-python-api`,
-> dev `pytest`). The items above remain unimplemented — stubs are not behavior.
+> dev `pytest`). First module implemented beyond a stub:
+> [`config.py`](src/ai_test_gen/config.py) — centralized config (`load_config()`) with a fail-closed
+> **prod-URL guardrail** (refuses to start unless `STAGING_BASE_URL`'s host carries a non-prod marker;
+> extend via `NON_PROD_URL_MARKERS`), covered by [`tests/test_config.py`](tests/test_config.py)
+> (`uv run pytest`). The remaining items above are still unimplemented — stubs are not behavior.
 
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 
