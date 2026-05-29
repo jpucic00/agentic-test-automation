@@ -8,7 +8,7 @@ This release covers **access, tooling, and gateway verification only**. There is
 
 - [`SETUP.md`](SETUP.md) — install instructions for the private PC (authoring) and the company laptop (runtime).
 - [`.env.example`](.env.example) — comprehensive environment template, one section per dependency (LLM gateway, embed/rerank, Jira/Xray, staging, GitLab).
-- [`pyproject.toml`](pyproject.toml) — minimal Python 3.12 project (`openai`, `python-dotenv`, `httpx`, `requests`) so the verification scripts run via `uv run`.
+- [`pyproject.toml`](pyproject.toml) — Python 3.12 project; every runtime + dev dependency is pinned to an exact version (`==`) so `uv sync --frozen` is reproducible. Phase 0 itself needs only `openai` / `python-dotenv` / `httpx` / `requests` / `cryptography` to run the verification scripts via `uv run`.
 - [`scripts/step0_verify_tool_calling.py`](scripts/step0_verify_tool_calling.py) — confirms the gateway proxies `tools` / `tool_choice` correctly for the three candidate models.
 - [`scripts/step0b_verify_embeddings.py`](scripts/step0b_verify_embeddings.py) — confirms `/embeddings` and a rerank endpoint respond (needed for Phase 2.5 RAG).
 - [`scripts/step0c_xray_flavor.py`](scripts/step0c_xray_flavor.py) — detects Xray Cloud vs Server/DC and finds the "test steps" custom field ID.
@@ -22,9 +22,10 @@ This release covers **access, tooling, and gateway verification only**. There is
 - Dockerfile, GitLab CI, RAG indexing
 
 > **Phase 1.A is now in progress.** The `src/ai_test_gen/` package skeleton has been scaffolded as
-> stubs (each module names the guide section + the task that implements it), and `pyproject.toml` is
-> now an installable package (`uv run python -c 'import ai_test_gen'` succeeds). The items above
-> remain unimplemented — stubs are not behavior.
+> stubs (each module names the guide section + the task that implements it), `pyproject.toml` is
+> now an installable package (`uv run python -c 'import ai_test_gen'` succeeds), and the full pipeline
+> dependency set is pinned to exact versions (`pydantic-ai`, `python-gitlab`, `atlassian-python-api`,
+> dev `pytest`). The items above remain unimplemented — stubs are not behavior.
 
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 

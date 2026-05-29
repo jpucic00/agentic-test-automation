@@ -4,11 +4,16 @@ version = "0.0.1"
 description = "AI-driven Playwright test generation scaffold (Phase 0 — Access, Tooling & Gateway Verification)"
 requires-python = ">=3.12"
 dependencies = [
-    "openai>=1.0",
-    "python-dotenv>=1.0",
-    "httpx>=0.27",
-    "requests>=2.31",
-    "cryptography>=42.0",   # decrypt PKCS#12 (.p12/.pfx) mTLS bundles when MTLS_PKCS12_FILE is set
+    # Exact pins (== everywhere) so `uv sync --frozen` is deterministic in the Phase 2 Docker build.
+    # Versions are whatever uv resolved as a consistent set; bump deliberately, not via floors.
+    "openai==2.38.0",        # bumped 1.x -> 2.x by pydantic-ai's resolver; step0 API surface re-verified
+    "python-dotenv==1.2.2",
+    "httpx==0.28.1",
+    "requests==2.34.2",
+    "cryptography==48.0.0",  # decrypt PKCS#12 (.p12/.pfx) mTLS bundles when MTLS_PKCS12_FILE is set
+    "pydantic-ai==1.104.0",  # MCP is bundled in 1.x — there is NO `[mcp]` extra (guide §3.3 was stale)
+    "python-gitlab==8.4.0",
+    "atlassian-python-api==4.0.7",
 ]
 
 [build-system]
@@ -21,7 +26,8 @@ packages = ["src/ai_test_gen"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.6",
+    "pytest==9.0.3",
+    "ruff==0.15.14",
 ]
 
 [tool.ruff]
