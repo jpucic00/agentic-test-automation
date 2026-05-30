@@ -9,10 +9,13 @@ the company laptop) and differ from the guide template:
 
 - Auth is a **Bearer Personal Access Token** (``JIRA_TOKEN``). The atlassian
   client sends Bearer only when username/password are omitted.
-- Manual test steps live in a **custom field on the issue** (default
-  ``customfield_11006``, "Manual Test Steps"), read via
-  ``/rest/api/2/issue/<KEY>?expand=names`` — not the ``/rest/raven/...`` endpoint
-  the template uses. Override the field ID per adopter with ``XRAY_STEPS_FIELD_ID``.
+- Manual test steps come from the **Xray Raven REST API**
+  (``/rest/raven/1.0/api/test/<KEY>/step``), an array of ``{step, data, result}``
+  cells (each a ``{raw, rendered}`` pair). The "Manual Test Steps" custom field
+  (default ``customfield_11006``, override via ``XRAY_STEPS_FIELD_ID``) is parsed
+  as a fallback. Phase 0 (j1cnfng) found the field id; runtime (2026-05-30) showed
+  its value isn't the flat ``{step, result}`` shape first assumed (cells are nested
+  under ``fields``), so the Raven API — whose structure is canonical — is primary.
 """
 from __future__ import annotations
 
@@ -105,11 +108,15 @@ class XrayClient:
         return issue
 
     def _fetch_server(self, issue_key: str) -> ManualTestCase:
-        # expand=names so the raw response carries the custom field's display name,
-        # which lets a human confirm the steps field on first run via scripts/test_xray.py.
+        # Title/description/labels come from the standard issue fields; steps come
+        # from the Xray Raven API (canonical Server/DC source), falling back to the
+        # "Manual Test Steps" custom field if Raven returns nothing. expand=names so
+        # diagnose_steps() can show the field's display name on the --raw smoke run.
         issue = self._get_issue(issue_key, expand="names")
         fields = issue["fields"]
-        steps, expected_results = _parse_manual_steps(fields.get(self.steps_field_id))
+        steps, expected_results = self._xray_server_steps(issue_key)
+        if not steps:
+            steps, expected_results = _parse_manual_steps(fields.get(self.steps_field_id))
         return ManualTestCase(
             key=issue_key,
             title=fields.get("summary") or "",
@@ -119,6 +126,27 @@ class XrayClient:
             expected_results=expected_results,
             labels=fields.get("labels") or [],
         )
+
+    def _xray_server_steps(self, issue_key: str) -> tuple[list[str], list[str]]:
+        """Fetch manual steps from the Xray Server/DC Raven REST API.
+
+        ``GET /rest/raven/1.0/api/test/<KEY>/step`` returns an array of step
+        objects: ``{"id", "index", "step": {"raw", "rendered"}, "data": {...},
+        "result": {"raw", "rendered"}, "attachments": [...]}``. ``step`` is the
+        action and ``result`` the expected result; each cell is flattened by
+        ``_cell_text`` (preferring the plain ``raw`` value).
+        """
+        raw = self.jira.get(f"rest/raven/1.0/api/test/{issue_key}/step")
+        if not isinstance(raw, list):
+            return [], []
+        steps: list[str] = []
+        expected_results: list[str] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            steps.append(_cell_text(item.get("step")))
+            expected_results.append(_cell_text(item.get("result")))
+        return steps, expected_results
 
     def _fetch_cloud(self, issue_key: str) -> ManualTestCase:
         # Path exists for completeness; the company tenant is Server/DC, so this is
@@ -172,11 +200,12 @@ def _build_jira(config: Config) -> Jira:
 
 
 def _parse_manual_steps(raw: Any) -> tuple[list[str], list[str]]:
-    """Split a "Manual Test Steps" custom-field value into (steps, expected_results).
+    """Fallback parser for the "Manual Test Steps" custom-field value.
 
-    The value is a list of step objects (confirmed shape: step / data / result).
-    Defensive about key names and value types — each cell may be a plain string or
-    an ADF dict, so every cell is flattened through ``_strip_adf``.
+    The value is a list of step objects. Newer Xray Server shapes nest the cells
+    under ``fields`` (``{"fields": {"action", "data", "expected_result"}}``);
+    older/loose shapes put them at the top level. Each cell may be a plain string,
+    a ``{"raw", "rendered"}`` pair, or an ADF dict — all handled by ``_cell_text``.
     """
     if not isinstance(raw, list):
         return [], []
@@ -185,18 +214,35 @@ def _parse_manual_steps(raw: Any) -> tuple[list[str], list[str]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        steps.append(_first_text(item, ("step", "action", "field")))
-        expected_results.append(_first_text(item, ("result", "expectedResult", "expected")))
+        cells = item["fields"] if isinstance(item.get("fields"), dict) else item
+        steps.append(_first_cell(cells, ("action", "step", "field")))
+        expected_results.append(
+            _first_cell(cells, ("expected_result", "result", "expectedResult", "expected"))
+        )
     return steps, expected_results
 
 
-def _first_text(item: dict[str, Any], keys: tuple[str, ...]) -> str:
-    """Return the first present, non-empty key's value, flattened to plain text."""
+def _first_cell(cells: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """Return the first present, non-empty cell among ``keys``, flattened to text."""
     for key in keys:
-        value = item.get(key)
+        value = cells.get(key)
         if value not in (None, ""):
-            return _strip_adf(value)
+            return _cell_text(value)
     return ""
+
+
+def _cell_text(value: Any) -> str:
+    """Flatten an Xray step cell to plain text.
+
+    A cell may be a Raven ``{"raw", "rendered"}`` pair, a plain string, or an ADF
+    dict. Prefer the plain ``raw`` value; fall back to ADF flattening.
+    """
+    if isinstance(value, dict):
+        for key in ("raw", "rendered"):
+            cell = value.get(key)
+            if cell not in (None, ""):
+                return _strip_adf(cell)
+    return _strip_adf(value)
 
 
 def _strip_adf(value: Any) -> str:

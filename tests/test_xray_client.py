@@ -72,25 +72,34 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
         jira_email="qa.bot",
         jira_token="fake-pat",
     )
-    steps_field = [
-        {"step": "Navigate to /login", "data": "", "result": "Login form is visible"},
-        {
-            "step": "Submit valid credentials",
-            "data": "u/p",
-            "result": "Redirected to /dashboard",
-        },
-    ]
     canned_issue = {
         "fields": {
             "summary": "Login happy path",
             "description": "User can log in with valid credentials.",
             "labels": ["smoke", "auth"],
-            "customfield_11006": steps_field,
         }
     }
+    raven_steps = [
+        {
+            "id": 1,
+            "index": 1,
+            "step": {"raw": "Navigate to /login", "rendered": "<p>Navigate to /login</p>"},
+            "data": {"raw": "", "rendered": ""},
+            "result": {"raw": "Login form is visible", "rendered": "<p>...</p>"},
+        },
+        {
+            "id": 2,
+            "index": 2,
+            "step": {"raw": "Submit valid credentials", "rendered": "<p>...</p>"},
+            "data": {"raw": "u/p", "rendered": "u/p"},
+            "result": {"raw": "Redirected to /dashboard", "rendered": "<p>...</p>"},
+        },
+    ]
 
     with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
-        mock_jira_cls.return_value.issue.return_value = canned_issue
+        jira = mock_jira_cls.return_value
+        jira.issue.return_value = canned_issue
+        jira.get.return_value = raven_steps  # Xray Raven steps endpoint
         result = xray_client.XrayClient(cast(Config, config)).fetch("QA-1234")
 
     assert isinstance(result, ManualTestCase)
@@ -100,7 +109,64 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
     assert result.steps == ["Navigate to /login", "Submit valid credentials"]
     assert result.expected_results == ["Login form is visible", "Redirected to /dashboard"]
     assert result.labels == ["smoke", "auth"]
-    mock_jira_cls.return_value.issue.assert_called_once_with("QA-1234", expand="names")
+    jira.issue.assert_called_once_with("QA-1234", expand="names")
+    jira.get.assert_called_once_with("rest/raven/1.0/api/test/QA-1234/step")
+
+
+def test_fetch_server_falls_back_to_custom_field_when_raven_empty(monkeypatch):
+    # Raven returns no steps -> parse the "Manual Test Steps" custom field, whose
+    # Server/DC shape nests the cells under "fields" (action / data / expected_result).
+    monkeypatch.delenv("XRAY_STEPS_FIELD_ID", raising=False)
+    config = SimpleNamespace(
+        xray_is_cloud=False,
+        jira_base_url="https://jira.internal",
+        jira_email="qa.bot",
+        jira_token="fake-pat",
+    )
+    canned_issue = {
+        "fields": {
+            "summary": "Steps only in the custom field",
+            "customfield_11006": [
+                {
+                    "id": 1,
+                    "index": 1,
+                    "fields": {"action": "Open app", "data": "", "expected_result": "App loads"},
+                },
+            ],
+        }
+    }
+    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+        jira = mock_jira_cls.return_value
+        jira.issue.return_value = canned_issue
+        jira.get.return_value = []  # Raven yields nothing
+        result = xray_client.XrayClient(cast(Config, config)).fetch("QA-2")
+
+    assert result.steps == ["Open app"]
+    assert result.expected_results == ["App loads"]
+
+
+def test_parse_manual_steps_nested_fields_shape():
+    raw = [
+        {
+            "id": 1,
+            "index": 1,
+            "fields": {"action": "Click X", "data": "", "expected_result": "Y is shown"},
+        },
+    ]
+    steps, expected = xray_client._parse_manual_steps(raw)
+    assert steps == ["Click X"]
+    assert expected == ["Y is shown"]
+
+
+def test_cell_text_handles_raw_rendered_string_and_adf():
+    assert xray_client._cell_text({"raw": "plain", "rendered": "<p>plain</p>"}) == "plain"
+    assert xray_client._cell_text("just text") == "just text"
+    assert xray_client._cell_text(None) == ""
+    adf = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hi"}]}],
+    }
+    assert xray_client._cell_text(adf) == "Hi"
 
 
 def test_fetch_server_raises_clear_error_on_dict_error_payload():
