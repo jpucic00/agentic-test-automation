@@ -11,7 +11,7 @@ Phase 0 (the current release) covers everything you need to bring both machines 
 | Tool | Min version | Why |
 |---|---|---|
 | Python | 3.12 | Pinned in [`.python-version`](.python-version); `pydantic-ai` and modern type-hint features need it |
-| Node.js | 20 | Required by `@playwright/mcp` (Phase 1.B) |
+| Node.js | 20 | Required by `@playwright/mcp` and the `output/` Playwright test harness (Phase 1.B) |
 | `uv` | latest | Python project + dependency manager; replaces pip+venv+pip-tools |
 | `git` | any recent | Source control |
 
@@ -77,6 +77,9 @@ uv run python -c 'import ai_test_gen'          # smoke-check the package layout 
 uv run ruff check src tests scripts            # lint
 uvx pyright src scripts                        # type-check
 uv run pytest                                  # offline unit suite (config, models, xray client) — no network
+
+# Phase 1.B Node harness (optional here; lets `npx playwright test` compile generated tests):
+(cd output && npm install)                      # → output/node_modules (gitignored); commit output/package-lock.json
 ```
 
 If `uv sync` errors with "no interpreter found for Python 3.12", install Python 3.12 (see [Prerequisites](#1-prerequisites-both-machines)) — `uv` reads [`.python-version`](.python-version) and refuses to substitute a different minor version.
@@ -193,6 +196,31 @@ uv run python scripts/test_xray.py --issue-key <one-real-QA-key>
 Expect a `ManualTestCase` JSON with **non-empty `steps` and `expected_results`**. If
 your tenant's steps field isn't `customfield_11006`, set `XRAY_STEPS_FIELD_ID` to the
 ID that `step0c_xray_flavor.py --issue-key` reports.
+
+### 3.7 Phase 1.B runtime check — Playwright MCP & auth state
+
+Phase 1.B adds the browser layer. These steps need the live staging app and a real
+browser, so they run on the **company laptop** only.
+
+```bash
+# One-time: install the Chromium binary the Python `playwright` package drives.
+uv run playwright install chromium
+
+# Node harness for executing generated tests:
+(cd output && npm install)
+
+# Capture a logged-in session (a headed browser opens — watch it log in), then verify it:
+uv run python scripts/save_auth_state.py
+uv run python scripts/verify_auth_state.py        # exits 0 only if the saved state authenticates
+```
+
+Before the first run, adjust the login selectors in
+[`scripts/save_auth_state.py`](scripts/save_auth_state.py) (`#username`, `#password`,
+`#login-submit`, `/login`) and the post-login check route in
+[`scripts/verify_auth_state.py`](scripts/verify_auth_state.py) to the real staging
+app, and record them in [`project_map.md`](project_map.md) (auth flow). The session
+is written to `output/storage_state.json` (gitignored); `build_playwright_mcp(...)`
+passes it to Playwright MCP via `--storage-state` so agents start pre-authenticated.
 
 ---
 

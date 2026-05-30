@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-ai==1.104.0",  # MCP is bundled in 1.x — there is NO `[mcp]` extra (guide §3.3 was stale)
     "python-gitlab==8.4.0",
     "atlassian-python-api==4.0.7",
+    "playwright==1.60.0",    # drives headed staging login in scripts/save_auth_state.py (Phase 1.B)
 ]
 
 [build-system]

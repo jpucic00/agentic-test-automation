@@ -16,7 +16,7 @@ This release covers **access, tooling, and gateway verification only**. There is
 ### Not yet here (deferred to later phases)
 
 - Planner / Generator / Healer agents
-- Playwright MCP wiring, browser orchestration
+- Agents that actually drive the browser (the Playwright MCP toolset + auth-state capture landed in Phase 1.B; the agents that consume them are 1.C/1.D)
 - GitLab MR opener, end-to-end orchestrator
 - Filled-in `project_context.md` / `project_map.md`
 - Dockerfile, GitLab CI, RAG indexing
@@ -39,6 +39,22 @@ This release covers **access, tooling, and gateway verification only**. There is
 >   a live fetch is a company-laptop check (`uv run python scripts/test_xray.py --issue-key <KEY>`).
 >
 > Run the local suite with `uv run pytest`. The remaining items above are still unimplemented — stubs are not behavior.
+
+> **Phase 1.B (Playwright MCP & authentication) — core landed.** The browser layer and the auth-wall fix:
+>
+> - [`playwright_mcp.py`](src/ai_test_gen/playwright_mcp.py) — `build_playwright_mcp()` returns an
+>   `MCPToolset` (pydantic-ai 1.104.0; `MCPServerStdio` is deprecated) running a **pinned**
+>   `@playwright/mcp@0.0.75`, configured by [`playwright-mcp-config.json`](playwright-mcp-config.json)
+>   (accessibility-tree only — `imageResponses: omit`). Attach via `Agent(model, toolsets=[...])`.
+> - [`scripts/save_auth_state.py`](scripts/save_auth_state.py) + [`scripts/verify_auth_state.py`](scripts/verify_auth_state.py)
+>   — capture a logged-in `storage_state.json` once and confirm it authenticates, so agents don't
+>   re-login on every run. **Company-laptop runtime** (needs staging + the real login selectors).
+> - [`output/`](output/) Playwright harness — `playwright.config.ts` + a pinned `package.json`
+>   (`@playwright/test==1.60.0`, matching the Python `playwright==1.60.0`); `npx playwright test --list`
+>   compiles clean. Run `cd output && npm install` once.
+>
+> Adds one Python dependency: `playwright==1.60.0`. Multi-role storage state was deferred to Phase 1.D
+> (its acceptance test needs the orchestrator that consumes it).
 
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 

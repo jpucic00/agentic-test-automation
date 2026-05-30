@@ -103,3 +103,22 @@ If `--issue-key` is omitted, the steps-field check is skipped and only flavor is
 | step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, then set `XRAY_STEPS_FIELD_ID` in `.env` for the Phase 1.A Xray client |
 
 The same gotchas are documented in [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md) §3.2.
+
+---
+
+## Phase 1.B — auth-state scripts (company laptop)
+
+Two scripts solve the browser auth wall (guide §3.7). Like the Step 0 scripts, they drive the live staging app, so they run on the **company laptop** only.
+
+| Script | What it does |
+|---|---|
+| `save_auth_state.py` | Opens a headed Chromium, logs into staging with `STAGING_USERNAME` / `STAGING_PASSWORD`, and writes `output/storage_state.json`. |
+| `verify_auth_state.py` | Loads that file, hits a protected route, and exits non-zero if it's bounced back to the login page. Run it right after `save_auth_state.py`. |
+
+```bash
+uv run playwright install chromium          # one-time: Chromium binary for the Python playwright pkg
+uv run python scripts/save_auth_state.py
+uv run python scripts/verify_auth_state.py
+```
+
+First adjust the login selectors (`#username`, `#password`, `#login-submit`, `/login`) and the post-login check route to the real staging app, and record them in [`project_map.md`](../project_map.md) (auth flow). `output/storage_state.json` is gitignored; Playwright MCP receives it via `--storage-state` (handled by `build_playwright_mcp(...)`). Re-run weekly or whenever the session expires.

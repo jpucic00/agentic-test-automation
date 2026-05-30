@@ -1,0 +1,10 @@
+{
+  "name": "ai-test-gen-output",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@types/node": "25.9.1",
+    "typescript": "6.0.3"
+  }
+}
