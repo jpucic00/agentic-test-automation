@@ -15,9 +15,7 @@ This release covers **access, tooling, and gateway verification only**. There is
 
 ### Not yet here (deferred to later phases)
 
-- Planner / Generator / Healer agents
-- Agents that actually drive the browser (the Playwright MCP toolset + auth-state capture landed in Phase 1.B; the agents that consume them are 1.C/1.D)
-- GitLab MR opener, end-to-end orchestrator
+- End-to-end wiring of the agents into one pipeline: test runner, GitLab MR opener, orchestrator (Phase 1.D)
 - Filled-in `project_context.md` / `project_map.md`
 - Dockerfile, GitLab CI, RAG indexing
 
@@ -55,6 +53,28 @@ This release covers **access, tooling, and gateway verification only**. There is
 >
 > Adds one Python dependency: `playwright==1.60.0`. Multi-role storage state was deferred to Phase 1.D
 > (its acceptance test needs the orchestrator that consumes it).
+
+> **Phase 1.C (Planner / Generator / Healer agents) — landed.** The agent layer that turns a
+> `ManualTestCase` into a reviewable test, on Pydantic AI structured outputs:
+>
+> - [`agents/_context.py`](src/ai_test_gen/agents/_context.py) — `assemble_system_prompt()` injects
+>   `project_context.md` into every agent and `project_map.md` only into the browser-driving agents
+>   (Planner, Healer); the Generator's context stays lean.
+> - [`agents/planner.py`](src/ai_test_gen/agents/planner.py) — `build_planner()` / `plan_test_case()`:
+>   Playwright MCP toolset, `output_type=TestPlan`; verifies selectors against the live app before
+>   committing them.
+> - [`agents/generator.py`](src/ai_test_gen/agents/generator.py) — `build_generator()` / `generate_test()`:
+>   no MCP, `output_type=GeneratedTest`; transforms a plan into a runnable `.spec.ts`.
+> - [`agents/healer.py`](src/ai_test_gen/agents/healer.py) — `build_healer()` / `heal_test()`: MCP
+>   toolset, `output_type=HealedTest`; fixes a failing test minimally, or returns it unchanged when the
+>   failure is a real app bug.
+> - [`prompts/`](src/ai_test_gen/prompts/) — the three system prompts (ID-first selectors, GOOD/BAD
+>   examples, DO/DO NOT lists). All three carry an **English/German** note: the apps are bilingual, so
+>   text-based selector fallbacks may be in either language (IDs are locale-independent — prefer them).
+>
+> Offline-tested with Pydantic AI's `TestModel` ([`tests/test_context.py`](tests/test_context.py),
+> [`tests/test_agents.py`](tests/test_agents.py)) — no gateway, no browser subprocess, no new
+> dependencies. Live agent runs are exercised by the Phase 1.D end-to-end smoke on the company laptop.
 
 The full roadmap lives in [`AI_TEST_GENERATION_GUIDE.md`](AI_TEST_GENERATION_GUIDE.md). Each future phase is also a Flux epic on the [project board](http://localhost:4242).
 
