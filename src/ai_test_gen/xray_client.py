@@ -17,6 +17,7 @@ the company laptop) and differ from the guide template:
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from atlassian import Jira
@@ -41,6 +42,53 @@ class XrayClient:
         if self.config.xray_is_cloud:
             return self._fetch_cloud(issue_key)
         return self._fetch_server(issue_key)
+
+    def diagnose_steps(self, issue_key: str) -> dict[str, Any]:
+        """Diagnostic: reveal where this tenant's manual steps live (laptop only).
+
+        Returns a JSON-able dict for ``scripts/test_xray.py --raw``. Shows the
+        configured field's raw value, any step-named fields, every populated
+        custom field, and what the Xray Raven REST endpoints return — enough to
+        pin the Server/DC steps source in one run when ``fetch()`` yields no steps.
+        """
+        issue = self._get_issue(issue_key, expand="names")
+        fields = issue["fields"]
+        names = issue.get("names") or {}
+        pattern = re.compile(r"step|manual|expected|action|result", re.I)
+
+        def preview(value: Any, limit: int = 200) -> str:
+            text = repr(value)
+            return text if len(text) <= limit else text[:limit] + "…"
+
+        step_named_fields = {
+            fid: name
+            for fid, name in names.items()
+            if isinstance(name, str) and pattern.search(name)
+        }
+        populated_custom_fields = [
+            {"id": fid, "name": names.get(fid), "preview": preview(value)}
+            for fid, value in fields.items()
+            if fid.startswith("customfield_") and value not in (None, "", [], {})
+        ]
+        raven_attempts: dict[str, Any] = {}
+        for path in (
+            f"rest/raven/1.0/api/test/{issue_key}/step",
+            f"rest/raven/2.0/api/test/{issue_key}/steps",
+        ):
+            try:
+                raven_attempts[path] = self.jira.get(path)
+            except Exception as exc:
+                raven_attempts[path] = f"ERROR: {type(exc).__name__}: {exc}"
+
+        return {
+            "issue_key": issue_key,
+            "title": fields.get("summary"),
+            "configured_steps_field_id": self.steps_field_id,
+            "configured_steps_field_value": fields.get(self.steps_field_id),
+            "step_named_fields": step_named_fields,
+            "populated_custom_fields": populated_custom_fields,
+            "raven_attempts": raven_attempts,
+        }
 
     def _get_issue(self, issue_key: str, expand: str | None = None) -> dict[str, Any]:
         issue = self.jira.issue(issue_key, expand=expand)

@@ -122,3 +122,38 @@ def test_fetch_server_raises_clear_error_on_dict_error_payload():
         mock_jira_cls.return_value.issue.return_value = error_payload
         with pytest.raises(RuntimeError, match="QA-9999"):
             xray_client.XrayClient(cast(Config, config)).fetch("QA-9999")
+
+
+def test_diagnose_steps_reports_fields_and_raven(monkeypatch):
+    # diagnose_steps must surface the configured field's value, step-named fields,
+    # populated custom fields (skipping empty ones), and the Raven endpoint results
+    # — all without raising, so it's usable to pin the steps source on the laptop.
+    monkeypatch.delenv("XRAY_STEPS_FIELD_ID", raising=False)
+    config = SimpleNamespace(
+        xray_is_cloud=False,
+        jira_base_url="https://jira.internal",
+        jira_email="qa.bot",
+        jira_token="fake-pat",
+    )
+    issue = {
+        "names": {"customfield_11006": "Manual Test Steps", "summary": "Summary"},
+        "fields": {
+            "summary": "Login happy path",
+            "customfield_11006": None,  # configured field is empty on this tenant
+            "customfield_12000": [{"step": "Navigate"}],  # steps actually live here
+        },
+    }
+    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+        jira = mock_jira_cls.return_value
+        jira.issue.return_value = issue
+        jira.get.return_value = [{"id": 1, "step": "Navigate", "result": "OK"}]
+        out = xray_client.XrayClient(cast(Config, config)).diagnose_steps("QA-1")
+
+    assert out["title"] == "Login happy path"
+    assert out["configured_steps_field_id"] == "customfield_11006"
+    assert out["configured_steps_field_value"] is None
+    assert "customfield_11006" in out["step_named_fields"]
+    populated_ids = [f["id"] for f in out["populated_custom_fields"]]
+    assert "customfield_12000" in populated_ids
+    assert "customfield_11006" not in populated_ids  # empty field skipped
+    assert len(out["raven_attempts"]) == 2  # both endpoints attempted
