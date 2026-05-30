@@ -101,3 +101,24 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
     assert result.expected_results == ["Login form is visible", "Redirected to /dashboard"]
     assert result.labels == ["smoke", "auth"]
     mock_jira_cls.return_value.issue.assert_called_once_with("QA-1234", expand="names")
+
+
+def test_fetch_server_raises_clear_error_on_dict_error_payload():
+    # Jira can return a dict-shaped error payload instead of an issue; _get_issue
+    # must raise a clear, key-named RuntimeError rather than a bare KeyError when a
+    # caller reaches for issue["fields"].
+    config = SimpleNamespace(
+        xray_is_cloud=False,
+        jira_base_url="https://jira.internal",
+        jira_email="qa.bot",
+        jira_token="fake-pat",
+    )
+    error_payload = {
+        "errorMessages": ["Issue does not exist or you do not have permission to see it."],
+        "errors": {},
+    }
+
+    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+        mock_jira_cls.return_value.issue.return_value = error_payload
+        with pytest.raises(RuntimeError, match="QA-9999"):
+            xray_client.XrayClient(cast(Config, config)).fetch("QA-9999")

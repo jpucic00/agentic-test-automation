@@ -46,6 +46,14 @@ class XrayClient:
         issue = self.jira.issue(issue_key, expand=expand)
         if not isinstance(issue, dict):
             raise RuntimeError(f"Jira returned no issue for {issue_key!r}")
+        # Jira can return a dict-shaped error payload (e.g. {"errorMessages": [...]})
+        # instead of an issue; guard here so every caller's issue["fields"] access
+        # fails with a clear, key-named message rather than a bare KeyError.
+        if not isinstance(issue.get("fields"), dict):
+            raise RuntimeError(
+                f"Jira response for {issue_key!r} has no 'fields' object "
+                f"(keys: {sorted(issue)}) — likely an error payload, not an issue"
+            )
         return issue
 
     def _fetch_server(self, issue_key: str) -> ManualTestCase:
