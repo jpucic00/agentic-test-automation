@@ -1,6 +1,8 @@
 """Unit tests for build_playwright_mcp — offline (no MCP subprocess is started)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -32,3 +34,17 @@ def test_build_playwright_mcp_constructs_node_toolset_when_cli_present(monkeypat
     monkeypatch.setattr(pm, "MCP_CLI_PATH", cli)
     toolset = pm.build_playwright_mcp(cast(Config, object()), storage_state=tmp_path / "state.json")
     assert isinstance(toolset, pm.MCPToolset)
+
+
+def test_resolve_config_headless_by_default(monkeypatch):
+    monkeypatch.delenv("PLAYWRIGHT_MCP_HEADED", raising=False)
+    assert pm._resolve_config_path() == str(pm.MCP_CONFIG_PATH)
+
+
+def test_resolve_config_headed_writes_temp_with_headless_false(monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_MCP_HEADED", "1")
+    path = pm._resolve_config_path()
+    assert path != str(pm.MCP_CONFIG_PATH)
+    data = json.loads(Path(path).read_text())
+    assert data["browser"]["launchOptions"]["headless"] is False
+    assert data["imageResponses"] == "omit"  # rest of the committed config preserved

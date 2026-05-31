@@ -27,6 +27,10 @@ from ``pydantic_ai.mcp``.
 """
 from __future__ import annotations
 
+import atexit
+import json
+import os
+import tempfile
 from pathlib import Path
 
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -50,6 +54,35 @@ MCP_CLI_PATH = PROJECT_ROOT / "output" / "node_modules" / "@playwright" / "mcp" 
 
 # pydantic-ai's MCP init timeout defaults to 5s; a cold Node start can exceed that.
 MCP_INIT_TIMEOUT_S = 60.0
+
+# Set this truthy to watch the browser drive (debugging the Planner/Healer). The
+# committed config stays headless for CI / Docker / other consumers.
+HEADED_ENV_VAR = "PLAYWRIGHT_MCP_HEADED"
+
+
+def _resolve_config_path() -> str:
+    """Return the MCP config path, honoring ``PLAYWRIGHT_MCP_HEADED``.
+
+    Default is the committed (headless) ``playwright-mcp-config.json``. When the env
+    var is truthy, write a one-off headed copy to a temp file so you can watch the
+    agent drive the browser — without mutating the committed config.
+    """
+    if os.environ.get(HEADED_ENV_VAR, "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return str(MCP_CONFIG_PATH)
+    config = json.loads(MCP_CONFIG_PATH.read_text())
+    config.setdefault("browser", {}).setdefault("launchOptions", {})["headless"] = False
+    fd, path = tempfile.mkstemp(prefix="pwmcp-headed-", suffix=".json")
+    with os.fdopen(fd, "w") as handle:
+        json.dump(config, handle)
+    atexit.register(_safe_unlink, path)
+    return path
+
+
+def _safe_unlink(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> MCPToolset:
@@ -80,7 +113,7 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> M
     args = [
         str(MCP_CLI_PATH),
         "--config",
-        str(MCP_CONFIG_PATH),
+        _resolve_config_path(),
         "--isolated",
     ]
     if storage_state is not None:
