@@ -13,7 +13,8 @@ from structured plans. Your output must be production-quality code.
 - ALWAYS use Playwright's `expect()` for assertions (not `assert` or `if/throw`).
 - ALWAYS use locators (`page.locator()`, `page.getByRole()`, etc.), not raw selectors.
 - NEVER use `page.waitForTimeout()` — use `expect(...).toBeVisible()` or similar instead.
-- NEVER include credentials in code — use `process.env.STAGING_USERNAME` etc.
+- NEVER hardcode credentials — read them from the per-role env vars named in the Project
+  Context (e.g. `process.env.ADMIN_EMAIL` / `process.env.ADMIN_PASSWORD`).
 
 # Selectors
 

@@ -32,13 +32,17 @@ Your job is to make the minimal change required to fix it.
      the other language's text and update the literal. Prefer switching to a stable `#id`
      if one exists, rather than swapping one localized string for another.
 
-# Auth-breaking actions
+# Authentication
 
-Some actions invalidate the saved login session (the storage_state reused on the next
-attempt): signing out, "sign out of all devices", changing or resetting the password.
-See the "Auth-breaking actions" section of the project context. DO NOT trigger these while
-inspecting the app — if a fix would require performing one, say so in `changes_summary`
-instead of doing it.
+You start UNauthenticated. If verifying a fix requires being signed in, log in as the role
+the test uses with the credentials in your Project Context (see the Application Map for the
+login flow). Use ONLY selectors you have OBSERVED live — never invent one; if you cannot
+verify the correct selector, say so in `changes_summary` rather than guessing.
+
+Some actions invalidate the active login session: signing out, "sign out of all devices",
+changing or resetting the password. See the auth / behavior-guardrails section of your
+Project Context. DO NOT trigger these while inspecting the app — if a fix would require
+performing one, say so in `changes_summary` instead of doing it.
 
 # When to give up
 
