@@ -1,0 +1,43 @@
+"""Build the gateway LLM model for the agents, with the corp mTLS / proxy policy.
+
+The Planner / Generator / Healer all reach the LLM gateway through pydantic-ai's
+``OpenAIProvider``. The gateway needs the same httpx policy Phase 0 proved out (see
+``ai_test_gen.mtls``):
+
+- ``trust_env`` defaults to False — connect DIRECTLY and IGNORE the environment
+  ``HTTP(S)_PROXY``. Routing the gateway call through the env proxy drops it with
+  "Server disconnected without sending a response" even though the TLS handshake
+  succeeds (set ``USE_HTTP_PROXY=true`` to opt back in).
+- ``verify`` points at the corporate CA bundle (``SSL_CERT_FILE``) when set.
+- ``cert`` carries an optional mTLS client certificate (``MTLS_*`` env vars).
+
+Without this, the agents fail to reach the gateway on the company laptop with an
+``APIConnectionError`` even though the Phase 0 ``scripts/step0_*`` checks pass.
+"""
+from __future__ import annotations
+
+from openai import DefaultAsyncHttpxClient
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from . import mtls
+from .config import Config
+
+
+def build_openai_model(config: Config, model_name: str) -> OpenAIChatModel:
+    """Return an ``OpenAIChatModel`` for ``model_name`` on the corp gateway.
+
+    Applies the proven gateway httpx policy (direct-by-default, corp CA, optional
+    mTLS) from ``ai_test_gen.mtls`` so every agent shares one connection config.
+    """
+    http_client = DefaultAsyncHttpxClient(
+        trust_env=mtls.get_trust_env(),
+        verify=mtls.get_verify_arg(),
+        cert=mtls.get_cert_arg(),  # None when no mTLS is configured
+    )
+    provider = OpenAIProvider(
+        base_url=config.llm_base_url,
+        api_key=config.llm_api_key,
+        http_client=http_client,
+    )
+    return OpenAIChatModel(model_name, provider=provider)

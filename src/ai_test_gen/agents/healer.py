@@ -13,10 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from ..config import Config
+from ..llm import build_openai_model
 from ..models import GeneratedTest, HealedTest, TestRunResult
 from ..playwright_mcp import build_playwright_mcp
 from ._context import assemble_system_prompt
@@ -26,8 +25,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 def build_healer(config: Config, storage_state: Path | None = None) -> Agent[None, HealedTest]:
     """Build the Healer agent (Playwright MCP toolset attached, output_type=HealedTest)."""
-    provider = OpenAIProvider(base_url=config.llm_base_url, api_key=config.llm_api_key)
-    model = OpenAIChatModel(config.healer_model, provider=provider)
+    model = build_openai_model(config, config.healer_model)
 
     base_prompt = (PROMPTS_DIR / "healer.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)

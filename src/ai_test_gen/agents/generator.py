@@ -13,10 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from ..config import Config
+from ..llm import build_openai_model
 from ..models import GeneratedTest, TestPlan
 from ._context import assemble_system_prompt
 
@@ -25,8 +24,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 def build_generator(config: Config) -> Agent[None, GeneratedTest]:
     """Build the Generator agent (no MCP toolset, output_type=GeneratedTest)."""
-    provider = OpenAIProvider(base_url=config.llm_base_url, api_key=config.llm_api_key)
-    model = OpenAIChatModel(config.generator_model, provider=provider)
+    model = build_openai_model(config, config.generator_model)
 
     base_prompt = (PROMPTS_DIR / "generator.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=False)
