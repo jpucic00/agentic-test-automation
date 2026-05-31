@@ -5,6 +5,10 @@
 .env.*.local
 *.pem
 *.key
+# Filled project-context docs hold staging credentials — NEVER commit them.
+# Tracked templates: project_context.example.md / project_map.example.md.
+project_context.md
+project_map.md
 
 # ─── Python ──────────────────────────────────────────────────────
 .venv/
