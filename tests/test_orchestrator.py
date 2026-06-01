@@ -178,3 +178,19 @@ def test_context_hash_changes_with_context_content(cfg, monkeypatch):
     hash_b = json.loads((cfg.plans_dir / "QA-1.json").read_text())["context_hash"]
 
     assert hash_a != hash_b
+
+
+def test_planning_failure_returns_error_without_crashing(cfg, monkeypatch):
+    # A Planner/Generator crash (e.g. an MCP tool exceeding its retry budget) must fail
+    # cleanly — no plan/test means no MR, but no stack trace either.
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    monkeypatch.setattr(
+        orchestrator,
+        "plan_test_case",
+        AsyncMock(side_effect=RuntimeError("Tool 'browser_type' exceeded max retries count of 2")),
+    )
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "error"
+    assert "Planning/generation failed" in out["error"]
+    assert out["mr_url"] is None
+    gl.open_mr.assert_not_called()

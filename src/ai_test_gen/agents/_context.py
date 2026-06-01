@@ -12,6 +12,7 @@ past ~30K tokens, so every token saved makes structured output more reliable.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..config import Config
@@ -49,3 +50,36 @@ def assemble_system_prompt(
         parts.extend(["---", "# Application Map", _safe_read(config.project_map_path)])
 
     return "\n\n".join(parts)
+
+
+def agent_retries(default: int = 5) -> int:
+    """Max retries for an agent's tool/output errors.
+
+    Browser-driving agents (Planner, Healer) make many MCP tool calls and must recover from
+    transient "element not found" errors while hunting for selectors; pydantic-ai's low default
+    aborts the whole run after only a couple (e.g. "Tool 'browser_type' exceeded max retries").
+    Override via the ``AGENT_MCP_RETRIES`` env var.
+    """
+    raw = os.environ.get("AGENT_MCP_RETRIES")
+    if raw is None:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+def agent_request_limit(default: int = 150) -> int:
+    """Max model requests per agent run (pydantic-ai ``UsageLimits.request_limit``).
+
+    A browser agent exploring a multi-step flow makes many tool round-trips; pydantic-ai's
+    default of 50 aborts mid-exploration on a complex case (``UsageLimitExceeded``). Override
+    via the ``AGENT_REQUEST_LIMIT`` env var.
+    """
+    raw = os.environ.get("AGENT_REQUEST_LIMIT")
+    if raw is None:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default

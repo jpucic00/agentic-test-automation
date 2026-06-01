@@ -13,12 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
 from ..llm import build_openai_model
 from ..models import ManualTestCase, TestPlan
 from ..playwright_mcp import build_playwright_mcp
-from ._context import assemble_system_prompt
+from ._context import agent_request_limit, agent_retries, assemble_system_prompt
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -37,7 +38,7 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         output_type=TestPlan,
         toolsets=[mcp],
         system_prompt=system_prompt,
-        retries=2,  # auto-retry on output-validation failure
+        retries=agent_retries(),  # room to recover from transient MCP tool errors
     )
 
 
@@ -72,7 +73,9 @@ team writes them manually. Fall back to accessibility roles only if no ID exists
     # MCP toolset → the agent must be entered as an async context manager so the
     # Playwright MCP subprocess is started (and cleanly stopped) around the run.
     async with agent:
-        result = await agent.run(user_message)
+        result = await agent.run(
+            user_message, usage_limits=UsageLimits(request_limit=agent_request_limit())
+        )
         return result.output
 
 

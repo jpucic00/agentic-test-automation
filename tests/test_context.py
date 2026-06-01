@@ -5,7 +5,12 @@ into the fixture's tmp_path-backed paths per test.
 """
 from __future__ import annotations
 
-from ai_test_gen.agents._context import _safe_read, assemble_system_prompt
+from ai_test_gen.agents._context import (
+    _safe_read,
+    agent_request_limit,
+    agent_retries,
+    assemble_system_prompt,
+)
 
 _BASE_PROMPT = "# Base agent prompt"
 _CONTEXT_TEXT = "PROJECT-CONTEXT-MARKER conventions go here."
@@ -48,3 +53,21 @@ def test_assemble_uses_placeholder_for_missing_context(cfg):
     # Context/map files are intentionally NOT written.
     out = assemble_system_prompt(cfg, _BASE_PROMPT, include_map=True)
     assert "(no project context provided)" in out
+
+
+def test_agent_retries_default_env_and_invalid(monkeypatch):
+    monkeypatch.delenv("AGENT_MCP_RETRIES", raising=False)
+    assert agent_retries() == 5
+    monkeypatch.setenv("AGENT_MCP_RETRIES", "8")
+    assert agent_retries() == 8
+    monkeypatch.setenv("AGENT_MCP_RETRIES", "nope")  # invalid -> default
+    assert agent_retries() == 5
+
+
+def test_agent_request_limit_default_env_and_invalid(monkeypatch):
+    monkeypatch.delenv("AGENT_REQUEST_LIMIT", raising=False)
+    assert agent_request_limit() == 150
+    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "300")
+    assert agent_request_limit() == 300
+    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "x")  # invalid -> default
+    assert agent_request_limit() == 150

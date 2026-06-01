@@ -57,12 +57,24 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     )
 
     logger.info("[%s] Planning", issue_key)
-    plan = await plan_test_case(config, test_case)
-    plan_json = plan_json_with_context_hash(plan, config)
-    (config.plans_dir / f"{issue_key}.json").write_text(plan_json)
-
-    logger.info("[%s] Generating Playwright code", issue_key)
-    test = await generate_test(config, plan)
+    try:
+        plan = await plan_test_case(config, test_case)
+        plan_json = plan_json_with_context_hash(plan, config)
+        (config.plans_dir / f"{issue_key}.json").write_text(plan_json)
+        logger.info("[%s] Generating Playwright code", issue_key)
+        test = await generate_test(config, plan)
+    except Exception as exc:
+        # No plan/test means nothing to run or open an MR for. A Planner/Generator crash
+        # (e.g. an MCP tool exceeding its retry budget) must fail cleanly, not dump a stack
+        # trace — there's no partial artifact to salvage here.
+        logger.error("[%s] Planning/generation failed: %s", issue_key, exc)
+        return {
+            "issue_key": issue_key,
+            "status": "error",
+            "heal_attempts": 0,
+            "mr_url": None,
+            "error": f"Planning/generation failed: {exc}",
+        }
 
     logger.info("[%s] Running test (attempt 1)", issue_key)
     result = await run_test(config, test)
