@@ -8,7 +8,7 @@ test classes.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ai_test_gen import models
 
@@ -53,7 +53,7 @@ _INSTANCES: list[BaseModel] = [
         stderr="TimeoutError: locator not found",
         failed_test="login happy path",
         error_message="locator '#login-submit' not found",
-        trace_path="output/runs/trace.zip",
+        trace_path="output/snapshots/trace.zip",
     ),
     models.HealedTest(
         file_name="QA-1234-login-happy-path.spec.ts",
@@ -86,3 +86,23 @@ def test_every_field_has_a_description(model_cls: type[BaseModel]):
         assert isinstance(description, str) and description.strip(), (
             f"{model_cls.__name__}.{name} is missing a Field(description=...)"
         )
+
+
+def test_generated_test_file_name_reduced_to_basename():
+    """A model-emitted traversal path is neutralized to a bare filename."""
+    t = models.GeneratedTest(
+        file_name="../../etc/QA-1-login.spec.ts", code="// x", description="login"
+    )
+    assert t.file_name == "QA-1-login.spec.ts"
+
+
+def test_healed_test_file_name_reduced_to_basename():
+    h = models.HealedTest(
+        file_name="/tmp/evil/QA-1-login.spec.ts", code="// x", changes_summary="fix"
+    )
+    assert h.file_name == "QA-1-login.spec.ts"
+
+
+def test_generated_test_rejects_unusable_file_name():
+    with pytest.raises(ValidationError):
+        models.GeneratedTest(file_name="../", code="// x", description="login")

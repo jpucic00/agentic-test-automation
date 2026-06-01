@@ -18,11 +18,12 @@ from ai_test_gen import test_runner as runner
 
 
 class _FakeProc:
-    def __init__(self, returncode, stdout=b"", stderr=b"", *, hang=False):
+    def __init__(self, returncode, stdout=b"", stderr=b"", *, hang=False, kill_exc=None):
         self.returncode = returncode
         self._stdout = stdout
         self._stderr = stderr
         self._hang = hang
+        self._kill_exc = kill_exc
         self.killed = False
 
     async def communicate(self):
@@ -31,6 +32,8 @@ class _FakeProc:
         return self._stdout, self._stderr
 
     def kill(self):
+        if self._kill_exc is not None:
+            raise self._kill_exc
         self.killed = True
 
     async def wait(self):
@@ -98,3 +101,37 @@ def test_run_test_launch_failure_returns_error(cfg, monkeypatch):
     result = asyncio.run(runner.run_test(cfg, _generated()))
     assert result.status == "error"
     assert "Could not launch" in (result.error_message or "")
+
+
+def test_run_test_timeout_suppresses_processlookuperror_on_kill(cfg, monkeypatch):
+    # If the process already exited, proc.kill() raises ProcessLookupError; the runner
+    # must swallow it and still report a clean timeout error rather than propagating.
+    monkeypatch.setattr(runner, "RUN_TIMEOUT_S", 0.01)
+    _patch_proc(monkeypatch, _FakeProc(0, hang=True, kill_exc=ProcessLookupError()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "error"
+    assert "timed out" in (result.error_message or "")
+
+
+def test_run_test_timedout_status_is_parsed(cfg, monkeypatch):
+    timed_out = {"status": "timedOut", "error": {"message": "Test timeout of 30000ms exceeded"}}
+    report = {
+        "suites": [
+            {"title": "slow.spec.ts", "specs": [
+                {"title": "QA-1: slow path", "tests": [{"results": [timed_out]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.failed_test == "QA-1: slow path"
+    assert "30000ms" in (result.error_message or "")
+
+
+def test_run_test_failed_empty_output_uses_default_message(cfg, monkeypatch):
+    # returncode != 0, unparseable stdout, empty stderr -> the default failure message.
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=b""))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.error_message == "Playwright run failed (no JSON report produced)"

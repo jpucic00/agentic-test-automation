@@ -16,6 +16,7 @@ The review checklist asks reviewers to confirm no *real* credentials/PII slipped
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
 from datetime import UTC, datetime
@@ -70,30 +71,36 @@ class GitLabClient:
         self.project.branches.create(
             {"branch": branch_name, "ref": self.config.gitlab_target_branch}
         )
-        self.project.commits.create(
-            {
-                "branch": branch_name,
-                "commit_message": f"AI-generated test for {test_case_key}: {test.description}",
-                "actions": actions,
-            }
-        )
-        mr = self.project.mergerequests.create(
-            {
-                "source_branch": branch_name,
-                "target_branch": self.config.gitlab_target_branch,
-                "title": f"[AI] {test_case_key}: {test.description}",
-                "description": _build_mr_description(
-                    test,
-                    plan,
-                    test_case_key,
-                    heal_summaries=heal_summaries,
-                    heal_attempts=heal_attempts,
-                    final_status=final_status,
-                ),
-                "labels": MR_LABELS,
-                "remove_source_branch": True,
-            }
-        )
+        try:
+            self.project.commits.create(
+                {
+                    "branch": branch_name,
+                    "commit_message": f"AI-generated test for {test_case_key}: {test.description}",
+                    "actions": actions,
+                }
+            )
+            mr = self.project.mergerequests.create(
+                {
+                    "source_branch": branch_name,
+                    "target_branch": self.config.gitlab_target_branch,
+                    "title": f"[AI] {test_case_key}: {test.description}",
+                    "description": _build_mr_description(
+                        test,
+                        plan,
+                        test_case_key,
+                        heal_summaries=heal_summaries,
+                        heal_attempts=heal_attempts,
+                        final_status=final_status,
+                    ),
+                    "labels": MR_LABELS,
+                    "remove_source_branch": True,
+                }
+            )
+        except Exception:
+            # Don't leave an orphan branch behind if the commit or MR creation fails.
+            with contextlib.suppress(Exception):
+                self.project.branches.delete(branch_name)
+            raise
         return mr.web_url
 
 

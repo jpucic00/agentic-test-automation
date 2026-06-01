@@ -5,7 +5,10 @@ test class (its name starts with "Test").
 """
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock
+
+import pytest
 
 from ai_test_gen import gitlab_client, models
 
@@ -98,3 +101,31 @@ def test_mr_description_omits_healer_section_when_no_heals(cfg, monkeypatch):
     client.open_mr(_generated(), _plan(), "QA-1", heal_attempts=0)
     desc = project.mergerequests.create.call_args[0][0]["description"]
     assert "Healer attempts" not in desc
+
+
+def test_mr_description_no_summary_recorded_when_heals_but_empty_summaries(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1", heal_attempts=2, heal_summaries=None)
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "Healer attempts (2)" in desc
+    assert "- (no summary recorded)" in desc
+
+
+def test_branch_name_random_suffix_shape_and_uniqueness(cfg, monkeypatch):
+    monkeypatch.delenv("CI_JOB_ID", raising=False)
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1")
+    branch1 = project.branches.create.call_args[0][0]["branch"]
+    assert re.fullmatch(r"ai-gen/qa-1-\d{8}-\d{6}-[0-9a-f]{6}", branch1)
+    client.open_mr(_generated(), _plan(), "QA-1")
+    branch2 = project.branches.create.call_args[0][0]["branch"]
+    assert branch1 != branch2  # collision-resistant token differs per run
+
+
+def test_orphan_branch_deleted_when_commit_fails(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    project.commits.create.side_effect = RuntimeError("gitlab 500")
+    with pytest.raises(RuntimeError):
+        client.open_mr(_generated(), _plan(), "QA-1")
+    created_branch = project.branches.create.call_args[0][0]["branch"]
+    project.branches.delete.assert_called_once_with(created_branch)

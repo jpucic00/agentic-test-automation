@@ -9,9 +9,28 @@ sees, and materially affect output quality.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _safe_spec_filename(value: str) -> str:
+    """Reduce an LLM-generated test filename to a bare, traversal-free basename.
+
+    ``file_name`` is later used as a filesystem path (``test_runner``) and a GitLab
+    commit path (``gitlab_client``). Taking ``Path(value).name`` strips any directory
+    parts or absolute prefix, so a model-emitted ``../x`` or ``/abs/x`` can never be
+    written outside ``output/tests/`` / ``tests/generated/``. A value that reduces to
+    nothing is rejected rather than producing a nameless file.
+    """
+    name = Path(value).name.strip()
+    # Path("..").name is ".." (not ""), so the dot-segments must be rejected explicitly —
+    # otherwise a name like "../" would slip through as a traversal component.
+    if not name or name in {".", ".."}:
+        raise ValueError(f"file_name {value!r} does not reduce to a usable filename")
+    return name
+
 
 # === Input from Xray ===
 
@@ -95,6 +114,11 @@ class GeneratedTest(BaseModel):
     code: str = Field(description="Complete Playwright TypeScript test code")
     description: str = Field(description="One-line description of what the test does")
 
+    @field_validator("file_name")
+    @classmethod
+    def _basename_only(cls, v: str) -> str:
+        return _safe_spec_filename(v)
+
 
 # === Test runner output ===
 
@@ -123,3 +147,8 @@ class HealedTest(BaseModel):
     file_name: str = Field(description="Filename of the healed test file")
     code: str = Field(description="Complete healed Playwright TypeScript test code")
     changes_summary: str = Field(description="What the healer changed and why")
+
+    @field_validator("file_name")
+    @classmethod
+    def _basename_only(cls, v: str) -> str:
+        return _safe_spec_filename(v)

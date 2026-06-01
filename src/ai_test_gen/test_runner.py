@@ -75,8 +75,11 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
             proc.communicate(), timeout=RUN_TIMEOUT_S
         )
     except TimeoutError:
-        proc.kill()
+        # The process may already have exited in the race between the timeout firing
+        # and the kill; suppress ProcessLookupError on both kill() and wait() so a
+        # timeout always returns status="error" instead of raising.
         with contextlib.suppress(ProcessLookupError):
+            proc.kill()
             await proc.wait()
         return TestRunResult(
             status="error",
