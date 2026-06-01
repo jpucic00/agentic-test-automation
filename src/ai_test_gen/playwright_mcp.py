@@ -136,7 +136,11 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
         args.extend(["--storage-state", str(storage_state)])
 
     toolset = MCPToolset(
-        StdioTransport(command="node", args=args),
+        # keep_alive=False so the node MCP server (and the chromium it spawns) is terminated
+        # when the agent context exits — including on error, via the `async with agent` cleanup
+        # path. fastmcp defaults keep_alive to True, which leaves the subprocess and its browser
+        # running after the run, leaking Chrome instances.
+        StdioTransport(command="node", args=args, keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
     )
     # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.
