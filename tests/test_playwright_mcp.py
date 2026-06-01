@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_build_playwright_mcp_constructs_node_toolset_when_cli_present(monkeypat
     cli.write_text("// fake cli")
     monkeypatch.setattr(pm, "MCP_CLI_PATH", cli)
     toolset = pm.build_playwright_mcp(cast(Config, object()), storage_state=tmp_path / "state.json")
-    assert isinstance(toolset, pm.MCPToolset)
+    assert isinstance(toolset, pm.AbstractToolset)
 
 
 def test_resolve_config_headless_by_default(monkeypatch):
@@ -48,3 +49,13 @@ def test_resolve_config_headed_writes_temp_with_headless_false(monkeypatch):
     data = json.loads(Path(path).read_text())
     assert data["browser"]["launchOptions"]["headless"] is False
     assert data["imageResponses"] == "omit"  # rest of the committed config preserved
+
+
+def test_code_exec_tools_are_filtered_out():
+    def keep(name: str) -> bool:
+        return pm._agent_safe_tool(cast(Any, None), cast(Any, SimpleNamespace(name=name)))
+
+    assert keep("browser_evaluate") is False
+    assert keep("browser_run_code_unsafe") is False
+    assert keep("browser_click") is True
+    assert keep("browser_snapshot") is True

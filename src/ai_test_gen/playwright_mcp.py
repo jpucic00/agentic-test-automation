@@ -32,8 +32,12 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
+from pydantic_ai import RunContext
 from pydantic_ai.mcp import MCPToolset, StdioTransport
+from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.toolsets import AbstractToolset
 
 from .config import Config
 
@@ -85,7 +89,19 @@ def _safe_unlink(path: str) -> None:
         pass
 
 
-def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> MCPToolset:
+# MCP tool-name substrings the agents must NOT receive: raw JS / arbitrary code execution.
+# They invite hallucinated selectors (jQuery `:contains()` in querySelector -> SyntaxError)
+# and are a code-exec risk; agents must use the snapshot -> click/type flow. (Flux 11iwg3r)
+_BLOCKED_TOOL_MARKERS = ("evaluate", "run_code", "unsafe")
+
+
+def _agent_safe_tool(ctx: RunContext[Any], tool: ToolDefinition) -> bool:
+    """Keep a tool unless its name marks it as code-execution (evaluate / run_code / unsafe)."""
+    del ctx
+    return not any(marker in tool.name for marker in _BLOCKED_TOOL_MARKERS)
+
+
+def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> AbstractToolset[Any]:
     """Create an ``MCPToolset`` that runs Playwright MCP over stdio.
 
     Args:
@@ -119,7 +135,9 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> M
     if storage_state is not None:
         args.extend(["--storage-state", str(storage_state)])
 
-    return MCPToolset(
+    toolset = MCPToolset(
         StdioTransport(command="node", args=args),
         init_timeout=MCP_INIT_TIMEOUT_S,
     )
+    # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.
+    return toolset.filtered(_agent_safe_tool)

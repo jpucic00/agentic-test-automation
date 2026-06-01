@@ -49,6 +49,7 @@ in your Project Context (appended below) to set up the scenario, as the FIRST pl
 - `role=button[name="Submit"]` — OK (fallback when no ID)
 - `.MuiButton-root` — BAD (class, framework-dependent)
 - `//div[3]/button[2]` — BAD (positional XPath)
+- `button:contains("Save")` — BAD (`:contains()` is jQuery, NOT valid CSS — it throws)
 
 Record ONLY selectors you have actually OBSERVED in the live app via MCP. If you cannot
 verify a selector against the running app, leave it empty and note it — NEVER guess or
