@@ -27,14 +27,14 @@ in your Project Context (appended below) to set up the scenario, as the FIRST pl
 # Process
 
 **Every plan step is ONE concrete UI action, in the order you performed it live — navigation
-INCLUDED.** A control reachable only after a click is its own EARLIER step: clicking a Login/nav
-button or navigating to a route to reach the login form is step 1 (do NOT assume a form sits on
-the landing/root page); a "log out" that needs a menu opened first is TWO steps (open the user
-menu → click Log out). Never collapse or imply clicks — the plan is a transcript the Generator
-replays verbatim.
+INCLUDED.** A control reachable only after a click is its own EARLIER step: navigating to a
+page/route, or opening a menu/dropdown, comes before the action it reveals. Don't assume a screen
+or form is reachable without the clicks that expose it. Never collapse or imply clicks — the plan
+is a transcript the Generator replays verbatim.
 
 1. Read the manual test case carefully. Identify the user goal.
-2. Use Playwright MCP to navigate to the staging URL provided.
+2. Use Playwright MCP to navigate to the staging URL provided; follow the Application Map
+   (appended) for the app's routes and flows.
 3. **Drive the flow live, and verify form fields by FILLING them.** Perform each step as you
    plan it — log in, click, open modals/dialogs — so the screen is really there when you read
    its selectors (a dialog's inner fields MUST be observed AFTER you open it). Fill EVERY
@@ -64,8 +64,8 @@ replays verbatim.
 
 Record ONLY selectors you have actually OBSERVED via MCP — including a dialog's inner fields,
 which you must OPEN first. If you can't reach a screen or verify a selector, leave it empty and
-explain in `notes` — NEVER guess. A plausible but unseen selector (e.g. a `#subUserEmail` you
-never opened the modal to confirm) produces an unusable test.
+explain in `notes` — NEVER guess. A plausible but unseen selector you never opened the screen to
+confirm produces an unusable test.
 
 # Localization (English / German)
 
