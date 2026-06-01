@@ -56,6 +56,12 @@ PLAYWRIGHT_MCP_PACKAGE = f"@playwright/mcp@{PLAYWRIGHT_MCP_VERSION}"
 # ``node <cli.js>`` — see the module docstring for why we avoid npx.
 MCP_CLI_PATH = PROJECT_ROOT / "output" / "node_modules" / "@playwright" / "mcp" / "cli.js"
 
+# @playwright/mcp writes output files (page snapshots saved to disk, traces, downloads,
+# sessions) to --output-dir; when unset it uses the process cwd — i.e. the repo root you
+# launch from — and clutters it. Point it at the gitignored output/runs/ so these artifacts
+# stay OUT of git and out of the project root.
+MCP_OUTPUT_DIR = PROJECT_ROOT / "output" / "runs"
+
 # pydantic-ai's MCP init timeout defaults to 5s; a cold Node start can exceed that.
 MCP_INIT_TIMEOUT_S = 60.0
 
@@ -126,11 +132,14 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
             "(@playwright/mcp is pinned in output/package.json)."
         )
 
+    MCP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     args = [
         str(MCP_CLI_PATH),
         "--config",
         _resolve_config_path(),
         "--isolated",
+        "--output-dir",
+        str(MCP_OUTPUT_DIR),
     ]
     if storage_state is not None:
         args.extend(["--storage-state", str(storage_state)])

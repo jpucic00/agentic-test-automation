@@ -23,6 +23,11 @@ def test_mcp_cli_path_points_at_local_node_install():
     assert "output" in parts and "node_modules" in parts
 
 
+def test_mcp_output_dir_is_gitignored_output_runs():
+    # output/runs/ is gitignored — keeps MCP artifacts out of the repo root and out of git.
+    assert pm.MCP_OUTPUT_DIR.parts[-2:] == ("output", "runs")
+
+
 def test_build_playwright_mcp_errors_clearly_when_cli_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(pm, "MCP_CLI_PATH", tmp_path / "missing" / "cli.js")
     with pytest.raises(RuntimeError, match="npm install"):
