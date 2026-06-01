@@ -100,7 +100,7 @@ class Config:
     output_dir: Path
     plans_dir: Path
     tests_dir: Path
-    runs_dir: Path
+    snapshots_dir: Path
     project_context_path: Path
     project_map_path: Path
 
@@ -115,8 +115,8 @@ def load_config() -> Config:
     output_dir = PROJECT_ROOT / "output"
     plans_dir = output_dir / "plans"
     tests_dir = output_dir / "tests"
-    runs_dir = output_dir / "runs"
-    for d in (plans_dir, tests_dir, runs_dir):
+    snapshots_dir = output_dir / "snapshots"
+    for d in (plans_dir, tests_dir, snapshots_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     return Config(
@@ -139,7 +139,7 @@ def load_config() -> Config:
         output_dir=output_dir,
         plans_dir=plans_dir,
         tests_dir=tests_dir,
-        runs_dir=runs_dir,
+        snapshots_dir=snapshots_dir,
         project_context_path=PROJECT_ROOT / "project_context.md",
         project_map_path=PROJECT_ROOT / "project_map.md",
     )

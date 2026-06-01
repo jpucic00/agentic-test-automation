@@ -61,15 +61,15 @@ flowchart TB
 
 | Component | Reads | Produces | Model / Browser | Status |
 |---|---|---|---|---|
-| **Orchestrator** | one Jira key | per-case result + MR URL | — | ⏳ Phase 1.D (stub) |
+| **Orchestrator** | one Jira key | per-case result + MR URL | — | ✅ built |
 | **Xray Client** | Jira ticket | `ManualTestCase` | — | ✅ built |
 | **Planner Agent** | test case + live staging | `TestPlan` (verified selectors) | gpt-oss-120b · **MCP** | ✅ built |
 | **Generator Agent** | `TestPlan` | `GeneratedTest` (`.spec.ts`) | devstral-small-2 · no browser | ✅ built |
-| **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) | ⏳ Phase 1.D (stub) |
+| **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) | ✅ built |
 | **Healer Agent** | failed test + error | `HealedTest` (minimal fix) | gpt-oss-120b · **MCP** | ✅ built |
-| **GitLab Client** | final test + plan | open MR (branch + commit) | — | ⏳ Phase 1.D (stub) |
+| **GitLab Client** | final test + plan | open MR (branch + commit) | — | ✅ built |
 
-The three agents that are "built" are individually working on internal infra; **Phase 1.D is the wiring** that connects them into one end-to-end run (runner + GitLab + orchestrator).
+All three agents plus the Phase 1.D glue — Test Runner, GitLab Client, Orchestrator — are now built and unit-tested offline; **Phase 1.D wired them** into one end-to-end run. The live end-to-end run is a company-laptop step.
 
 ## The data contract
 
@@ -126,7 +126,7 @@ flowchart LR
 
 - ✅ **Phase 0** — internal access + gateway/tool-calling/Xray-flavor verification scripts.
 - ✅ **Phase 1.A–1.C** — config + guardrail, data models, Xray client, Playwright MCP + auth, and the three agents with their prompts. Exercised offline (no gateway, no browser) with Pydantic AI's `TestModel`.
-- ✅ **Phase 1.D** — the end-to-end glue: **Test Runner** (subprocess + hard timeout), **GitLab MR creator** (collision-safe branch, heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run → Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/runs/` auto-clean). Unit-tested offline; the live end-to-end run is a company-laptop step.
+- ✅ **Phase 1.D** — the end-to-end glue: **Test Runner** (subprocess + hard timeout), **GitLab MR creator** (collision-safe branch, heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run → Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean). Unit-tested offline; the live end-to-end run is a company-laptop step.
 - 🗺️ **Phase 2 (production)** — Dockerized batch job on GitLab CI; secrets via CI variables/Vault; OpenTelemetry tracing; security hardening (locked-down network, non-root, no-PII redaction, audit logging); batch processing; a 4th **Translator** agent for Selenium→Playwright migration; and **RAG** (Qdrant + embed/rerank) to feed the Generator real examples.
 - 📌 **Beyond** — visual regression, parallel CI fan-out, Slack/Teams MR notifications, a coverage dashboard, and auto-proposed `project_map.md` updates.
 

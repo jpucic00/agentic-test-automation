@@ -43,7 +43,8 @@ storage_state*.json
 # the runtime artifacts; keep the harness. (node_modules/, test-results/,
 # playwright-report/, storage_state*.json are already ignored globally above.)
 output/plans/
-output/runs/
+output/snapshots/*
+!output/snapshots/.gitkeep
 output/storage_states/
 output/tests/*
 !output/tests/.gitkeep

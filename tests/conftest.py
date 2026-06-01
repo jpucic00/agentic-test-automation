@@ -39,7 +39,7 @@ def cfg(tmp_path: Path) -> Config:
         output_dir=tmp_path,
         plans_dir=tmp_path / "plans",
         tests_dir=tmp_path / "tests",
-        runs_dir=tmp_path / "runs",
+        snapshots_dir=tmp_path / "snapshots",
         project_context_path=tmp_path / "project_context.md",
         project_map_path=tmp_path / "project_map.md",
     )

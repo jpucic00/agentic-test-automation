@@ -57,11 +57,12 @@ PLAYWRIGHT_MCP_PACKAGE = f"@playwright/mcp@{PLAYWRIGHT_MCP_VERSION}"
 # ``node <cli.js>`` — see the module docstring for why we avoid npx.
 MCP_CLI_PATH = PROJECT_ROOT / "output" / "node_modules" / "@playwright" / "mcp" / "cli.js"
 
-# @playwright/mcp writes output files (page snapshots saved to disk, traces, downloads,
-# sessions) to --output-dir; when unset it uses the process cwd — i.e. the repo root you
-# launch from — and clutters it. Point it at the gitignored output/runs/ so these artifacts
-# stay OUT of git and out of the project root.
-MCP_OUTPUT_DIR = PROJECT_ROOT / "output" / "runs"
+# @playwright/mcp writes output files (page snapshots, screenshots/pngs, traces, downloads,
+# sessions). It honors --output-dir for some of them, but writes others relative to the
+# process CWD — which would clutter the repo root and escape git-ignore. So we point BOTH
+# --output-dir AND the subprocess cwd (see build_playwright_mcp) at the gitignored
+# output/snapshots/, so every artifact stays out of git/root and is wiped each run.
+MCP_OUTPUT_DIR = PROJECT_ROOT / "output" / "snapshots"
 
 # pydantic-ai's MCP init timeout defaults to 5s; a cold Node start can exceed that.
 MCP_INIT_TIMEOUT_S = 60.0
@@ -151,7 +152,10 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
         # when the agent context exits — including on error, via the `async with agent` cleanup
         # path. fastmcp defaults keep_alive to True, which leaves the subprocess and its browser
         # running after the run, leaking Chrome instances.
-        StdioTransport(command="node", args=args, keep_alive=False),
+        # cwd pins where the server writes cwd-relative artifacts (snapshots/pngs) — into
+        # output/snapshots/, not the repo root. The cli/config/output paths in `args` are
+        # all absolute, so changing cwd is safe.
+        StdioTransport(command="node", args=args, cwd=str(MCP_OUTPUT_DIR), keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
     )
     # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.

@@ -23,9 +23,29 @@ def test_mcp_cli_path_points_at_local_node_install():
     assert "output" in parts and "node_modules" in parts
 
 
-def test_mcp_output_dir_is_gitignored_output_runs():
-    # output/runs/ is gitignored — keeps MCP artifacts out of the repo root and out of git.
-    assert pm.MCP_OUTPUT_DIR.parts[-2:] == ("output", "runs")
+def test_mcp_output_dir_is_output_snapshots():
+    # output/snapshots/ holds MCP artifacts; its contents are gitignored and wiped each run.
+    assert pm.MCP_OUTPUT_DIR.parts[-2:] == ("output", "snapshots")
+
+
+def test_build_playwright_mcp_runs_subprocess_in_snapshots_dir(monkeypatch, tmp_path):
+    # The MCP subprocess cwd is pinned to the snapshots dir so cwd-relative artifacts
+    # (screenshots/pngs the server writes outside --output-dir) don't escape to the repo root.
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake cli")
+    out = tmp_path / "snapshots"
+    monkeypatch.setattr(pm, "MCP_CLI_PATH", cli)
+    monkeypatch.setattr(pm, "MCP_OUTPUT_DIR", out)
+    captured: dict = {}
+    real = pm.StdioTransport
+
+    def spy(**kwargs):
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(pm, "StdioTransport", spy)
+    pm.build_playwright_mcp(cast(Config, object()))
+    assert captured["cwd"] == str(out)
 
 
 def test_build_playwright_mcp_errors_clearly_when_cli_missing(monkeypatch, tmp_path):

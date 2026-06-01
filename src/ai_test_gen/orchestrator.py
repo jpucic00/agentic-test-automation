@@ -10,8 +10,8 @@ Improvements over the guide's template:
   nothing here resolves or passes a saved session.
 - **``context_hash`` in the saved plan** (sha256 of ``project_context.md`` +
   ``project_map.md``): a later audit can tell a plan was generated against stale context.
-- **Snapshot auto-clean.** ``output/runs/`` (the Playwright MCP snapshot output,
-  regenerated every run) is wiped at the start of each run so it doesn't accumulate.
+- **Snapshot auto-clean.** ``output/snapshots/`` (the Playwright MCP snapshot/png output,
+  regenerated every run) is emptied at the start of each run so it doesn't accumulate.
 - **Heal transparency.** Every Healer ``changes_summary`` is collected and rendered into
   the MR; an MR is opened even when healing is exhausted, so a human always reviews.
 """
@@ -47,7 +47,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     if max_heal_attempts is None:
         max_heal_attempts = _resolve_max_heal_attempts()
 
-    _clear_runs_dir(config)
+    _clear_snapshots_dir(config)
 
     logger.info("[%s] Fetching from Xray", issue_key)
     xray = XrayClient(config)
@@ -158,10 +158,18 @@ def _context_hash(config: Config) -> str:
     return digest.hexdigest()
 
 
-def _clear_runs_dir(config: Config) -> None:
-    """Wipe ``output/runs/`` (regenerated MCP snapshot output) and recreate it empty."""
-    shutil.rmtree(config.runs_dir, ignore_errors=True)
-    config.runs_dir.mkdir(parents=True, exist_ok=True)
+def _clear_snapshots_dir(config: Config) -> None:
+    """Empty ``output/snapshots/`` (regenerated MCP snapshot/png output) before a run,
+    keeping the directory and its tracked ``.gitkeep``."""
+    snapshots = config.snapshots_dir
+    snapshots.mkdir(parents=True, exist_ok=True)
+    for child in snapshots.iterdir():
+        if child.name == ".gitkeep":
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
 
 
 def _resolve_max_heal_attempts() -> int:

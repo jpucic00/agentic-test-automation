@@ -71,7 +71,7 @@ def test_happy_path_loads_full_config(env, tmp_path):
     assert cfg.project_map_path == tmp_path / "project_map.md"
     assert cfg.plans_dir.is_dir()
     assert cfg.tests_dir.is_dir()
-    assert cfg.runs_dir.is_dir()
+    assert cfg.snapshots_dir.is_dir()
 
 
 @pytest.mark.usefixtures("env")

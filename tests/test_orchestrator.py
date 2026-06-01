@@ -99,14 +99,17 @@ def test_saved_plan_json_has_context_hash(cfg, monkeypatch):
     assert "context_hash" in gl.open_mr.call_args.kwargs["plan_json"]
 
 
-def test_runs_dir_is_wiped_at_start(cfg, monkeypatch):
-    cfg.runs_dir.mkdir(parents=True, exist_ok=True)
-    stale = cfg.runs_dir / "old-snapshot.txt"
+def test_snapshots_dir_wiped_at_start_but_gitkeep_survives(cfg, monkeypatch):
+    cfg.snapshots_dir.mkdir(parents=True, exist_ok=True)
+    stale = cfg.snapshots_dir / "page-001.png"
     stale.write_text("stale")
+    keep = cfg.snapshots_dir / ".gitkeep"
+    keep.write_text("")
     _wire(monkeypatch, cfg, [_result("passed")])
     asyncio.run(orchestrator.process_test_case("QA-1"))
-    assert not stale.exists()
-    assert cfg.runs_dir.exists()  # dir kept, contents cleared
+    assert not stale.exists()  # MCP snapshot artifacts cleared
+    assert keep.exists()  # .gitkeep preserved so the folder stays tracked
+    assert cfg.snapshots_dir.exists()
 
 
 def test_heal_exception_still_opens_mr(cfg, monkeypatch):
