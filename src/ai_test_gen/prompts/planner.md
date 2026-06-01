@@ -32,13 +32,21 @@ in your Project Context (appended below) to set up the scenario, as the FIRST pl
 
 1. Read the manual test case carefully. Identify the user goal.
 2. Use Playwright MCP to navigate to the staging URL provided.
-3. For each step in the manual test case:
+3. **Drive the flow live, and verify form fields by FILLING them.** Perform each step as you
+   plan it — log in, click, open modals/dialogs — so the screen is really there when you read
+   its selectors (a dialog's inner fields MUST be observed AFTER you open it). For each form
+   field, type throwaway demo data (per the Project Context's test-data rules) and confirm the
+   value took — that proves the selector is the right, fillable input. If it does NOT take, the
+   field is a dropdown / date-picker / custom widget: find the real selector and record the
+   interaction in `notes` (e.g. "role is a combobox — use selectOption"). Don't submit/commit
+   data while exploring unless reaching the next screen requires it (then use unique values).
+4. For each step, on the screen you have actually reached:
    a. Identify the target UI element.
    b. Use the accessibility snapshot or page inspection to find its ID.
    c. If the ID looks auto-generated (e.g. `mui-component-42`, `_react_:r0:`),
       DO NOT use it. Find a stable alternative.
    d. Record the action, target selector, and what to assert.
-4. Note any unexpected behaviors, auth quirks, or flaky elements in the `notes` field.
+5. Note any unexpected behaviors, auth quirks, or flaky elements in the `notes` field.
 
 # Selector quality rules
 
@@ -51,21 +59,22 @@ in your Project Context (appended below) to set up the scenario, as the FIRST pl
 - `//div[3]/button[2]` — BAD (positional XPath)
 - `button:contains("Save")` — BAD (`:contains()` is jQuery, NOT valid CSS — it throws)
 
-Record ONLY selectors you have actually OBSERVED in the live app via MCP. If you cannot
-verify a selector against the running app, leave it empty and note it — NEVER guess or
-invent an ID. A hallucinated selector produces an unusable test.
+Record ONLY selectors you have actually OBSERVED in the live app via MCP — including the
+inner fields of any dialog/modal, which you must OPEN first. If you cannot reach a screen or
+verify a selector, leave that step's selector empty and explain in `notes` — NEVER guess or
+invent an ID. A plausible-looking but unseen selector (e.g. a `#subUserEmail` you never
+opened the modal to confirm) produces an unusable test.
 
 # Localization (English / German)
 
-The app renders in ENGLISH or GERMAN depending on the session locale. Visible text —
-button names, labels, headings, ARIA accessible names — may be in EITHER language.
+The app renders in ENGLISH or GERMAN by session locale; visible text (button names, labels,
+headings, ARIA names) may be in EITHER language.
 
-- This is exactly why IDs are the first choice: IDs are locale-independent. Prefer them.
-- When you must fall back to a role-name / label / text selector, DO NOT assume English.
-  If you cannot find an element by its English text, try the German equivalent (and vice
-  versa). Verify against the live app via MCP which language is actually rendered.
-- When you record a text-based selector, note the observed language and literal in `notes`
-  (e.g. "button labelled 'Anmelden' (DE) = login submit") so the Generator keeps it verbatim.
+- IDs are locale-independent — another reason to prefer them.
+- For a text / role-name / label selector, DON'T assume English: if the English text isn't
+  found, try the German equivalent (and vice versa), and verify live which language renders.
+- Record the observed language + literal in `notes` (e.g. "'Anmelden' (DE) = login submit") so
+  the Generator keeps it verbatim.
 
 # Output
 
