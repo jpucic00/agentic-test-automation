@@ -75,7 +75,15 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             "[%s] Test %s — healing (attempt %d/%d)",
             issue_key, result.status, heal_attempts, max_heal_attempts,
         )
-        healed = await heal_test(config, test, result)
+        try:
+            healed = await heal_test(config, test, result)
+        except Exception as exc:
+            # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not
+            # discard the run — stop healing and fall through to open the MR with the best
+            # test so far, so a human still gets something to review.
+            logger.warning("[%s] Heal attempt %d aborted: %s", issue_key, heal_attempts, exc)
+            heal_summaries.append(f"(attempt {heal_attempts} aborted before completing: {exc})")
+            break
         heal_summaries.append(healed.changes_summary)
         test = GeneratedTest(
             file_name=healed.file_name, code=healed.code, description=test.description
@@ -90,16 +98,34 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         )
 
     logger.info("[%s] Opening GitLab MR", issue_key)
-    gitlab_client = GitLabClient(config)
-    mr_url = gitlab_client.open_mr(
-        test,
-        plan,
-        issue_key,
-        plan_json=plan_json,
-        heal_summaries=heal_summaries,
-        heal_attempts=heal_attempts,
-        final_status=result.status,
-    )
+    try:
+        gitlab_client = GitLabClient(config)
+        mr_url = gitlab_client.open_mr(
+            test,
+            plan,
+            issue_key,
+            plan_json=plan_json,
+            heal_summaries=heal_summaries,
+            heal_attempts=heal_attempts,
+            final_status=result.status,
+        )
+    except Exception as exc:
+        # GitLab/auth/network failure must not discard the run: the generated test and plan
+        # are already on disk — point the user at them instead of crashing.
+        logger.error("[%s] Could not open MR: %s", issue_key, exc)
+        logger.error(
+            "[%s] Test saved at %s (plan: %s) — open an MR manually if needed.",
+            issue_key,
+            config.tests_dir / test.file_name,
+            config.plans_dir / f"{issue_key}.json",
+        )
+        return {
+            "issue_key": issue_key,
+            "status": result.status,
+            "heal_attempts": heal_attempts,
+            "mr_url": None,
+            "error": f"MR creation failed: {exc}",
+        }
     logger.info("[%s] MR opened: %s", issue_key, mr_url)
 
     return {

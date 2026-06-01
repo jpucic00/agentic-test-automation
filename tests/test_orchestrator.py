@@ -107,3 +107,29 @@ def test_runs_dir_is_wiped_at_start(cfg, monkeypatch):
     asyncio.run(orchestrator.process_test_case("QA-1"))
     assert not stale.exists()
     assert cfg.runs_dir.exists()  # dir kept, contents cleared
+
+
+def test_heal_exception_still_opens_mr(cfg, monkeypatch):
+    # A Healer crash (e.g. browser_click exceeded max retries) must not discard the run.
+    gl = _wire(monkeypatch, cfg, [_result("failed")])
+    monkeypatch.setattr(
+        orchestrator,
+        "heal_test",
+        AsyncMock(side_effect=RuntimeError("browser_click exceeded max retries")),
+    )
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    assert out["status"] == "failed"
+    assert out["heal_attempts"] == 1
+    assert out["mr_url"] == "https://gitlab/mr/1"
+    gl.open_mr.assert_called_once()
+    summaries = gl.open_mr.call_args.kwargs["heal_summaries"]
+    assert any("aborted" in s for s in summaries)
+
+
+def test_open_mr_failure_returns_error_without_crashing(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    gl.open_mr.side_effect = RuntimeError("403 insufficient_scope")
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["mr_url"] is None
+    assert "MR creation failed" in out["error"]
+    assert out["status"] == "passed"
