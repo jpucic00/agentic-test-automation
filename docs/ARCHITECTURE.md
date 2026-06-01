@@ -106,7 +106,7 @@ Defined in [`src/ai_test_gen/models.py`](../src/ai_test_gen/models.py).
 - **Internal gateway, not a public API.** All three agents reach one OpenAI-compatible gateway via `llm.py`. The `mtls.py` policy connects *directly* (ignoring env proxies, which silently drop the connection), trusts the corporate CA, and attaches an optional mTLS client cert.
 - **Playwright MCP for browsing.** The agents see the page as an **accessibility tree** (roles/labels), not pixels — far smaller and more reliable for an LLM than raw DOM or screenshots. Launched as a pinned `node` subprocess over stdio (not `npx`, which breaks the init handshake on some machines).
 - **Context injection is asymmetric.** Every agent gets `project_context.md` (conventions/quirks). Only the browser-driving agents (Planner, Healer) also get `project_map.md` (routes/flows). The Generator is kept lean on purpose — mid-tier models degrade past ~30K tokens, so fewer tokens = more reliable structured output.
-- **Auth captured once.** A logged-in `storage_state.json` is saved once (via `scripts/save_auth_state.py`, a Keycloak login flow) and reused, so agents don't re-login every run.
+- **Context-driven login (no saved session).** Each generated test logs *itself* in as its first steps — as the role the scenario needs — using the disposable staging dummy credentials in `project_context.md`; the Planner/Healer log in live while exploring. There is no `storage_state` (sessions expire between runs, and most cases need a different role or register first).
 - **Selectors: IDs first, accessibility roles as fallback.** This app's team writes `id` attributes manually, giving stable anchors. The apps are **bilingual (EN/DE)**, so text/role selectors may be in either language — another reason to prefer locale-independent IDs.
 - **Pin everything.** Exact versions for Python deps, the Playwright MCP server, and the Playwright test runner — version drift during a PoC masks whether a failure is ours or upstream's.
 
@@ -117,7 +117,7 @@ flowchart LR
     P0["Phase 0<br/>access + gateway verify"]:::done --> P1A["1.A config · models · Xray"]:::done
     P1A --> P1B["1.B Playwright MCP · auth"]:::done
     P1B --> P1C["1.C Planner · Generator · Healer"]:::done
-    P1C --> P1D["1.D runner · GitLab · orchestrator"]:::todo
+    P1C --> P1D["1.D runner · GitLab · orchestrator"]:::done
     P1D --> P2["Phase 2 · production"]:::todo
 
     classDef done fill:#1f7a1f,color:#fff,stroke:#0d3d0d;
@@ -126,7 +126,7 @@ flowchart LR
 
 - ✅ **Phase 0** — internal access + gateway/tool-calling/Xray-flavor verification scripts.
 - ✅ **Phase 1.A–1.C** — config + guardrail, data models, Xray client, Playwright MCP + auth, and the three agents with their prompts. Exercised offline (no gateway, no browser) with Pydantic AI's `TestModel`.
-- ⏳ **Phase 1.D (next)** — the end-to-end glue: **Test Runner**, **GitLab MR creator**, and the **Orchestrator** that runs Plan → Generate → Run → Heal → MR for one case. *(These files exist as stubs today.)*
+- ✅ **Phase 1.D** — the end-to-end glue: **Test Runner** (subprocess + hard timeout), **GitLab MR creator** (collision-safe branch, heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run → Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/runs/` auto-clean). Unit-tested offline; the live end-to-end run is a company-laptop step.
 - 🗺️ **Phase 2 (production)** — Dockerized batch job on GitLab CI; secrets via CI variables/Vault; OpenTelemetry tracing; security hardening (locked-down network, non-root, no-PII redaction, audit logging); batch processing; a 4th **Translator** agent for Selenium→Playwright migration; and **RAG** (Qdrant + embed/rerank) to feed the Generator real examples.
 - 📌 **Beyond** — visual regression, parallel CI fan-out, Slack/Teams MR notifications, a coverage dashboard, and auto-proposed `project_map.md` updates.
 

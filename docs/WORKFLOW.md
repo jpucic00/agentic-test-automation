@@ -85,10 +85,12 @@ sequenceDiagram
 
 ## The heal loop, explained
 
-- The Runner **never throws on a failing test** — a failure is a *healable state*, not a crash.
+- The Runner **never throws on a failing test** — a failure is a *healable state*, not a crash. (A genuinely hung run is caught by a hard timeout and reported as `status=error`, so the pipeline can't wedge.)
 - While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: Healer inspects the live app, makes a *minimal* fix (it never re-plans or adds tests), then the Runner re-runs it.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away.
 - **If it still fails after 2 attempts, the MR is opened anyway.** Healing is a convenience, not a gate — a human reviews every result regardless. The MR labels (`ai-generated`, `qa-review-needed`) and the committed plan JSON give the reviewer full context.
+- **Reviewers see the heal history.** Each attempt's `changes_summary`, the heal count, and the final status are rendered into the MR description — tests that needed multiple rounds are easy to spot and scrutinize.
+- **Run housekeeping.** At the start of every run the Orchestrator wipes `output/runs/` (the regenerated MCP snapshot output), and it stamps the saved plan JSON with a `context_hash` (sha256 of `project_context.md` + `project_map.md`) so a plan built against stale context is auditable later.
 
 ## What triggers a run
 
@@ -102,7 +104,7 @@ flowchart LR
     end
 ```
 
-- **Now:** run by hand on the company laptop, one Jira key at a time (auth state saved once beforehand).
+- **Now:** run by hand on the company laptop, one Jira key at a time. Each agent and the generated test log in live from the `project_context.md` dummy creds (context-driven auth — no saved session).
 - **Phase 2:** a Jira status change webhooks GitLab CI, which runs the same Orchestrator inside a locked-down container — one CI job per test case, fanned out for batches.
 
 ## How this grows (planned)

@@ -209,18 +209,16 @@ uv run playwright install chromium
 # Node harness for executing generated tests:
 (cd output && npm install)
 
-# Capture a logged-in session (a headed browser opens — watch it log in), then verify it:
-uv run python scripts/save_auth_state.py
-uv run python scripts/verify_auth_state.py        # exits 0 only if the saved state authenticates
+# (Optional, legacy) capture a logged-in session for manual debugging only:
+# uv run python scripts/save_auth_state.py && uv run python scripts/verify_auth_state.py
 ```
 
-Before the first run, adjust the login selectors in
-[`scripts/save_auth_state.py`](scripts/save_auth_state.py) (`#username`, `#password`,
-`#login-submit`, `/login`) and the post-login check route in
-[`scripts/verify_auth_state.py`](scripts/verify_auth_state.py) to the real staging
-app, and record them in [`project_map.md`](project_map.md) (auth flow). The session
-is written to `output/storage_state.json` (gitignored); `build_playwright_mcp(...)`
-passes it to Playwright MCP via `--storage-state` so agents start pre-authenticated.
+**Auth is context-driven — no saved session.** Each agent (and each generated test) logs in
+live as the role the scenario needs, using the dummy staging credentials and the Keycloak
+login flow recorded in [`project_context.md`](project_context.md) (§3 test users) and
+[`project_map.md`](project_map.md) (auth flow). Fill those in for your app before the first
+run. `scripts/save_auth_state.py` / `verify_auth_state.py` remain only as an optional manual
+session-capture utility — they are not part of the pipeline.
 
 ---
 

@@ -13,8 +13,10 @@ from structured plans. Your output must be production-quality code.
 - ALWAYS use Playwright's `expect()` for assertions (not `assert` or `if/throw`).
 - ALWAYS use locators (`page.locator()`, `page.getByRole()`, etc.), not raw selectors.
 - NEVER use `page.waitForTimeout()` — use `expect(...).toBeVisible()` or similar instead.
-- NEVER hardcode credentials — read them from the per-role env vars named in the Project
-  Context (e.g. `process.env.ADMIN_EMAIL` / `process.env.ADMIN_PASSWORD`).
+- The test logs in as the role the plan specifies (the plan's first steps). Use that role's
+  dummy staging email/password from your Project Context test-users table DIRECTLY as literals
+  — these are disposable non-prod logins. Do NOT use `process.env`, do NOT invent credentials,
+  and never put real/production credentials, tokens, or PII in a `.spec.ts`.
 
 # Selectors
 

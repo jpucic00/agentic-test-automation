@@ -2,8 +2,8 @@
 //
 // Generated tests are written to ./tests by the orchestrator and executed via
 // `npx playwright test` from this directory. retries=0 — the Healer agent owns
-// retries, not the runner. The authenticated session is injected at runtime via
-// the PW_STORAGE_STATE env var (see scripts/save_auth_state.py).
+// retries, not the runner. Each test logs itself in (context-driven auth) using the
+// disposable staging dummy creds from project_context.md — no saved session.
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
@@ -14,7 +14,6 @@ export default defineConfig({
     headless: true,
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',
-    storageState: process.env.PW_STORAGE_STATE || undefined,
   },
   retries: 0, // we handle retries via the Healer
   reporter: [['json'], ['list']],

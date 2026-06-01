@@ -1,10 +1,14 @@
 """Save a Playwright ``storage_state.json`` for the staging app (run once).
 
+DEPRECATED / legacy: the pipeline uses context-driven login (agents and generated
+tests log in live from the ``project_context.md`` dummy creds), so storage_state is
+no longer part of the runtime path. This script is retained only as a manual
+session-capture utility (e.g. to debug the Keycloak flow). Deletion is a separate
+decision; ``STAGING_USERNAME``/``STAGING_PASSWORD`` in ``.env`` now feed only this
+script and its verifier.
+
 Launches a *headed* Chromium, logs into the staging app, and writes
-``output/storage_state.json``. Pass that file to Playwright MCP via
-``--storage-state`` (see ``src/ai_test_gen/playwright_mcp.py``) so agents start
-pre-authenticated instead of burning tokens logging in on every run — the single
-biggest failure mode for agentic browser testing.
+``output/storage_state.json``.
 
 Auth flow (staging app + Keycloak): the app has **no direct ``/login`` URL**.
 Instead we open the app, click the Login control in the nav bar, follow the

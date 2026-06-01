@@ -7,7 +7,8 @@ returned toolset via
 
 The server itself is configured by ``playwright-mcp-config.json`` at the repo
 root (browser / headless / ``imageResponses`` settings — see §3.7); this module
-assembles the launch command and wires in an optional pre-authenticated session.
+assembles the launch command (plus an optional legacy storage-state hook, default
+off — the pipeline authenticates from context, see ``build_playwright_mcp``).
 
 Launch via ``node <cli.js>`` directly, NOT ``npx``: ``npx`` is a resolver/wrapper
 that spawns the real server as a grandchild and does not reliably forward the
@@ -113,9 +114,10 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
     Args:
         config: app config. Reserved for future extensibility (e.g. proxy
             settings); accepted now so the signature is stable across phases.
-        storage_state: optional path to a Playwright ``storage_state.json`` so the
-            browser starts pre-authenticated (see ``scripts/save_auth_state.py``).
-            Avoids agents burning tokens re-logging-in on every run.
+        storage_state: LEGACY/optional path to a Playwright ``storage_state.json``
+            for a pre-authenticated session. The pipeline now uses context-driven
+            login (agents log in live from ``project_context.md`` creds), so this is
+            ``None`` in normal runs; kept for manual/debug session reuse.
 
     Returns an ``MCPToolset`` to attach via ``Agent(model, toolsets=[...])``.
 

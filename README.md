@@ -45,14 +45,15 @@ This release covers **access, tooling, and gateway verification only**. There is
 >   `@playwright/mcp@0.0.75`, configured by [`playwright-mcp-config.json`](playwright-mcp-config.json)
 >   (accessibility-tree only — `imageResponses: omit`). Attach via `Agent(model, toolsets=[...])`.
 > - [`scripts/save_auth_state.py`](scripts/save_auth_state.py) + [`scripts/verify_auth_state.py`](scripts/verify_auth_state.py)
->   — capture a logged-in `storage_state.json` once and confirm it authenticates, so agents don't
->   re-login on every run. **Company-laptop runtime** (needs staging + the real login selectors).
+>   — **legacy** session-capture utility. The pipeline now uses **context-driven login** (each test
+>   logs itself in from the `project_context.md` dummy creds), so these are no longer in the runtime
+>   path — kept only for manual debugging. **Company-laptop runtime** (needs staging).
 > - [`output/`](output/) Playwright harness — `playwright.config.ts` + a pinned `package.json`
 >   (`@playwright/test==1.60.0`, matching the Python `playwright==1.60.0`); `npx playwright test --list`
 >   compiles clean. Run `cd output && npm install` once.
 >
-> Adds one Python dependency: `playwright==1.60.0`. Multi-role storage state was deferred to Phase 1.D
-> (its acceptance test needs the orchestrator that consumes it).
+> Adds one Python dependency: `playwright==1.60.0`. Multi-role is handled by context-driven login —
+> the Planner picks the role per scenario from the `project_context.md` test-users table (no storage state).
 
 > **Phase 1.C (Planner / Generator / Healer agents) — landed.** The agent layer that turns a
 > `ManualTestCase` into a reviewable test, on Pydantic AI structured outputs:

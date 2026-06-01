@@ -106,9 +106,9 @@ The same gotchas are documented in [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GE
 
 ---
 
-## Phase 1.B — auth-state scripts (company laptop)
+## Phase 1.B — auth-state scripts (LEGACY, company laptop)
 
-Two scripts solve the browser auth wall (guide §3.7). Like the Step 0 scripts, they drive the live staging app, so they run on the **company laptop** only.
+> **Legacy / optional.** The pipeline uses **context-driven login** — each agent and each generated test logs in live from the `project_context.md` dummy creds, so there is no saved `storage_state.json` in the runtime path. These two scripts are kept only as a manual session-capture utility (e.g. to debug the Keycloak flow). They drive the live staging app, so they run on the **company laptop** only.
 
 | Script | What it does |
 |---|---|
@@ -121,4 +121,4 @@ uv run python scripts/save_auth_state.py
 uv run python scripts/verify_auth_state.py
 ```
 
-First adjust the login selectors (`#username`, `#password`, `#login-submit`, `/login`) and the post-login check route to the real staging app, and record them in [`project_map.md`](../project_map.md) (auth flow). `output/storage_state.json` is gitignored; Playwright MCP receives it via `--storage-state` (handled by `build_playwright_mcp(...)`). Re-run weekly or whenever the session expires.
+If you do use them, adjust the Keycloak selectors (nav login `#metaMenuItem5` → `#username` / `#password` / submit `#kc-login`) to the real staging form, and record the auth flow in [`project_map.md`](../project_map.md). `output/storage_state.json` is gitignored. The pipeline itself does not read this file.

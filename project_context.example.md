@@ -28,18 +28,19 @@ first test cases need and grow it over time. Delete the guidance comments.
 - **At the start of a scenario, log in as the role the test requires** (see §3). If the
   test names no role, use **<DEFAULT ROLE>**.
 - To change role, log out (<logout selector/route>) and log in as the other user.
-- **Generated tests must read credentials from `process.env.<VAR>`** (the env-var column
-  in §3) — NEVER hardcode passwords in a `.spec.ts`.
+- **Generated tests use these dummy staging logins directly** (the email/password in §3) —
+  they are disposable non-prod credentials embedded as literals. Never put real/production
+  credentials, tokens, or PII in a `.spec.ts`.
 
 ## 3. Test users (staging dummies — pre-created)
-<!-- Use EMAIL/PASSWORD to log in live during planning/healing. The ENV VAR names are
-     what generated .spec.ts files read via process.env. Add the same vars to .env. -->
+<!-- Use EMAIL/PASSWORD both for live login during planning/healing AND directly (as
+     literals) in the generated .spec.ts. These are disposable staging dummies. -->
 
-| Role | Email / username | Password | Env vars (generated tests) | What this role can do |
-|------|------------------|----------|----------------------------|-----------------------|
-| <Admin>   | <admin@stage.example>   | <password> | ADMIN_EMAIL / ADMIN_PASSWORD     | <full org admin: manage users, billing…> |
-| <Manager> | <manager@stage.example> | <password> | MANAGER_EMAIL / MANAGER_PASSWORD | <…> |
-| <Member>  | <member@stage.example>  | <password> | MEMBER_EMAIL / MEMBER_PASSWORD   | <…> |
+| Role | Email / username | Password | What this role can do |
+|------|------------------|----------|-----------------------|
+| <Admin>   | <admin@stage.example>   | <password> | <full org admin: manage users, billing…> |
+| <Manager> | <manager@stage.example> | <password> | <…> |
+| <Member>  | <member@stage.example>  | <password> | <…> |
 
 ## 4. Dummy organizations (pre-existing)
 <!-- Orgs the §3 users already belong to, for tests that do NOT register a new org. -->

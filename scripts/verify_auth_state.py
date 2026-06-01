@@ -1,5 +1,9 @@
 """Verify a saved ``storage_state.json`` yields an authenticated staging session.
 
+DEPRECATED / legacy companion to ``save_auth_state.py``: storage_state is no longer
+part of the runtime pipeline (context-driven login replaced it). Retained only for
+manual session-capture debugging.
+
 Loads ``output/storage_state.json`` into a fresh Playwright context, navigates to
 a protected route, and confirms we are NOT bounced out to Keycloak. With the
 Keycloak redirect flow there is no ``/login`` route to look for; instead we treat

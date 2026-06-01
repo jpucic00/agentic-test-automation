@@ -1,0 +1,109 @@
+"""Unit tests for the orchestrator — fully local (every agent + integration is mocked).
+
+The agents, the runner, the Xray client, and the GitLab client are monkeypatched in the
+``orchestrator`` namespace, so no network, browser, or subprocess is touched. Coroutines
+are driven with ``asyncio.run`` (no pytest-asyncio). ``Test*`` models are built via the
+``models`` module so pytest does not collect them as test classes.
+"""
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from ai_test_gen import models, orchestrator
+
+
+def _manual_case():
+    return models.ManualTestCase(
+        key="QA-1", title="Login", steps=["log in"], expected_results=["dashboard"]
+    )
+
+
+def _plan():
+    return models.TestPlan(
+        test_case_key="QA-1",
+        title="Login",
+        target_url="https://staging.example.internal",
+        steps=[models.PlanStep(action="log in")],
+    )
+
+
+def _generated():
+    return models.GeneratedTest(file_name="QA-1-login.spec.ts", code="// spec", description="login")
+
+
+def _healed():
+    return models.HealedTest(
+        file_name="QA-1-login.spec.ts", code="// healed", changes_summary="fixed selector"
+    )
+
+
+def _result(status):
+    return models.TestRunResult(status=status, stdout="", stderr="")
+
+
+def _wire(monkeypatch, cfg, run_results):
+    """Monkeypatch the whole pipeline; return the mock GitLab client."""
+    cfg.plans_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(orchestrator, "load_config", lambda: cfg)
+
+    fake_xray = MagicMock()
+    fake_xray.fetch.return_value = _manual_case()
+    monkeypatch.setattr(orchestrator, "XrayClient", MagicMock(return_value=fake_xray))
+
+    monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=_plan()))
+    monkeypatch.setattr(orchestrator, "generate_test", AsyncMock(return_value=_generated()))
+    monkeypatch.setattr(orchestrator, "run_test", AsyncMock(side_effect=list(run_results)))
+    monkeypatch.setattr(orchestrator, "heal_test", AsyncMock(return_value=_healed()))
+
+    gl = MagicMock()
+    gl.open_mr.return_value = "https://gitlab/mr/1"
+    monkeypatch.setattr(orchestrator, "GitLabClient", MagicMock(return_value=gl))
+    return gl
+
+
+def test_heals_until_pass_then_opens_mr(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "passed"
+    assert out["heal_attempts"] == 1
+    assert out["mr_url"] == "https://gitlab/mr/1"
+    kwargs = gl.open_mr.call_args.kwargs
+    assert kwargs["heal_attempts"] == 1
+    assert kwargs["final_status"] == "passed"
+    assert kwargs["heal_summaries"] == ["fixed selector"]
+
+
+def test_respects_max_heal_attempts_and_opens_mr_on_failure(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("failed")] * 5)  # never passes
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=2))
+    assert out["status"] == "failed"
+    assert out["heal_attempts"] == 2
+    gl.open_mr.assert_called_once()
+    assert gl.open_mr.call_args.kwargs["final_status"] == "failed"
+
+
+def test_no_heal_when_first_run_passes(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["heal_attempts"] == 0
+    assert gl.open_mr.call_args.kwargs["heal_summaries"] == []
+
+
+def test_saved_plan_json_has_context_hash(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    saved = (cfg.plans_dir / "QA-1.json").read_text()
+    assert "context_hash" in saved
+    # The same enriched JSON is handed to the GitLab client.
+    assert "context_hash" in gl.open_mr.call_args.kwargs["plan_json"]
+
+
+def test_runs_dir_is_wiped_at_start(cfg, monkeypatch):
+    cfg.runs_dir.mkdir(parents=True, exist_ok=True)
+    stale = cfg.runs_dir / "old-snapshot.txt"
+    stale.write_text("stale")
+    _wire(monkeypatch, cfg, [_result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert not stale.exists()
+    assert cfg.runs_dir.exists()  # dir kept, contents cleared
