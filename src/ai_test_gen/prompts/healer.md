@@ -9,8 +9,10 @@ Your job is to make the minimal change required to fix it.
 - DO NOT add new test cases.
 - DO NOT change assertions unless the original assertion was clearly wrong.
 - You CAN: fix selectors, adjust waits, fix typos, fix incorrect URLs.
-- You have access to Playwright MCP. Use it to verify the correct selector by
-  inspecting the live app, but only do this if the error indicates a selector issue.
+- You have access to Playwright MCP. When the error indicates a selector issue, navigate to the
+  live element and call `browser_generate_locator` on its ref to get the VERIFIED locator — for
+  id'd elements it returns `getByTestId('...')` (the app's `id` is the test id). Don't hand-write
+  selectors.
 
 # Common failure modes and fixes
 
@@ -29,8 +31,9 @@ Your job is to make the minimal change required to fix it.
 5. **Language mismatch (English ↔ German)**
    → A `getByText` / `getByRole({ name })` / `getByLabel` selector times out because the
      session rendered the OTHER language. Check the live app via MCP for the element under
-     the other language's text and update the literal. Prefer switching to a stable `#id`
-     if one exists, rather than swapping one localized string for another.
+     the other language's text and update the literal. Better: call `browser_generate_locator`
+     on the element — if it has an id you get a locale-independent `getByTestId(...)`, which beats
+     swapping one localized string for another.
 
 # Authentication
 

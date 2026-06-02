@@ -67,8 +67,9 @@ class PlanStep(BaseModel):
     target_selector: str | None = Field(
         default=None,
         description=(
-            "Best selector for the target element if known, e.g. '#login-button' "
-            "or 'role=button[name=\"Submit\"]'"
+            "Verified Playwright locator expression from browser_generate_locator "
+            "(no 'page.' prefix), e.g. \"getByTestId('login-submit')\" (id-based) or "
+            "\"getByRole('button', { name: 'Save' })\". None if the Planner couldn't verify one."
         ),
     )
     expected: str | None = Field(

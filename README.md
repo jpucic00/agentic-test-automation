@@ -43,7 +43,9 @@ This release covers **access, tooling, and gateway verification only**. There is
 > - [`playwright_mcp.py`](src/ai_test_gen/playwright_mcp.py) — `build_playwright_mcp()` returns an
 >   `MCPToolset` (pydantic-ai 1.104.0; `MCPServerStdio` is deprecated) running a **pinned**
 >   `@playwright/mcp@0.0.75`, configured by [`playwright-mcp-config.json`](playwright-mcp-config.json)
->   (accessibility-tree only — `imageResponses: omit`). Attach via `Agent(model, toolsets=[...])`.
+>   (accessibility-tree only — `imageResponses: omit`; `capabilities: ["testing"]` +
+>   `testIdAttribute: "id"` enable the Planner's read-only `browser_generate_locator`). Attach via
+>   `Agent(model, toolsets=[...])`.
 > - [`scripts/save_auth_state.py`](scripts/save_auth_state.py) + [`scripts/verify_auth_state.py`](scripts/verify_auth_state.py)
 >   — **legacy** session-capture utility. The pipeline now uses **context-driven login** (each test
 >   logs itself in from the `project_context.md` dummy creds), so these are no longer in the runtime
@@ -69,9 +71,10 @@ This release covers **access, tooling, and gateway verification only**. There is
 > - [`agents/healer.py`](src/ai_test_gen/agents/healer.py) — `build_healer()` / `heal_test()`: MCP
 >   toolset, `output_type=HealedTest`; fixes a failing test minimally, or returns it unchanged when the
 >   failure is a real app bug.
-> - [`prompts/`](src/ai_test_gen/prompts/) — the three system prompts (ID-first selectors, GOOD/BAD
->   examples, DO/DO NOT lists). All three carry an **English/German** note: the apps are bilingual, so
->   text-based selector fallbacks may be in either language (IDs are locale-independent — prefer them).
+> - [`prompts/`](src/ai_test_gen/prompts/) — the three system prompts (verified selectors via
+>   `browser_generate_locator`, GOOD/BAD examples, DO/DO NOT lists). All three carry an
+>   **English/German** note: the apps are bilingual, so text-based selector fallbacks may be in either
+>   language (id-based `getByTestId` locators are locale-independent — preferred).
 >
 > Offline-tested with Pydantic AI's `TestModel` ([`tests/test_context.py`](tests/test_context.py),
 > [`tests/test_agents.py`](tests/test_agents.py)) — no gateway, no browser subprocess, no new

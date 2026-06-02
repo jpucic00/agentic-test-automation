@@ -48,8 +48,8 @@ sequenceDiagram
     O->>X: fetch(issue_key)
     X-->>O: ManualTestCase
     O->>P: plan_test_case(case)
-    P->>B: navigate + read accessibility tree
-    B-->>P: verified selectors
+    P->>B: navigate + browser_generate_locator
+    B-->>P: verified locators (getByTestId / getByRole)
     P-->>O: TestPlan
     O->>G: generate_test(plan)
     G-->>O: GeneratedTest (.spec.ts)
@@ -59,8 +59,8 @@ sequenceDiagram
 
     loop while failing, up to 2 attempts
         O->>H: heal_test(test, failure)
-        H->>B: inspect live app
-        B-->>H: correct selectors
+        H->>B: inspect live app + browser_generate_locator
+        B-->>H: correct locators
         H-->>O: HealedTest
         O->>R: run_test(healed)
         R-->>O: TestRunResult

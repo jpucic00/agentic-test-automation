@@ -65,9 +65,10 @@ async def plan_test_case(
 **Steps and Expected Results:**
 {_format_steps(test_case)}
 
-Now build a TestPlan. You may navigate the staging app to verify selectors before
-committing them. Use IDs (e.g. '#login-button') as your first choice — this app's
-team writes them manually. Fall back to accessibility roles only if no ID exists.
+Now build a TestPlan. Navigate the staging app and, for each element you act on, call
+browser_generate_locator on its ref to capture a VERIFIED locator — never hand-write one.
+The app's manual id= attributes surface as getByTestId('...'); elements without an id come
+back as getByRole/getByLabel. Record each locator verbatim in target_selector.
 """
 
     # MCP toolset → the agent must be entered as an async context manager so the

@@ -11,6 +11,11 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
+    // The target app's manually-written `id=` attributes ARE the test id: the Planner's
+    // browser_generate_locator emits getByTestId('login-submit'), which resolves to
+    // [id="login-submit"] only because of this line. Must stay in sync with
+    // "testIdAttribute": "id" in playwright-mcp-config.json (the read side).
+    testIdAttribute: 'id',
     headless: true,
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',

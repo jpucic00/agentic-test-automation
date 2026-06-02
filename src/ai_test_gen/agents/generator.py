@@ -50,7 +50,8 @@ Requirements:
 - Use Playwright's @playwright/test framework
 - Use `test.describe` and `test()` blocks
 - File should be a complete, runnable .spec.ts file
-- Prefer ID selectors (`#login-button`) — this app uses them manually
+- Use each step's `target_selector` locator AS-IS — prepend `page.` (e.g.
+  `page.getByTestId('login-submit')`); never rewrite `getByTestId` to a `#id`/`data-testid`
 - Add `await expect(...)` assertions for each step's expected outcome
 - Use `await page.goto()` with the full staging URL from the plan
 """

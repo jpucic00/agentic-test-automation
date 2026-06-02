@@ -25,7 +25,7 @@ _INSTANCES: list[BaseModel] = [
     ),
     models.PlanStep(
         action="Click the login submit button",
-        target_selector="#login-submit",
+        target_selector="getByTestId('login-submit')",
         expected="Dashboard is visible",
     ),
     models.TestPlan(
@@ -36,7 +36,7 @@ _INSTANCES: list[BaseModel] = [
         steps=[
             models.PlanStep(
                 action="Fill the email field",
-                target_selector="#login-email",
+                target_selector="getByTestId('login-email')",
                 expected="Field accepts input",
             )
         ],
@@ -52,13 +52,13 @@ _INSTANCES: list[BaseModel] = [
         stdout="Running 1 test...",
         stderr="TimeoutError: locator not found",
         failed_test="login happy path",
-        error_message="locator '#login-submit' not found",
+        error_message="getByTestId('login-submit') resolved to no element",
         trace_path="output/snapshots/trace.zip",
     ),
     models.HealedTest(
         file_name="QA-1234-login-happy-path.spec.ts",
         code="import { test, expect } from '@playwright/test';",
-        changes_summary="Updated the submit selector from #submit to #login-submit.",
+        changes_summary="Switched the submit locator to getByTestId('login-submit').",
     ),
 ]
 

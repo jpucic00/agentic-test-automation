@@ -64,16 +64,17 @@ first test cases need and grow it over time. Delete the guidance comments.
 - After creating an identity, continue the scenario as that new identity.
 
 ## 6. Selector rules (never hallucinate)
-- Prefer stable `id` selectors (`#save-button`) — this app's team writes IDs manually.
-- Fall back to ARIA role + accessible name only when no id exists.
-- Use ONLY selectors observed in the live accessibility snapshot. If you can't verify a
-  selector by navigating, leave it empty and say so — never invent one. No hashed CSS
-  classes, no XPath.
+- Selectors are captured with Playwright MCP's `browser_generate_locator`, not hand-written.
+- This app's team writes `id` attributes manually and the server sets `testIdAttribute: "id"`,
+  so id'd elements come back as `getByTestId('save-button')` (= `[id="save-button"]`). Prefer them.
+- Fall back to ARIA role + accessible name (`getByRole`/`getByLabel`) only when an element has no id.
+- Record ONLY a locator you obtained from `browser_generate_locator` on a ref you reached. If you
+  can't verify one, leave it empty and say so — never invent one. No hashed CSS classes, no XPath.
 
 ## 7. Localization (EN / DE)
 - The UI renders English or German by locale; visible labels may be German.
-- Prefer locale-independent selectors (IDs/roles). If you must match text, use it exactly
-  as it appears in the snapshot.
+- Prefer locale-independent locators (`getByTestId` from `id`). If you must match text, use it
+  exactly as it appears in the snapshot.
 
 ## 8. Behavior guardrails
 - Staging only; never act on production.

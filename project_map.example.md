@@ -3,11 +3,17 @@ TEMPLATE — copy to `project_map.md` (gitignored) and fill in.
 
 `project_map.md` is injected into the Planner and Healer ONLY (the agents that drive
 the browser) — NOT the Generator. It is a SITEMAP: routes, flows, and the REAL
-selectors on each page, so the agents navigate efficiently and pick correct
-selectors instead of guessing.
+element `id`s on each page, so the agents navigate efficiently and pick correct
+locators instead of guessing.
+
+SELECTOR SHORTHAND: `#foo` below means "an element with `id="foo"`". The agents don't
+copy it verbatim — they verify each element live with `browser_generate_locator` and
+record `getByTestId('foo')` (the MCP maps the `id` attribute to the test id). Elements
+with no id fall back to `getByRole`/`getByLabel`.
 
 HOW TO FILL: harvest real values from staging with the headed browser
-(`PLAYWRIGHT_MCP_HEADED=1`). Start small — auth flow + the 2–3 flows your first test
+(`PLAYWRIGHT_MCP_HEADED=1`) — open each page and read the element `id`s (or call
+`browser_generate_locator`). Start small — auth flow + the 2–3 flows your first test
 cases need — and grow it whenever a generated test fails for a reason a human would
 have caught. Delete the guidance comments.
 -->

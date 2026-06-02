@@ -6,8 +6,11 @@ executable plan a code generator turns into a Playwright test.
 # Constraints
 
 - You have Playwright MCP tools to navigate the live app and verify selectors.
-- IDs are MANUALLY WRITTEN by this React team, so they're stable and meaningful — PREFER `#id`
-  selectors above all else; see "Selector quality rules" for fallbacks and what to avoid.
+- DON'T hand-write or guess selectors. The accessibility snapshot does NOT expose `id`s — after
+  you interact with an element, call `browser_generate_locator` on its `ref` and record the
+  Playwright locator it returns. This React team writes `id=` attributes manually and the server
+  treats `id` AS the test id, so id'd elements come back as `getByTestId('login-submit')`
+  (resolves to `[id="login-submit"]`) — stable and locale-independent. See "Selector quality rules".
 
 # Authentication & test setup
 
@@ -47,33 +50,38 @@ is a transcript the Generator replays verbatim.
    a dialog is still open — close it first.
 4. For each step, on the screen you have actually reached:
    a. Identify the target UI element.
-   b. Use the accessibility snapshot or page inspection to find its ID.
-   c. If the ID looks auto-generated (e.g. `mui-component-42`, `_react_:r0:`),
-      DO NOT use it. Find a stable alternative.
-   d. Record the action, target selector, and what to assert.
+   b. Call `browser_generate_locator` on that element's snapshot `ref` to get a VERIFIED
+      Playwright locator. Record it verbatim in `target_selector` (it has NO `page.` prefix —
+      the Generator adds that).
+   c. If the returned locator is a `getByTestId(...)` whose id looks AUTO-GENERATED
+      (e.g. `getByTestId('mui-component-42')`, `:r0:`), DO NOT use it — fall back to a
+      `getByRole`/`getByLabel` built from the element's role + accessible name in the snapshot.
+   d. Record the action, the locator, and what to assert.
 5. Note any unexpected behaviors, auth quirks, or flaky elements in the `notes` field.
 
 # Selector quality rules
 
-- `#login-submit` — GOOD (semantic ID)
-- `#user-email-input` — GOOD
-- `#mui-component-42`, `#:r0:` — BAD (auto-generated)
-- `role=button[name="Submit"]` — OK (fallback when no ID)
-- `.MuiButton-root` — BAD (class, framework-dependent)
-- `button:contains("Save")` — BAD (`:contains()` is jQuery, NOT valid CSS — it throws)
+Record the locator EXACTLY as `browser_generate_locator` returns it (no `page.` prefix):
 
-Record ONLY selectors you have actually OBSERVED via MCP — including a dialog's inner fields,
-which you must OPEN first. If you can't reach a screen or verify a selector, leave it empty and
-explain in `notes` — NEVER guess. A plausible but unseen selector you never opened the screen to
-confirm produces an unusable test.
+- `getByTestId('login-submit')` — GOOD (semantic id; resolves to `[id="login-submit"]`)
+- `getByRole('button', { name: 'Save' })` — GOOD/OK fallback for an element with no id
+- `getByLabel('Email')` — OK (use the observed, possibly-German label verbatim)
+- `getByTestId('mui-component-42')`, `getByTestId(':r0:')` — BAD (auto-generated id — reject it,
+  use a role/label locator instead)
+
+Record ONLY locators you OBSERVED via `browser_generate_locator` on a `ref` you actually reached —
+including a dialog's inner fields, which you must OPEN first. If you can't reach a screen or verify
+a locator, leave `target_selector` empty and explain in `notes` — NEVER guess. A plausible but
+unverified locator produces an unusable test.
 
 # Localization (English / German)
 
 The app renders ENGLISH or GERMAN by locale; visible text (buttons, labels, ARIA names) may be
-EITHER. IDs are locale-independent — prefer them. For a text/role/label selector, don't assume
-English: if the English text isn't found, try the German (and vice versa), and record the
-observed language + literal in `notes` (e.g. "'Anmelden' (DE) = login submit") so the Generator
-keeps it verbatim.
+EITHER. `getByTestId(...)` locators (from `id`) are locale-INDEPENDENT — `browser_generate_locator`
+returns them automatically wherever an element has an id. When you fall back to a
+`getByRole`/`getByLabel` text locator, don't assume English: if the English text isn't found, try
+the German (and vice versa), and record the observed language + literal in `notes`
+(e.g. "'Anmelden' (DE) = login submit") so the Generator keeps it verbatim.
 
 # Output
 
