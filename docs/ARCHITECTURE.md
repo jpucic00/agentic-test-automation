@@ -5,7 +5,7 @@
 
 ## What it is, in one paragraph
 
-An AI pipeline that turns a **manual Jira/Xray test case** into a **reviewed Playwright test** and opens a **GitLab merge request** — so QA reviews code instead of hand-writing it. Three narrow LLM agents (**Planner → Generator → Healer**) run on the company's **internal model gateway**, drive a **real staging browser** through Playwright MCP, and verify their work against the live app. A human approves every MR; nothing is ever auto-merged, and the pipeline only ever runs against **staging, never production**.
+An AI pipeline that turns a **manual Jira/Xray test case** into a **reviewed Playwright test** and opens a **GitLab merge request** — so QA reviews code instead of hand-writing it. Three narrow LLM agents (**Planner → Generator → Healer**) run on an **OpenAI-compatible model gateway**, drive a **real staging browser** through Playwright MCP, and verify their work against the live app. A human approves every MR; nothing is ever auto-merged, and the pipeline only ever runs against **staging, never production**.
 
 ## The five core ideas
 
@@ -25,7 +25,7 @@ flowchart TB
         GLAB[("GitLab<br/>review gate")]
     end
 
-    subgraph gw[" Internal AI gateway — OpenAI-compatible, mTLS "]
+    subgraph gw[" Model gateway — OpenAI-compatible, optional mTLS "]
         REASON[["gpt-oss-120b<br/>reasoning + tools"]]
         CODER[["devstral-small-2<br/>code"]]
     end
@@ -59,17 +59,17 @@ flowchart TB
 
 ## Components & responsibilities
 
-| Component | Reads | Produces | Model / Browser | Status |
-|---|---|---|---|---|
-| **Orchestrator** | one Jira key | per-case result + MR URL | — | ✅ built |
-| **Xray Client** | Jira ticket | `ManualTestCase` | — | ✅ built |
-| **Planner Agent** | test case + live staging | `TestPlan` (verified selectors) | gpt-oss-120b · **MCP** | ✅ built |
-| **Generator Agent** | `TestPlan` | `GeneratedTest` (`.spec.ts`) | devstral-small-2 · no browser | ✅ built |
-| **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) | ✅ built |
-| **Healer Agent** | failed test + error | `HealedTest` (minimal fix) | gpt-oss-120b · **MCP** | ✅ built |
-| **GitLab Client** | final test + plan | open MR (branch + commit) | — | ✅ built |
+| Component | Reads | Produces | Model / Browser |
+|---|---|---|---|
+| **Orchestrator** | one Jira key | per-case result + MR URL | — |
+| **Xray Client** | Jira ticket | `ManualTestCase` | — |
+| **Planner Agent** | test case + live staging | `TestPlan` (verified selectors) | gpt-oss-120b · **MCP** |
+| **Generator Agent** | `TestPlan` | `GeneratedTest` (`.spec.ts`) | devstral-small-2 · no browser |
+| **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) |
+| **Healer Agent** | failed test + error | `HealedTest` (minimal fix) | gpt-oss-120b · **MCP** |
+| **GitLab Client** | final test + plan | open MR (branch + commit) | — |
 
-All three agents plus the Phase 1.D glue — Test Runner, GitLab Client, Orchestrator — are now built and unit-tested offline; **Phase 1.D wired them** into one end-to-end run. The live end-to-end run is a company-laptop step.
+All three agents and the glue around them — Test Runner, GitLab Client, Orchestrator — are built and unit-tested offline and wired into one end-to-end run. A live run additionally needs the model gateway, the staging app, and the Jira/Xray tenant.
 
 ## The data contract
 
@@ -94,7 +94,7 @@ Defined in [`src/ai_test_gen/models.py`](../src/ai_test_gen/models.py).
 | **Agents** | `agents/planner.py`, `agents/generator.py`, `agents/healer.py` |
 | **Agent context** | `agents/_context.py` — injects the human-authored context files |
 | **Prompts** | `prompts/planner.md`, `prompts/generator.md`, `prompts/healer.md` |
-| **Model access** | `llm.py` (gateway provider) + `mtls.py` (direct-connect, corp CA, optional client cert) |
+| **Model access** | `llm.py` (gateway provider) + `mtls.py` (direct-connect, optional private CA + client cert) |
 | **Browser** | `playwright_mcp.py` + `playwright-mcp-config.json` + `output/` (Playwright harness) |
 | **Integrations** | `xray_client.py` (in) · `gitlab_client.py` (out) |
 | **Config & guardrail** | `config.py` — central config + fail-closed prod-URL check |
@@ -103,38 +103,45 @@ Defined in [`src/ai_test_gen/models.py`](../src/ai_test_gen/models.py).
 
 ## Cross-cutting design choices (why the moving parts exist)
 
-- **Internal gateway, not a public API.** All three agents reach one OpenAI-compatible gateway via `llm.py`. The `mtls.py` policy connects *directly* (ignoring env proxies, which silently drop the connection), trusts the corporate CA, and attaches an optional mTLS client cert.
+- **One gateway, not a public API.** All three agents reach one OpenAI-compatible gateway via `llm.py`. The `mtls.py` policy connects *directly* (ignoring env proxies, which can silently drop the connection), optionally trusts a private CA, and attaches an optional mTLS client cert.
 - **Playwright MCP for browsing.** The agents see the page as an **accessibility tree** (roles/labels), not pixels — far smaller and more reliable for an LLM than raw DOM or screenshots. Launched as a pinned `node` subprocess over stdio (not `npx`, which breaks the init handshake on some machines).
 - **Context injection is asymmetric.** Every agent gets `project_context.md` (conventions/quirks). Only the browser-driving agents (Planner, Healer) also get `project_map.md` (routes/flows). The Generator is kept lean on purpose — mid-tier models degrade past ~30K tokens, so fewer tokens = more reliable structured output.
 - **Context-driven login (no saved session).** Each generated test logs *itself* in as its first steps — as the role the scenario needs — using the disposable staging dummy credentials in `project_context.md`; the Planner/Healer log in live while exploring. There is no `storage_state` (sessions expire between runs, and most cases need a different role or register first).
-- **Selectors: verified, never guessed.** The accessibility tree carries no `id`s to read, so the Planner/Healer call Playwright MCP's read-only `browser_generate_locator` to capture a real locator per element instead of hand-writing one. The server sets `testIdAttribute: "id"`, so this team's manually-written `id` attributes surface as `getByTestId('…')` (resolves to `[id="…"]`); elements without an id fall back to `getByRole`/`getByLabel`. The apps are **bilingual (EN/DE)**, so text/role fallbacks may be in either language — another reason the id-based locators (locale-independent) are preferred. The generated-test runner mirrors `testIdAttribute: 'id'` so those locators resolve at run time.
-- **Pin everything.** Exact versions for Python deps, the Playwright MCP server, and the Playwright test runner — version drift during a PoC masks whether a failure is ours or upstream's.
+- **Selectors: verified, never guessed.** The accessibility tree carries no `id`s to read, so the Planner/Healer call Playwright MCP's read-only `browser_generate_locator` to capture a real locator per element instead of hand-writing one. The server sets `testIdAttribute: "id"`, so the app's manually-written `id` attributes surface as `getByTestId('…')` (resolves to `[id="…"]`); elements without an id fall back to `getByRole`/`getByLabel`. If the app is **multilingual**, text/role fallbacks may appear in any of its languages — another reason the id-based locators (locale-independent) are preferred. Hand-built name fallbacks use **`exact: true`** so a default substring match (`{ name: 'Add' }` ↔ "Add admin") can't trip a `strict mode violation … resolved N elements`; the Healer's failure-mode catalog adds `exact` / dialog-scoping when a generated test hits one anyway. The generated-test runner mirrors `testIdAttribute: 'id'` so those locators resolve at run time.
+- **Regression-safe test data.** Generated tests randomize the data they *create* (new user/org/project names, signup emails) **at run time** — a fresh suffix computed in the test, not a one-off literal baked in by the model — so reruns don't collide (`already exists`). Login credentials stay literal: they must match an existing account.
+- **Pin everything.** Exact versions for Python deps, the Playwright MCP server, and the Playwright test runner — version drift masks whether a failure is ours or upstream's.
 
-## Build phases & current status
+## What's built, and what's next
 
-```mermaid
-flowchart LR
-    P0["Phase 0<br/>access + gateway verify"]:::done --> P1A["1.A config · models · Xray"]:::done
-    P1A --> P1B["1.B Playwright MCP · auth"]:::done
-    P1B --> P1C["1.C Planner · Generator · Healer"]:::done
-    P1C --> P1D["1.D runner · GitLab · orchestrator"]:::done
-    P1D --> P2["Phase 2 · production"]:::todo
+The pipeline runs end-to-end today: central config with the fail-closed prod-URL guardrail, the typed
+data models, the Xray client, Playwright MCP with context-driven login, the three agents with their
+prompts, the **Test Runner** (subprocess + hard timeout), the **GitLab MR creator** (collision-safe branch,
+heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run →
+Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean). Every
+piece is unit-tested offline with Pydantic AI's `TestModel`. It also ships as a container — a
+[`Dockerfile`](../Dockerfile) (official Playwright base, non-root `appuser`, pinned `uv`/`npm` deps) and
+[`docker-compose.yml`](../docker-compose.yml) run it standalone, including a local mode without GitLab
+(`GITLAB_ENABLED=false` skips the MR step).
 
-    classDef done fill:#1f7a1f,color:#fff,stroke:#0d3d0d;
-    classDef todo fill:#7a5c00,color:#fff,stroke:#3d2e00;
-```
+Possible extensions, not yet built:
 
-- ✅ **Phase 0** — internal access + gateway/tool-calling/Xray-flavor verification scripts.
-- ✅ **Phase 1.A–1.C** — config + guardrail, data models, Xray client, Playwright MCP + auth, and the three agents with their prompts. Exercised offline (no gateway, no browser) with Pydantic AI's `TestModel`.
-- ✅ **Phase 1.D** — the end-to-end glue: **Test Runner** (subprocess + hard timeout), **GitLab MR creator** (collision-safe branch, heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run → Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean). Unit-tested offline; the live end-to-end run is a company-laptop step.
-- 🗺️ **Phase 2 (production)** — Dockerized batch job on GitLab CI; secrets via CI variables/Vault; OpenTelemetry tracing; security hardening (locked-down network, non-root, no-PII redaction, audit logging); batch processing; a 4th **Translator** agent for Selenium→Playwright migration; and **RAG** (Qdrant + embed/rerank) to feed the Generator real examples.
-- 📌 **Beyond** — visual regression, parallel CI fan-out, Slack/Teams MR notifications, a coverage dashboard, and auto-proposed `project_map.md` updates.
+- **Continuous integration** — run the Orchestrator in the container, one job per test case, triggered when a
+  Jira case is marked ready for automation.
+- **Hardening for shared/production use** — secrets via a manager or CI variables; locked-down container
+  network; read-only rootfs; PII redaction before model calls; per-call audit logging; tracing and metrics.
+- **A Translator agent** — a 4th agent that migrates an existing Selenium suite to Playwright (same pipeline
+  shape, different front door).
+- **RAG-assisted generation** — retrieve 2–3 similar existing tests (vector search + rerank) and inject them
+  as examples for the Generator.
+- **Reviewer conveniences** — visual-regression checks, MR notifications, a coverage dashboard, and
+  auto-proposed `project_map.md` updates.
 
-> The two human-authored context files (`project_context.md`, `project_map.md`) currently ship as **templates** — filling them in for the target app is part of Phase 1.
+> The two human-authored context files (`project_context.md`, `project_map.md`) ship as **templates** — fill
+> them in for your app before the first run.
 
 ## Where to read more
 
-- **Full build guide (all phases, code-level):** [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md)
+- **Full build guide (code-level):** [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md)
 - **Run flow & agent sequence:** [WORKFLOW.md](WORKFLOW.md)
-- **Setup (private PC + company laptop):** [`SETUP.md`](../SETUP.md)
-- **Project status & adoption:** [`README.md`](../README.md)
+- **Setup — install, configure, run:** [`SETUP.md`](../SETUP.md)
+- **Project overview & adoption:** [`README.md`](../README.md)

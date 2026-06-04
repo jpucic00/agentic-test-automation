@@ -1,12 +1,12 @@
-# scripts/ — Phase 0 verification scripts
+# scripts/ — access-verification scripts
 
-These scripts confirm the corporate LLM gateway, Jira/Xray, GitLab, and staging app are reachable and behave correctly before any pipeline code is written. They **must run on the company laptop** — the private PC used to author them cannot reach any of these services.
+These scripts confirm your LLM gateway, Jira/Xray, and embedding endpoints are reachable and behave correctly before you run the pipeline. Run them from a machine that can reach those services.
 
 ## Order
 
 ```
 1. cp .env.example .env       # fill in values per section header
-2. uv sync                    # install Phase 0 deps
+2. uv sync                    # install deps
 3. uv run python scripts/step0_verify_tool_calling.py
 4. uv run python scripts/step0b_verify_embeddings.py
 5. uv run python scripts/step0c_xray_flavor.py --issue-key <real-QA-key>
@@ -29,7 +29,7 @@ Step 0 is the most important — if any candidate model fails tool calling, stop
 | `XRAY_IS_CLOUD` | — | — | optional (auto-detect) |
 | `USE_HTTP_PROXY` | optional | optional | optional |
 
-All scripts connect **directly by default** and ignore the environment's `HTTP(S)_PROXY` / `NO_PROXY` (the gateway is reached over the VPN; this does not bypass the VPN). Set `USE_HTTP_PROXY=true` only if your gateway/Jira is reachable solely through a proxy.
+All scripts connect **directly by default** and ignore the environment's `HTTP(S)_PROXY` / `NO_PROXY`. Set `USE_HTTP_PROXY=true` only if your gateway/Jira is reachable solely through a proxy.
 
 ## Expected output
 
@@ -76,8 +76,8 @@ Vector length depends on the model (mxbai-embed-large is 1024).
 ```
 === Detecting flavor ===
   Hint from XRAY_IS_CLOUD: server/dc
-  Trying Server/DC: GET https://jira.yourcompany.internal/rest/api/2/myself (Bearer PAT)
-  [ok] Server/DC authenticated as: Jana Pucic
+  Trying Server/DC: GET https://your-jira/rest/api/2/myself (Bearer PAT)
+  [ok] Server/DC authenticated as: QA Bot
 
 === Inspecting QA-1234 ===
   GET .../rest/api/2/issue/QA-1234?expand=names,renderedFields,schema
@@ -94,21 +94,21 @@ If `--issue-key` is omitted, the steps-field check is skipped and only flavor is
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Any script: TLS/mTLS handshake OK, then "server disconnected without sending a response" | Routing through the environment-configured proxy drops the request — a direct `curl` works, the same `curl` via the proxy fails identically | Scripts ignore the env proxy **by default**; just don't set `USE_HTTP_PROXY` (and connect over the VPN). If the endpoint is only reachable through a proxy, set `USE_HTTP_PROXY=true`. If it still drops when direct, the gateway may fingerprint Python's TLS ClientHello — fall back to a libcurl-backed client (`curl_cffi`) |
+| Any script: TLS/mTLS handshake OK, then "server disconnected without sending a response" | Routing through the environment-configured proxy drops the request — a direct `curl` works, the same `curl` via the proxy fails identically | Scripts ignore the env proxy **by default**; just don't set `USE_HTTP_PROXY`. If the endpoint is only reachable through a proxy, set `USE_HTTP_PROXY=true`. If it still drops when direct, the gateway may fingerprint Python's TLS ClientHello — fall back to a libcurl-backed client (`curl_cffi`) |
 | step0: "Model did not call any tool" | Gateway not forwarding `tools` param | Ask platform team; some gateways need `X-Use-Tools: true` header |
 | step0: HTTP 404 with model name in error | Wrong model name | `GET /v1/models` to list available |
 | step0b: HTTP 404 on `/rerank` | Rerank lives outside `/v1` | Set `RERANK_ENDPOINT=https://gw/rerank` in `.env` |
 | step0b: empty vector returned | Wrong model name or model not loaded | Confirm with platform team |
 | step0c: both flavors return 401 | Token doesn't have read access | Regenerate with proper scopes |
-| step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, then set `XRAY_STEPS_FIELD_ID` in `.env` for the Phase 1.A Xray client |
+| step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, then set `XRAY_STEPS_FIELD_ID` in `.env` for the Xray client |
 
 The same gotchas are documented in [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md) §3.2.
 
 ---
 
-## Phase 1.B — auth-state scripts (LEGACY, company laptop)
+## Auth-state scripts (legacy, optional)
 
-> **Legacy / optional.** The pipeline uses **context-driven login** — each agent and each generated test logs in live from the `project_context.md` dummy creds, so there is no saved `storage_state.json` in the runtime path. These two scripts are kept only as a manual session-capture utility (e.g. to debug the Keycloak flow). They drive the live staging app, so they run on the **company laptop** only.
+> **Legacy / optional.** The pipeline uses **context-driven login** — each agent and each generated test logs in live from the `project_context.md` dummy creds, so there is no saved `storage_state.json` in the runtime path. These two scripts are kept only as a manual session-capture utility (e.g. to debug a login flow). They drive the live staging app.
 
 | Script | What it does |
 |---|---|

@@ -79,7 +79,7 @@ sequenceDiagram
 | 3 | Generate | **Generator** | `TestPlan` → `GeneratedTest` | none (writes file) | 10–20s |
 | 4 | Run | Test Runner | test → `TestRunResult` | runs the test on staging | 10–60s |
 | 5 | Heal *(only if step 4 failed)* | **Healer** (+MCP) | failed test + error → `HealedTest`, then back to step 4 | reads staging | 30–60s / attempt |
-| 6 | Open MR | GitLab Client | final test + plan → MR URL | pushes branch, opens MR | <2s |
+| 6 | Open MR *(skipped if `GITLAB_ENABLED=false`)* | GitLab Client | final test + plan → MR URL | pushes branch, opens MR | <2s |
 
 **Total: ~2–4 minutes per test case.**
 
@@ -87,25 +87,27 @@ sequenceDiagram
 
 - The Runner **never throws on a failing test** — a failure is a *healable state*, not a crash. (A genuinely hung run is caught by a hard timeout and reported as `status=error`, so the pipeline can't wedge.)
 - While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: Healer inspects the live app, makes a *minimal* fix (it never re-plans or adds tests), then the Runner re-runs it.
+- **The Healer has a failure-mode catalog** — locator timeout, wrong URL, language mismatch, and **strict-mode violations** (`resolved N elements`), which it fixes by making the name match `exact: true` or scoping to the active dialog. It re-derives selectors via `browser_generate_locator` rather than hand-writing them.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away.
 - **If it still fails after 2 attempts, the MR is opened anyway.** Healing is a convenience, not a gate — a human reviews every result regardless. The MR labels (`ai-generated`, `qa-review-needed`) and the committed plan JSON give the reviewer full context.
 - **Reviewers see the heal history.** Each attempt's `changes_summary`, the heal count, and the final status are rendered into the MR description — tests that needed multiple rounds are easy to spot and scrutinize.
 - **Run housekeeping.** At the start of every run the Orchestrator empties `output/snapshots/` (the regenerated MCP snapshot/png output, kept out of git via a `.gitkeep` + ignored contents), and it stamps the saved plan JSON with a `context_hash` (sha256 of `project_context.md` + `project_map.md`) so a plan built against stale context is auditable later.
+- **GitLab is optional.** With `GITLAB_ENABLED=false` (e.g. a local Docker run) the pipeline stops after the run/heal loop and leaves the test + plan in `output/` — no branch, no MR (default is `true`, so a normal run still opens one). The direct-connect proxy policy covers the Xray + GitLab `requests` clients too, so the container reaches them without an env proxy.
 
 ## What triggers a run
 
 ```mermaid
 flowchart LR
-    subgraph now[" Today — Phase 1 "]
+    subgraph now[" Manual "]
         CLI["uv run python -m<br/>ai_test_gen.orchestrator QA-1234"] --> ORCH1[Orchestrator]
     end
-    subgraph later[" Phase 2 — production "]
-        JIRA["Jira: test case marked<br/>'Ready for Automation'"] --> HOOK[webhook] --> CI["GitLab CI job<br/>Docker container"] --> ORCH2[Orchestrator]
+    subgraph later[" CI — possible extension "]
+        JIRA["Jira: test case marked<br/>'Ready for Automation'"] --> HOOK[webhook] --> CI["CI job<br/>Docker container"] --> ORCH2[Orchestrator]
     end
 ```
 
-- **Now:** run by hand on the company laptop, one Jira key at a time. Each agent and the generated test log in live from the `project_context.md` dummy creds (context-driven auth — no saved session).
-- **Phase 2:** a Jira status change webhooks GitLab CI, which runs the same Orchestrator inside a locked-down container — one CI job per test case, fanned out for batches.
+- **Manual:** run it by hand, one Jira key at a time. Each agent and the generated test log in live from the `project_context.md` dummy creds (context-driven auth — no saved session); any data a test *creates* is randomized at run time, so the same test can be replayed in regression without colliding. The same container image runs **standalone for local generation** (`docker compose run --rm pipeline QA-1234`), with `GITLAB_ENABLED=false` to skip the MR.
+- **CI (a possible extension, not yet built):** a Jira status change webhooks a CI job, which runs the same Orchestrator inside a locked-down container — one job per test case, fanned out for batches.
 
 ## How this grows (planned)
 
