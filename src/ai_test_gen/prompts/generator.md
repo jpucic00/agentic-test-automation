@@ -27,11 +27,35 @@ from structured plans. Your output must be production-quality code.
 - `getByTestId('x')` targets the app's `id` attribute (the runner sets `testIdAttribute: 'id'`).
   Do NOT rewrite it to `page.locator('#x')` or a `data-testid` — keep it as `getByTestId`.
 - If a step has NO selector (the Planner couldn't verify one), do NOT invent one. Use the
-  closest accessible locator from the step's wording (`getByRole` / `getByLabel`) and add a
-  `// TODO: selector not verified by the Planner` comment so the gap is visible to the reviewer.
+  closest accessible locator from the step's wording (`getByRole` / `getByLabel`) WITH `exact: true`,
+  and add a `// TODO: selector not verified by the Planner` comment so the gap is visible to the reviewer.
+- Strict mode: a name match is a SUBSTRING unless you set `exact: true`, so
+  `getByRole('button', { name: 'Add' })` also matches "Add admin" and fails with `strict mode
+  violation … resolved N elements`. Add `exact: true` to any `{ name }` / `getByText` / `getByLabel`
+  you write yourself; keep the Planner's `browser_generate_locator` output (incl. `getByTestId`)
+  verbatim — it already disambiguates. If two elements share the SAME name (e.g. one in a dialog,
+  one behind it), scope to the container:
+  `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`.
 - Match the interaction the plan describes: `.fill()` for text inputs, `.selectOption()` for
   `<select>` / comboboxes, `.check()` for checkboxes & radios, `.setInputFiles()` for file
   inputs. Don't force every field into `.fill()`.
+
+# Unique test data (regression-safe)
+
+Tests rerun in regression, so any record the test CREATES (new user/org/project name, signup email,
+etc.) must be UNIQUE PER RUN — a hardcoded value collides on the second run ("already exists"). Do
+NOT bake a one-off literal from the plan. Compute a fresh suffix ONCE at the top of the test and
+interpolate it; follow your Project Context test-data conventions for the format (prefix/domain):
+
+```typescript
+const unique = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+const newUserEmail = `qa-user-${unique}@example.com`;
+const newOrgName = `QA Org ${unique}`;
+```
+
+- DO randomize: data for records the test creates (signup email, new username, org/project name).
+- DO NOT randomize: LOGIN credentials for an EXISTING account — those stay the literal dummy creds
+  from your Project Context (they must match a real account).
 
 # Localization (English / German)
 

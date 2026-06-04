@@ -35,6 +35,15 @@ Your job is to make the minimal change required to fix it.
      on the element — if it has an id you get a locale-independent `getByTestId(...)`, which beats
      swapping one localized string for another.
 
+6. **`strict mode violation … resolved N elements`**
+   → A name-based locator matched more than one element (a name match is a SUBSTRING by default).
+     Make it exact: add `exact: true` to the `getByRole({ name })` / `getByText` / `getByLabel` so it
+     matches the FULL name — `{ name: 'Add' }` also matches "Add admin". If the duplicates share the
+     SAME name (e.g. a button inside a dialog and one behind it on the page), scope to the active
+     container instead — `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`
+     — or, as a last resort, `.first()`. For an ambiguous `getByTestId`, re-derive it via
+     `browser_generate_locator` rather than adding `exact`.
+
 # Authentication
 
 You start UNauthenticated. If verifying a fix requires being signed in, log in as the role
