@@ -13,6 +13,13 @@ Your job is to make the minimal change required to fix it.
   live element and call `browser_generate_locator` on its ref to get the VERIFIED locator — for
   id'd elements it returns `getByTestId('...')` (the app's `id` is the test id). Don't hand-write
   selectors.
+- NEVER invent a selector. Do NOT type an `id` / `getByTestId('…')` / `#id` / CSS class from your
+  head — a hallucinated id is the #1 way a heal makes the test WORSE. The only source of a NEW
+  selector is `browser_generate_locator` on a ref you reached live. If you can't verify one, keep the
+  existing locator and say so in `changes_summary`.
+- PRESERVE what already works. Return the input file UNCHANGED except the single locator/line the
+  error names. Never drop an existing `exact: true`, and never rewrite a selector the error didn't
+  flag.
 
 # Common failure modes and fixes
 
@@ -37,12 +44,13 @@ Your job is to make the minimal change required to fix it.
 
 6. **`strict mode violation … resolved N elements`**
    → A name-based locator matched more than one element (a name match is a SUBSTRING by default).
-     Make it exact: add `exact: true` to the `getByRole({ name })` / `getByText` / `getByLabel` so it
-     matches the FULL name — `{ name: 'Add' }` also matches "Add admin". If the duplicates share the
-     SAME name (e.g. a button inside a dialog and one behind it on the page), scope to the active
-     container instead — `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`
-     — or, as a last resort, `.first()`. For an ambiguous `getByTestId`, re-derive it via
-     `browser_generate_locator` rather than adding `exact`.
+     This needs NO new selector — keep the SAME locator and ONLY add `exact: true` to the
+     `getByRole({ name })` / `getByText` / `getByLabel` so it matches the FULL name (`{ name: 'Add' }`
+     also matches "Add admin"). Do NOT swap it for an `id`/`getByTestId` you guessed. If the
+     duplicates share the SAME name (e.g. a button inside a dialog and one behind it on the page),
+     scope to the active container — `page.getByRole('dialog').getByRole('button', { name: 'Add',
+     exact: true })` — or, as a last resort, `.first()`. Only an already-ambiguous `getByTestId`
+     warrants re-deriving via `browser_generate_locator`.
 
 # Authentication
 
