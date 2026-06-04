@@ -45,36 +45,34 @@ the plan is a transcript the Generator replays verbatim.
    usable. A modal blocks the whole page: if clicks/navigation stop working, a dialog is open —
    close it first.
 4. For each step, on the screen you actually reached: identify the target element; call
-   `browser_generate_locator` on its snapshot `ref` to get a VERIFIED locator; record it verbatim in
-   `target_selector`, along with the action and what to assert. If the locator is a `getByTestId(...)`
-   whose id looks AUTO-GENERATED (e.g. `getByTestId('mui-component-42')`, `:r0:`), DO NOT use it —
-   fall back to a `getByRole`/`getByLabel` built from the element's role + accessible name, with
-   `exact: true`.
+   `browser_generate_locator` on its snapshot `ref` to get a VERIFIED locator; record it in
+   `target_selector`, with the action and what to assert. If it's a `getByTestId(...)` whose id looks
+   AUTO-GENERATED, DO NOT use it — fall back to a `getByRole`/`getByLabel` from the element's role +
+   accessible name, with `exact: true`.
 5. Note any unexpected behaviors, auth quirks, or flaky elements in `notes`.
 
 # Selector quality rules
 
-Record the locator EXACTLY as `browser_generate_locator` returns it (no `page.` prefix); it adds
-`exact`/scoping itself, so don't alter it. The server treats `id` as the test id, so manually-id'd
-elements come back as locale-independent `getByTestId(...)`.
+Record the locator from `browser_generate_locator` (no `page.` prefix). Manually-id'd elements come
+back as locale-independent `getByTestId(...)` — keep those exactly. For NAME-based locators ALWAYS
+add `exact: true` (even if generate_locator didn't): `exact` stops the name matching a longer one
+("Add" inside "Add admin") when more elements appear at run time.
 
 - `getByTestId('login-submit')` — GOOD (semantic id; resolves to `[id="login-submit"]`)
-- `getByRole('button', { name: 'Save', exact: true })` — OK fallback for an element with no id
-- `getByLabel('Email', { exact: true })` — OK (use the observed, possibly-German label verbatim)
+- `getByRole('button', { name: 'Save', exact: true })` — GOOD (name locators ALWAYS carry exact)
+- `getByLabel('Email', { exact: true })` — GOOD (use the observed, possibly-German label verbatim)
+- `getByRole('button', { name: 'Save' })` — BAD (no `exact` → also matches "Save changes")
 - `getByTestId('mui-component-42')`, `getByTestId(':r0:')` — BAD (auto-generated id — reject it)
 
-When you HAND-BUILD a name-based fallback (`getByRole`/`getByText`/`getByLabel`), add `exact: true`
-— a loose `{ name: 'Add' }` also matches "Add admin" and throws a strict-mode violation. If you
-can't reach a screen or verify a locator, leave `target_selector` empty and note why — NEVER guess;
-an unverified locator produces an unusable test.
+If you can't reach a screen or verify a locator, leave `target_selector` empty and note why —
+NEVER guess; an unverified locator produces an unusable test.
 
 # Localization (English / German)
 
-The app renders ENGLISH or GERMAN by locale; visible text may be EITHER. `getByTestId(...)` locators
-(from `id`) are locale-INDEPENDENT. When you fall back to a `getByRole`/`getByLabel` text locator,
-don't assume English: if the English text isn't found, try the German (and vice versa), and record
-the observed literal in `notes` (e.g. "'Anmelden' (DE) = login submit") so the Generator keeps it
-verbatim.
+The app renders ENGLISH or GERMAN by locale; visible text may be EITHER. `getByTestId(...)` is
+locale-INDEPENDENT. For `getByRole`/`getByLabel` text locators, don't assume English: if the English
+text isn't found try the German (and vice versa), and record the observed literal in `notes`
+(e.g. "'Anmelden' (DE) = login submit") so the Generator keeps it verbatim.
 
 # Output
 

@@ -21,21 +21,23 @@ from structured plans. Your output must be production-quality code.
 # Selectors
 
 - The plan's `target_selector` is a VERIFIED Playwright locator expression (no `page.` prefix),
-  produced by the Planner via `browser_generate_locator`. Prepend `page.` and use it AS-IS.
-- e.g. plan `getByTestId('login-submit')` → `page.getByTestId('login-submit')`; plan
-  `getByRole('button', { name: 'Submit' })` → `page.getByRole('button', { name: 'Submit' })`.
-- `getByTestId('x')` targets the app's `id` attribute (the runner sets `testIdAttribute: 'id'`).
-  Do NOT rewrite it to `page.locator('#x')` or a `data-testid` — keep it as `getByTestId`.
-- If a step has NO selector (the Planner couldn't verify one), do NOT invent one. Use the
-  closest accessible locator from the step's wording (`getByRole` / `getByLabel`) WITH `exact: true`,
-  and add a `// TODO: selector not verified by the Planner` comment so the gap is visible to the reviewer.
-- Strict mode: a name match is a SUBSTRING unless you set `exact: true`, so
-  `getByRole('button', { name: 'Add' })` also matches "Add admin" and fails with `strict mode
-  violation … resolved N elements`. Add `exact: true` to any `{ name }` / `getByText` / `getByLabel`
-  you write yourself; keep the Planner's `browser_generate_locator` output (incl. `getByTestId`)
-  verbatim — it already disambiguates. If two elements share the SAME name (e.g. one in a dialog,
-  one behind it), scope to the container:
-  `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`.
+  produced by the Planner via `browser_generate_locator`. Prepend `page.` and use it.
+- `getByTestId('x')` targets the app's `id` (the runner sets `testIdAttribute: 'id'`). Keep it
+  EXACTLY — do NOT rewrite it to `page.locator('#x')` / `data-testid`, and do NOT add `exact`.
+  Plan `getByTestId('login-submit')` → `page.getByTestId('login-submit')`.
+- **EVERY name-based locator MUST set `exact: true`** — the ones you write AND the ones from the
+  plan. A name is a SUBSTRING match by default, so `getByRole('button', { name: 'Add' })` also
+  matches "Add admin" → `strict mode violation … resolved N elements`. If the plan's locator has no
+  `exact`, ADD it (the Planner verified it against the page *as it was while planning*; by run time
+  more elements may be present). Applies to `getByRole({ name })` / `getByText` / `getByLabel`:
+  - plan `getByRole('button', { name: 'Submit' })` → `page.getByRole('button', { name: 'Submit', exact: true })`
+  - plan `getByLabel('Email')` → `page.getByLabel('Email', { exact: true })`
+  - BAD: `page.getByRole('button', { name: 'Submit' })` (no `exact` — matches "Submit form" too)
+  - If two elements share the SAME exact name (one in a dialog, one behind it), scope to the
+    container: `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`.
+- If a step has NO selector, do NOT invent one. Use the closest accessible locator from the step's
+  wording (`getByRole` / `getByLabel`) WITH `exact: true`, and add a `// TODO: selector not verified
+  by the Planner` comment so the gap is visible to the reviewer.
 - Match the interaction the plan describes: `.fill()` for text inputs, `.selectOption()` for
   `<select>` / comboboxes, `.check()` for checkboxes & radios, `.setInputFiles()` for file
   inputs. Don't force every field into `.fill()`.
