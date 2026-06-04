@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -112,3 +113,15 @@ def test_generated_runner_maps_testid_to_id():
     # MCP config (test above) or every id-based locator fails at runtime.
     runner = pm.PROJECT_ROOT / "output" / "playwright.config.ts"
     assert "testIdAttribute: 'id'" in runner.read_text()
+
+
+def test_testid_attribute_coupling_holds():
+    # Load-bearing invariant: the MCP read side (playwright-mcp-config.json) and the runner side
+    # (output/playwright.config.ts) must map the app's id= to the SAME test id, or every
+    # getByTestId locator silently fails at runtime. The two single-sided tests above each assert
+    # their own value is 'id' but can't catch DRIFT — this asserts the two are equal to each other.
+    mcp_testid = json.loads(pm.MCP_CONFIG_PATH.read_text())["testIdAttribute"]
+    runner_src = (pm.PROJECT_ROOT / "output" / "playwright.config.ts").read_text()
+    match = re.search(r"testIdAttribute:\s*'([^']+)'", runner_src)
+    assert match is not None, "runner config is missing testIdAttribute"
+    assert match.group(1) == mcp_testid

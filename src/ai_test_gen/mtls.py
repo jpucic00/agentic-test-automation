@@ -62,6 +62,10 @@ import atexit
 import os
 import stat
 import tempfile
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import requests
 
 CertArg = str | tuple[str, str] | tuple[str, str, str]
 
@@ -106,6 +110,49 @@ def get_trust_env() -> bool:
     (e.g. when the endpoint is only reachable THROUGH a proxy). The CA bundle is
     unaffected — it is always passed explicitly via get_verify_arg()."""
     return os.environ.get("USE_HTTP_PROXY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def apply_requests_policy(session: requests.Session) -> None:
+    """Apply the gateway proxy/CA/mTLS policy to an existing ``requests.Session`` in
+    place — for clients that own their session and don't accept one (python-gitlab
+    exposes ``gl.session``).
+
+    Mirrors the httpx policy used for the gateway: ``trust_env`` follows
+    ``USE_HTTP_PROXY`` (default False → the env ``HTTP(S)_PROXY`` is ignored and the
+    call goes DIRECTLY over the VPN — the same fix that stopped the gateway dropping
+    with "server disconnected without sending a response"). The corp CA / client cert
+    are applied explicitly so they survive ``trust_env=False`` (which would otherwise
+    drop ``REQUESTS_CA_BUNDLE``)."""
+    session.trust_env = get_trust_env()
+    verify = get_verify_arg()
+    if verify is not True:
+        session.verify = verify
+    cert = get_cert_arg()
+    if cert is not None:
+        if isinstance(cert, tuple) and len(cert) == 3:
+            # requests' cert= takes a path or (cert, key) 2-tuple only — not an
+            # encrypted-key 3-tuple. The httpx gateway path supports it; the
+            # requests-based Xray/GitLab clients need PKCS#12 or an unencrypted key.
+            raise ValueError(
+                "mTLS with an encrypted PEM key (MTLS_KEY_PASSWORD) isn't supported for "
+                "the requests-based Xray/GitLab clients. Use MTLS_PKCS12_FILE (decoded "
+                "to a combined PEM) or an unencrypted MTLS_KEY_FILE instead."
+            )
+        session.cert = cert
+
+
+def build_requests_session() -> requests.Session:
+    """A new ``requests.Session`` carrying the gateway proxy/CA/mTLS policy, for the
+    ``requests``-based clients that accept ``session=`` (atlassian-python-api's Jira).
+
+    Without it those clients use ``requests``' default ``trust_env=True`` and silently
+    honor the env ``HTTP(S)_PROXY`` — the exact routing that dropped the gateway. See
+    ``apply_requests_policy`` for the policy details."""
+    import requests
+
+    session = requests.Session()
+    apply_requests_policy(session)
+    return session
 
 
 def describe_trust_env() -> str:

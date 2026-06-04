@@ -88,7 +88,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             issue_key, result.status, heal_attempts, max_heal_attempts,
         )
         try:
-            healed = await heal_test(config, test, result)
+            healed = await heal_test(config, test, result, plan=plan, test_case=test_case)
         except Exception as exc:
             # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not
             # discard the run — stop healing and fall through to open the MR with the best
@@ -108,6 +108,20 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             "[%s] Still %s after %d heal attempt(s); opening MR for review anyway",
             issue_key, result.status, heal_attempts,
         )
+
+    if not config.gitlab_enabled:
+        logger.info(
+            "[%s] GITLAB_ENABLED=false — skipping MR. Test saved at %s (plan: %s)",
+            issue_key,
+            config.tests_dir / test.file_name,
+            config.plans_dir / f"{issue_key}.json",
+        )
+        return {
+            "issue_key": issue_key,
+            "status": result.status,
+            "heal_attempts": heal_attempts,
+            "mr_url": None,
+        }
 
     logger.info("[%s] Opening GitLab MR", issue_key)
     try:

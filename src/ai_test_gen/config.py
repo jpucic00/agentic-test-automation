@@ -46,6 +46,11 @@ def _required(name: str) -> str:
     return val
 
 
+def _required_if(name: str, *, required: bool) -> str | None:
+    """``_required(name)`` when ``required`` (GitLab enabled), else the raw value or None."""
+    return _required(name) if required else os.environ.get(name)
+
+
 def _non_prod_markers() -> tuple[str, ...]:
     """Default markers plus any added via the NON_PROD_URL_MARKERS env var."""
     extra = os.environ.get("NON_PROD_URL_MARKERS", "")
@@ -90,10 +95,11 @@ class Config:
     staging_username: str
     staging_password: str
 
-    # GitLab
-    gitlab_base_url: str
-    gitlab_token: str
-    gitlab_project_id: str  # e.g. "group/playwright-tests" or numeric ID
+    # GitLab (optional — GITLAB_ENABLED=false runs the pipeline without opening an MR)
+    gitlab_enabled: bool
+    gitlab_base_url: str | None
+    gitlab_token: str | None
+    gitlab_project_id: str | None  # e.g. "group/playwright-tests" or numeric ID
     gitlab_target_branch: str  # usually "main"
 
     # Paths
@@ -119,7 +125,18 @@ def load_config() -> Config:
     for d in (plans_dir, tests_dir, snapshots_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    # GitLab is optional: GITLAB_ENABLED=false lets the container run end-to-end
+    # (Xray → plan → generate → run → heal) without GITLAB_* set, skipping the MR.
+    # Default true preserves the laptop/CI behavior (MR opened against GitLab).
+    gitlab_enabled = os.environ.get("GITLAB_ENABLED", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     return Config(
+        gitlab_enabled=gitlab_enabled,
         llm_base_url=_required("LLM_BASE_URL"),
         llm_api_key=_required("LLM_API_KEY"),
         planner_model=os.environ.get("PLANNER_MODEL", "openai/gpt-oss-120b"),
@@ -132,9 +149,9 @@ def load_config() -> Config:
         staging_base_url=staging_base_url,
         staging_username=_required("STAGING_USERNAME"),
         staging_password=_required("STAGING_PASSWORD"),
-        gitlab_base_url=_required("GITLAB_BASE_URL"),
-        gitlab_token=_required("GITLAB_TOKEN"),
-        gitlab_project_id=_required("GITLAB_PROJECT_ID"),
+        gitlab_base_url=_required_if("GITLAB_BASE_URL", required=gitlab_enabled),
+        gitlab_token=_required_if("GITLAB_TOKEN", required=gitlab_enabled),
+        gitlab_project_id=_required_if("GITLAB_PROJECT_ID", required=gitlab_enabled),
         gitlab_target_branch=os.environ.get("GITLAB_TARGET_BRANCH", "main"),
         output_dir=output_dir,
         plans_dir=plans_dir,

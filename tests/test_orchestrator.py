@@ -8,6 +8,7 @@ are driven with ``asyncio.run`` (no pytest-asyncio). ``Test*`` models are built 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -139,6 +140,23 @@ def test_open_mr_failure_returns_error_without_crashing(cfg, monkeypatch):
     assert out["status"] == "passed"
 
 
+def test_gitlab_disabled_skips_mr(cfg, monkeypatch):
+    # GITLAB_ENABLED=false (the local-without-GitLab path): pipeline runs, test+plan are
+    # saved, but no MR is opened and the GitLab client is never even constructed.
+    cfg = dataclasses.replace(cfg, gitlab_enabled=False)
+    _wire(monkeypatch, cfg, [_result("passed")])
+    # Local handle so the assert is typed (the monkeypatch swap is opaque to pyright).
+    gl_cls = MagicMock()
+    monkeypatch.setattr(orchestrator, "GitLabClient", gl_cls)
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "passed"
+    assert out["heal_attempts"] == 0
+    assert out["mr_url"] is None
+    assert "error" not in out
+    gl_cls.assert_not_called()  # GitLab client never even constructed
+    assert (cfg.plans_dir / "QA-1.json").exists()  # plan still persisted for review
+
+
 def test_resolve_max_heal_attempts_reads_env_with_fallbacks(monkeypatch):
     monkeypatch.delenv("MAX_HEAL_ATTEMPTS", raising=False)
     assert orchestrator._resolve_max_heal_attempts() == orchestrator.MAX_HEAL_ATTEMPTS
@@ -165,6 +183,18 @@ def test_two_round_heal_accumulates_summaries(cfg, monkeypatch):
     assert out["status"] == "passed"
     # _healed() returns the same summary each call -> one entry per heal attempt.
     assert gl.open_mr.call_args.kwargs["heal_summaries"] == ["fixed selector", "fixed selector"]
+
+
+def test_heal_receives_plan_and_test_case(cfg, monkeypatch):
+    # Path A: the Healer must get the originating plan + manual test case (intent), not just the
+    # failing code + error — so it can diagnose/reconcile against what the test is meant to do.
+    _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    kwargs = heal.call_args.kwargs
+    assert kwargs["plan"].test_case_key == "QA-1"
+    assert kwargs["test_case"].key == "QA-1"
 
 
 def test_context_hash_changes_with_context_content(cfg, monkeypatch):

@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 
 import gitlab
 
+from . import mtls
 from .config import Config
 from .models import GeneratedTest, TestPlan
 
@@ -34,7 +35,17 @@ class GitLabClient:
 
     def __init__(self, config: Config):
         self.config = config
+        # Only constructed when GitLab is enabled; assert so a misconfigured caller
+        # fails loudly instead of passing None into python-gitlab.
+        assert config.gitlab_base_url and config.gitlab_token and config.gitlab_project_id, (
+            "GitLabClient requires GITLAB_BASE_URL/TOKEN/PROJECT_ID "
+            "(set GITLAB_ENABLED=false to run without opening an MR)"
+        )
         self.gl = gitlab.Gitlab(config.gitlab_base_url, private_token=config.gitlab_token)
+        # python-gitlab owns its requests.Session (no session= kwarg in 8.x); apply the
+        # gateway proxy/CA policy to it so GitLab calls also go direct over the VPN —
+        # requests otherwise honors env HTTP(S)_PROXY and hits the same connection drop.
+        mtls.apply_requests_policy(self.gl.session)
         self.project = self.gl.projects.get(config.gitlab_project_id)
 
     def open_mr(
@@ -143,7 +154,7 @@ def _build_mr_description(
 {healer_block}
 ### Review checklist
 - [ ] Test name and description are accurate
-- [ ] Selectors are stable (IDs preferred)
+- [ ] Selectors are verified locators (getByTestId / getByRole / getByLabel), not raw #id/CSS
 - [ ] Assertions cover the expected outcomes from the original test case
 - [ ] No **real** credentials or PII (the staging dummy logins from project_context are expected)
 - [ ] Test runs successfully locally

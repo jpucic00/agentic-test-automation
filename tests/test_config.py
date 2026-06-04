@@ -30,6 +30,7 @@ _OPTIONAL_VARS = (
     "GENERATOR_MODEL",
     "HEALER_MODEL",
     "XRAY_IS_CLOUD",
+    "GITLAB_ENABLED",
     "GITLAB_TARGET_BRANCH",
     "NON_PROD_URL_MARKERS",
 )
@@ -85,6 +86,25 @@ def test_missing_required_var_raises_clear_message(env, missing):
     with pytest.raises(RuntimeError) as exc:
         load_config()
     assert missing in str(exc.value)
+
+
+@pytest.mark.usefixtures("env")
+def test_gitlab_enabled_defaults_true():
+    cfg = load_config()
+    assert cfg.gitlab_enabled is True
+    assert cfg.gitlab_base_url == "https://gitlab.internal"
+
+
+def test_gitlab_disabled_allows_missing_gitlab_vars(env):
+    """GITLAB_ENABLED=false lets the container run end-to-end with no GITLAB_* set."""
+    env.setenv("GITLAB_ENABLED", "false")
+    for var in ("GITLAB_BASE_URL", "GITLAB_TOKEN", "GITLAB_PROJECT_ID"):
+        env.delenv(var, raising=False)
+    cfg = load_config()
+    assert cfg.gitlab_enabled is False
+    assert cfg.gitlab_base_url is None
+    assert cfg.gitlab_token is None
+    assert cfg.gitlab_project_id is None
 
 
 @pytest.mark.parametrize(

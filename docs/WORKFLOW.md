@@ -18,7 +18,7 @@ flowchart TD
     RUN["Test Runner<br/>execute .spec.ts on staging"] --> Q1{passed?}
     Q1 -- yes --> MR
     Q1 -- no --> Q2{more heal<br/>attempts left?}
-    Q2 -- yes --> HEAL["Healer Agent + browser<br/>inspect failure, minimal fix<br/>→ HealedTest"]
+    Q2 -- yes --> HEAL["Healer Agent + browser<br/>inspect failure, fix / reconcile<br/>→ HealedTest"]
     HEAL --> RUN
     Q2 -- no --> FLAG["give up healing<br/>real bug or stuck"]
     FLAG --> MR
@@ -58,7 +58,7 @@ sequenceDiagram
     R-->>O: TestRunResult
 
     loop while failing, up to 2 attempts
-        O->>H: heal_test(test, failure)
+        O->>H: heal_test(test, failure, plan, case)
         H->>B: inspect live app + browser_generate_locator
         B-->>H: correct locators
         H-->>O: HealedTest
@@ -78,7 +78,7 @@ sequenceDiagram
 | 2 | Plan | **Planner** (+MCP) | case → `TestPlan` | reads staging in a browser | 30–90s |
 | 3 | Generate | **Generator** | `TestPlan` → `GeneratedTest` | none (writes file) | 10–20s |
 | 4 | Run | Test Runner | test → `TestRunResult` | runs the test on staging | 10–60s |
-| 5 | Heal *(only if step 4 failed)* | **Healer** (+MCP) | failed test + error → `HealedTest`, then back to step 4 | reads staging | 30–60s / attempt |
+| 5 | Heal *(only if step 4 failed)* | **Healer** (+MCP) | failed test + error + plan + intent → `HealedTest`, then back to step 4 | reads staging | 30–60s / attempt |
 | 6 | Open MR *(skipped if `GITLAB_ENABLED=false`)* | GitLab Client | final test + plan → MR URL | pushes branch, opens MR | <2s |
 
 **Total: ~2–4 minutes per test case.**
@@ -86,7 +86,8 @@ sequenceDiagram
 ## The heal loop, explained
 
 - The Runner **never throws on a failing test** — a failure is a *healable state*, not a crash. (A genuinely hung run is caught by a hard timeout and reported as `status=error`, so the pipeline can't wedge.)
-- While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: Healer inspects the live app, makes a *minimal* fix (it never re-plans or adds tests), then the Runner re-runs it.
+- While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: the Healer inspects the live app and makes the smallest change that turns the test green — usually a selector/wait/URL fix, but it MAY add a step the Generator skipped or drop one it hallucinated to reconcile the test with its intent. It never re-plans from scratch or adds unrelated test cases.
+- **The Healer reconciles against the original intent.** It also receives the `ManualTestCase` and the `TestPlan` (incl. the Planner's `notes` + verified selectors), so it compares what the test *should* do against the failing code — staying faithful to that intent (never going green by dropping a real check) and verifying any selector it adds live via `browser_generate_locator`, never inventing one.
 - **The Healer has a failure-mode catalog** — locator timeout, wrong URL, language mismatch, and **strict-mode violations** (`resolved N elements`), which it fixes by making the name match `exact: true` or scoping to the active dialog. It re-derives selectors via `browser_generate_locator` rather than hand-writing them.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away.
 - **If it still fails after 2 attempts, the MR is opened anyway.** Healing is a convenience, not a gate — a human reviews every result regardless. The MR labels (`ai-generated`, `qa-review-needed`) and the committed plan JSON give the reviewer full context.

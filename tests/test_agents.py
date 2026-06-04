@@ -73,3 +73,59 @@ def test_healer_attaches_playwright_mcp(cfg, monkeypatch):
     monkeypatch.setattr(healer_mod, "build_playwright_mcp", spy)
     build_healer(cfg)
     assert len(calls) == 1
+
+
+def test_prompts_carry_generate_locator_contract():
+    # Locks the selector-contract migration offline: every browser-driving prompt instructs the
+    # verified-locator workflow, and the Planner prompt no longer carries the retired #id-first
+    # GOOD/BAD guidance the migration replaced (otherwise a regression would pass CI unnoticed).
+    prompts = planner_mod.PROMPTS_DIR
+    for name in ("planner.md", "generator.md", "healer.md"):
+        assert "browser_generate_locator" in (prompts / name).read_text(), name
+    planner_md = (prompts / "planner.md").read_text()
+    assert "getByTestId" in planner_md
+    assert "#login-submit" not in planner_md  # retired GOOD-example marker
+
+
+def test_heal_message_includes_intent_plan_and_notes():
+    # Path A: the heal message must surface the original intent, the plan's verified selectors,
+    # and the Planner's notes — not just the failing code + error.
+    case = models.ManualTestCase(
+        key="QA-7",
+        title="Create org",
+        steps=["click Add org", "fill name"],
+        expected_results=["dialog opens", "org created"],
+    )
+    plan = models.TestPlan(
+        test_case_key="QA-7",
+        title="Create org",
+        target_url="https://staging.example.internal",
+        steps=[
+            models.PlanStep(
+                action="click Add org",
+                target_selector="getByTestId('add-org')",
+                expected="dialog opens",
+            )
+        ],
+        notes="The Add-org dialog animates in; the submit button is briefly detached.",
+    )
+    test = models.GeneratedTest(file_name="QA-7.spec.ts", code="// spec", description="x")
+    failure = models.TestRunResult(
+        status="failed", stdout="", stderr="boom", error_message="locator timeout"
+    )
+    msg = healer_mod._build_heal_message(test, failure, plan, case)
+    assert "QA-7" in msg
+    assert "click Add org" in msg  # intent step
+    assert "org created" in msg  # expected result, paired with its step
+    assert "getByTestId('add-org')" in msg  # verified selector carried from the plan
+    assert "animates in" in msg  # Planner note surfaced
+    assert "locator timeout" in msg  # failure still present
+
+
+def test_healer_prompt_allows_intent_reconciliation():
+    # The Healer may now restructure to reconcile with intent (add a skipped step / drop a
+    # hallucinated one); the old blanket "DO NOT restructure" must be gone, while live-verified
+    # selectors are still required.
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "DO NOT restructure the test." not in healer_md
+    assert "browser_generate_locator" in healer_md

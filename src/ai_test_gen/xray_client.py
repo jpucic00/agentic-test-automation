@@ -25,6 +25,7 @@ from typing import Any
 
 from atlassian import Jira
 
+from . import mtls
 from .config import Config
 from .models import ManualTestCase
 
@@ -185,6 +186,10 @@ class XrayClient:
 
 
 def _build_jira(config: Config) -> Jira:
+    # Share the gateway proxy/CA/mTLS policy (direct over VPN, ignoring env
+    # HTTP(S)_PROXY unless USE_HTTP_PROXY=true). atlassian-python-api uses the passed
+    # session as-is, preserving its trust_env / verify / cert.
+    session = mtls.build_requests_session()
     if config.xray_is_cloud:
         # Xray Cloud: HTTP Basic with the Atlassian account email + API token.
         return Jira(
@@ -192,11 +197,12 @@ def _build_jira(config: Config) -> Jira:
             username=config.jira_email,
             password=config.jira_token,
             cloud=True,
+            session=session,
         )
     # Xray Server/DC: Bearer PAT. The atlassian client uses Bearer only when
     # username/password are omitted. If a Server/DC instance needs Basic instead,
     # pass username=config.jira_email, password=config.jira_token.
-    return Jira(url=config.jira_base_url, token=config.jira_token, cloud=False)
+    return Jira(url=config.jira_base_url, token=config.jira_token, cloud=False, session=session)
 
 
 def _parse_manual_steps(raw: Any) -> tuple[list[str], list[str]]:

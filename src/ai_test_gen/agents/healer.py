@@ -6,7 +6,10 @@ when an error indicates a selector issue. If it cannot fix the test within the
 orchestrator's attempt budget, the failure is surfaced to humans.
 
 Implements AI_TEST_GENERATION_GUIDE.md §3.10 (+ §3.5b context loading). The Healer
-gets BOTH context files (project_context.md and project_map.md).
+gets BOTH context files (project_context.md and project_map.md) in its system prompt,
+and at heal time also receives the original ManualTestCase (intent) and the TestPlan —
+including the Planner's notes and verified selectors — so it can diagnose the failure
+against what the test is meant to do, not just the error text.
 """
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
 from ..llm import build_openai_model
-from ..models import GeneratedTest, HealedTest, TestRunResult
+from ..models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
 from ..playwright_mcp import build_playwright_mcp
 from ._context import agent_request_limit, agent_retries, assemble_system_prompt
 
@@ -42,19 +45,72 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
     )
 
 
-async def heal_test(
-    config: Config,
+def _format_case_steps(test_case: ManualTestCase) -> str:
+    """Render the manual test case's steps paired with their expected results (the intent)."""
+    if not test_case.steps:
+        return "(no steps recorded)"
+    lines: list[str] = []
+    for i, step in enumerate(test_case.steps):
+        expected = test_case.expected_results[i] if i < len(test_case.expected_results) else ""
+        line = f"{i + 1}. {step}"
+        if expected:
+            line += f"  -> expect: {expected}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_plan_steps(plan: TestPlan) -> str:
+    """Render the plan's steps with the Planner's verified selectors and expectations."""
+    if not plan.steps:
+        return "(no steps)"
+    lines: list[str] = []
+    for i, step in enumerate(plan.steps):
+        lines.append(f"{i + 1}. {step.action}")
+        if step.target_selector:
+            lines.append(f"   verified selector: {step.target_selector}")
+        if step.expected:
+            lines.append(f"   expect: {step.expected}")
+    return "\n".join(lines)
+
+
+def _build_heal_message(
     test: GeneratedTest,
     failure: TestRunResult,
-    storage_state: Path | None = None,
-) -> HealedTest:
-    """Run the Healer on a failing test + its failure result and return the fix."""
-    agent = build_healer(config, storage_state=storage_state)
-    user_message = f"""Fix this failing Playwright test.
+    plan: TestPlan,
+    test_case: ManualTestCase,
+) -> str:
+    """Assemble the Healer's user message: intent + plan + failing code + failure.
 
+    The original ``ManualTestCase`` (intent) and the ``TestPlan`` — especially the Planner's
+    ``notes`` and verified selectors — are included so the Healer can reconcile the failing code
+    against what the test is meant to do (add a skipped step, drop a hallucinated one), not just
+    react to the error text.
+    """
+    planner_notes = plan.notes.strip() or "(none)"
+    return f"""Fix this failing Playwright test.
+
+Diagnose first: compare the ORIGINAL INTENT and the PLAN below against the failing code and the
+error. The Planner/Generator may have SKIPPED a step the test case requires, or INVENTED a step
+that isn't in it — reconcile the code with the intent. Keep the test faithful to the intent: never
+make it green by dropping a real check or testing something the case didn't ask for.
+
+## Original test case (the intent — {test_case.key})
+{test_case.title}
+
+Steps:
+{_format_case_steps(test_case)}
+
+## Plan it was generated from
+- Target URL: {plan.target_url}
+- Planner notes (flaky behavior / auth quirks / alternative selectors observed live):
+{planner_notes}
+
+Planned steps (selectors here were verified live by the Planner):
+{_format_plan_steps(plan)}
+
+## Failing test
 **File:** {test.file_name}
 
-**Test code:**
 ```typescript
 {test.code}
 ```
@@ -68,9 +124,25 @@ async def heal_test(
 {failure.stderr[:2000]}
 ```
 
-You may navigate the staging app to verify the correct selectors before fixing.
-Only change what is necessary to make the test pass. Do not restructure or add new tests.
+You may navigate the staging app and call browser_generate_locator on an element's ref to capture a
+VERIFIED locator — for any selector you fix AND any step you add, don't hand-write it. Prefer a
+Planner-verified selector (above) over the one in the failing code, and honor the Planner's notes.
+Make the change needed to reconcile the test with the intent and make it pass; prefer the smallest
+such change. Do not add unrelated test cases or assertions the test case didn't ask for.
 """
+
+
+async def heal_test(
+    config: Config,
+    test: GeneratedTest,
+    failure: TestRunResult,
+    plan: TestPlan,
+    test_case: ManualTestCase,
+    storage_state: Path | None = None,
+) -> HealedTest:
+    """Run the Healer on a failing test + its failure result and return the fix."""
+    agent = build_healer(config, storage_state=storage_state)
+    user_message = _build_heal_message(test, failure, plan, test_case)
     # MCP toolset → enter the agent as an async context manager around the run.
     async with agent:
         result = await agent.run(

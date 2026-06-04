@@ -66,7 +66,7 @@ flowchart TB
 | **Planner Agent** | test case + live staging | `TestPlan` (verified selectors) | gpt-oss-120b · **MCP** |
 | **Generator Agent** | `TestPlan` | `GeneratedTest` (`.spec.ts`) | devstral-small-2 · no browser |
 | **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) |
-| **Healer Agent** | failed test + error | `HealedTest` (minimal fix) | gpt-oss-120b · **MCP** |
+| **Healer Agent** | failed test + error + plan + intent | `HealedTest` (reconciled fix) | gpt-oss-120b · **MCP** |
 | **GitLab Client** | final test + plan | open MR (branch + commit) | — |
 
 All three agents and the glue around them — Test Runner, GitLab Client, Orchestrator — are built and unit-tested offline and wired into one end-to-end run. A live run additionally needs the model gateway, the staging app, and the Jira/Xray tenant.
@@ -82,9 +82,17 @@ flowchart LR
     GT -->|Runner| TRR["TestRunResult<br/>status · stderr · trace_path"]
     TRR -->|Healer| HT["HealedTest<br/>code · changes_summary"]
     HT -.re-run.-> TRR
+    MTC -.intent.-> HT
+    TP -.notes + verified selectors.-> HT
 ```
 
 Defined in [`src/ai_test_gen/models.py`](../src/ai_test_gen/models.py).
+
+> The Healer additionally receives the originating `ManualTestCase` (intent) and `TestPlan`
+> (including the Planner's `notes` + verified selectors) at heal time — not new artifacts, but extra
+> context so it can **reconcile the failing code with the original intent** (add a step the Generator
+> skipped, drop one it hallucinated) instead of reacting to the error text alone. It still stays
+> within the one test case and prefers the smallest change that makes it correct and green.
 
 ## Package map (where each concern lives)
 

@@ -32,6 +32,7 @@ def cfg(tmp_path: Path) -> Config:
         staging_base_url="https://staging.example.internal",
         staging_username="qa.bot",
         staging_password="fake-pw",
+        gitlab_enabled=True,
         gitlab_base_url="https://gitlab.internal",
         gitlab_token="fake-token",
         gitlab_project_id="qa/playwright-tests",
