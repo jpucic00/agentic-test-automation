@@ -79,6 +79,30 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     logger.info("[%s] Running test (attempt 1)", issue_key)
     result = await run_test(config, test)
 
+    # A failure with did_run=False is a compile/collection error — the spec never
+    # executed, so there is nothing for the browser-driving Healer to inspect. Give the
+    # Generator ONE retry with its own output + the error; a persistent compile error
+    # still falls through to the heal loop / MR so a human always gets something.
+    if result.status == "failed" and not result.did_run:
+        logger.info(
+            "[%s] Test never ran (no JSON report — compile/collection error); "
+            "regenerating once via the Generator",
+            issue_key,
+        )
+        try:
+            test = await generate_test(
+                config,
+                plan,
+                previous_code=test.code,
+                error_text=result.error_message or result.stderr[:2000],
+            )
+            logger.info("[%s] Re-running regenerated test", issue_key)
+            result = await run_test(config, test)
+        except Exception as exc:
+            # Regeneration is best-effort: on a Generator/gateway crash keep the
+            # original failure and let the normal heal/MR path handle it.
+            logger.warning("[%s] Generator retry failed: %s", issue_key, exc)
+
     heal_summaries: list[str] = []
     heal_attempts = 0
     while result.status != "passed" and heal_attempts < max_heal_attempts:

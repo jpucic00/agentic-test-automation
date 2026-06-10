@@ -128,6 +128,14 @@ class TestRunResult(BaseModel):
     status: Literal["passed", "failed", "error"] = Field(
         description="Outcome of the test run"
     )
+    did_run: bool = Field(
+        default=True,
+        description=(
+            "False when Playwright produced no parseable JSON report — the spec failed "
+            "to compile/collect and never executed. The orchestrator routes that class "
+            "back to the Generator (no browser needed), not the Healer."
+        ),
+    )
     stdout: str = Field(description="Captured standard output from the Playwright run")
     stderr: str = Field(description="Captured standard error from the Playwright run")
     failed_test: str | None = Field(

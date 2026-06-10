@@ -137,6 +137,30 @@ def test_run_test_failed_empty_output_uses_default_message(cfg, monkeypatch):
     assert result.error_message == "Playwright run failed (no JSON report produced)"
 
 
+def test_run_test_no_report_marks_did_run_false(cfg, monkeypatch):
+    # Unparseable stdout = compile/collection error: the spec never executed, so the
+    # orchestrator must route it to the Generator (did_run=False), not the Healer.
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"SyntaxError: unexpected token", stderr=b""))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.did_run is False
+
+
+def test_run_test_parsed_report_failure_keeps_did_run_true(cfg, monkeypatch):
+    failed_run = {"status": "failed", "error": {"message": "locator timeout"}}
+    report = {
+        "suites": [
+            {"title": "x.spec.ts", "specs": [
+                {"title": "QA-1: x", "tests": [{"results": [failed_run]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.did_run is True
+
+
 def test_run_test_failed_surfaces_trace_path(cfg, monkeypatch):
     # trace: 'retain-on-failure' leaves test-results/**/trace.zip; the runner must
     # surface the newest one so the MR/result summary can point a reviewer at it.

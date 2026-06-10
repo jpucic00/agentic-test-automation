@@ -122,6 +122,29 @@ def test_heal_message_includes_intent_plan_and_notes():
     assert "locator timeout" in msg  # failure still present
 
 
+def test_generation_message_plain_has_no_retry_section():
+    plan = models.TestPlan(
+        test_case_key="QA-9", title="t", target_url="https://staging.example.internal", steps=[]
+    )
+    msg = generator_mod._build_generation_message(plan)
+    assert "QA-9" in msg
+    assert "Previous attempt failed to run" not in msg
+
+
+def test_generation_message_retry_includes_previous_code_and_error():
+    # Compile-retry path: the Generator gets its own broken output + the error text,
+    # and is told to keep the plan's steps/selectors unchanged.
+    plan = models.TestPlan(
+        test_case_key="QA-9", title="t", target_url="https://staging.example.internal", steps=[]
+    )
+    msg = generator_mod._build_generation_message(
+        plan, previous_code="const broken =", error_text="SyntaxError: unexpected end"
+    )
+    assert "Previous attempt failed to run" in msg
+    assert "const broken =" in msg
+    assert "SyntaxError: unexpected end" in msg
+
+
 def test_healer_prompt_allows_intent_reconciliation():
     # The Healer may now restructure to reconcile with intent (add a skipped step / drop a
     # hallucinated one); the old blanket "DO NOT restructure" must be gone, while live-verified

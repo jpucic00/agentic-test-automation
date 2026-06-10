@@ -95,20 +95,32 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
     if proc.returncode == 0:
         return TestRunResult(status="passed", stdout=stdout, stderr=stderr)
 
+    did_run = _report_parses(stdout)
     failed_test, error_message = _parse_failure(stdout)
     if error_message is None:
-        # No parseable JSON report (compile error, no tests, crash). Still a healable
-        # "failed" state — surface the stderr tail so the Healer has something to act on.
+        # No parseable JSON report (compile error, no tests, crash): the spec never
+        # actually ran. Surface the stderr tail; did_run=False routes this class back
+        # to the Generator (the Healer's browser can't see a TypeScript error).
         error_message = stderr[:500] or "Playwright run failed (no JSON report produced)"
 
     return TestRunResult(
         status="failed",
+        did_run=did_run,
         stdout=stdout,
         stderr=stderr,
         failed_test=failed_test,
         error_message=error_message,
         trace_path=_find_trace(config.output_dir),
     )
+
+
+def _report_parses(stdout: str) -> bool:
+    """True when stdout is a parseable Playwright JSON report (i.e. tests actually ran)."""
+    try:
+        json.loads(stdout)
+    except json.JSONDecodeError:
+        return False
+    return True
 
 
 def _find_trace(output_dir: Path) -> str | None:

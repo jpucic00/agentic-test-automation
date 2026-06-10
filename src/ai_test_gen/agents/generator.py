@@ -37,10 +37,18 @@ def build_generator(config: Config) -> Agent[None, GeneratedTest]:
     )
 
 
-async def generate_test(config: Config, plan: TestPlan) -> GeneratedTest:
-    """Run the Generator on a TestPlan and return the generated Playwright test."""
-    agent = build_generator(config)
-    user_message = f"""Generate a Playwright TypeScript test from this plan.
+def _build_generation_message(
+    plan: TestPlan,
+    previous_code: str | None = None,
+    error_text: str | None = None,
+) -> str:
+    """Assemble the Generator's user message; optionally with a compile-retry section.
+
+    ``previous_code``/``error_text`` are set when a generated file failed to even
+    compile/collect (the run produced no report) — the Generator gets its own output
+    back with the error so it can fix the code without involving a browser agent.
+    """
+    message = f"""Generate a Playwright TypeScript test from this plan.
 
 ```json
 {plan.model_dump_json(indent=2)}
@@ -55,6 +63,40 @@ Requirements:
 - Add `await expect(...)` assertions for each step's expected outcome
 - Use `await page.goto()` with the full staging URL from the plan
 """
+    if previous_code is not None:
+        message += f"""
+## Previous attempt failed to run
+A previous file generated from this plan never executed — Playwright could not
+compile/collect it. Fix the code so it runs; keep the plan's steps, selectors,
+and assertions unchanged.
+
+### Previous code
+```typescript
+{previous_code}
+```
+
+### Compile/collection error
+```
+{(error_text or "(no error output captured)")[:2000]}
+```
+"""
+    return message
+
+
+async def generate_test(
+    config: Config,
+    plan: TestPlan,
+    *,
+    previous_code: str | None = None,
+    error_text: str | None = None,
+) -> GeneratedTest:
+    """Run the Generator on a TestPlan and return the generated Playwright test.
+
+    Pass ``previous_code`` + ``error_text`` to retry after a compile/collection
+    failure (a run with ``did_run=False``); the plan itself is unchanged.
+    """
+    agent = build_generator(config)
+    user_message = _build_generation_message(plan, previous_code, error_text)
     # No toolset → no async context manager needed; run the agent directly.
     result = await agent.run(user_message)
     return result.output

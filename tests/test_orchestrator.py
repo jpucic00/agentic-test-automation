@@ -40,8 +40,8 @@ def _healed():
     )
 
 
-def _result(status):
-    return models.TestRunResult(status=status, stdout="", stderr="")
+def _result(status, did_run=True):
+    return models.TestRunResult(status=status, did_run=did_run, stdout="", stderr="")
 
 
 def _wire(monkeypatch, cfg, run_results):
@@ -208,6 +208,51 @@ def test_context_hash_changes_with_context_content(cfg, monkeypatch):
     hash_b = json.loads((cfg.plans_dir / "QA-1.json").read_text())["context_hash"]
 
     assert hash_a != hash_b
+
+
+def test_no_report_failure_retries_generator_not_healer(cfg, monkeypatch):
+    # did_run=False = compile/collection error: the Generator gets ONE retry with the
+    # error; the browser-driving Healer is never invoked for code that never ran.
+    _wire(monkeypatch, cfg, [_result("failed", did_run=False), _result("passed")])
+    gen = AsyncMock(return_value=_generated())
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "generate_test", gen)
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "passed"
+    assert out["heal_attempts"] == 0
+    assert gen.call_count == 2  # initial generation + one compile retry
+    retry_kwargs = gen.call_args.kwargs
+    assert retry_kwargs["previous_code"] == "// spec"
+    heal.assert_not_called()
+
+
+def test_real_failure_goes_to_healer_without_generator_retry(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])  # did_run=True
+    gen = AsyncMock(return_value=_generated())
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "generate_test", gen)
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["heal_attempts"] == 1
+    assert gen.call_count == 1  # no compile retry for a test that actually ran
+    heal.assert_called_once()
+
+
+def test_persistent_compile_error_still_reaches_heal_loop_and_mr(cfg, monkeypatch):
+    # The Generator retry is bounded to ONE attempt: if the regenerated file still
+    # doesn't run, the normal heal loop + MR path takes over (a human always reviews).
+    gl = _wire(
+        monkeypatch,
+        cfg,
+        [_result("failed", did_run=False), _result("failed", did_run=False), _result("failed")],
+    )
+    gen = AsyncMock(return_value=_generated())
+    monkeypatch.setattr(orchestrator, "generate_test", gen)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=1))
+    assert gen.call_count == 2  # initial + exactly one retry, never more
+    assert out["heal_attempts"] == 1
+    gl.open_mr.assert_called_once()
 
 
 def test_planning_failure_returns_error_without_crashing(cfg, monkeypatch):
