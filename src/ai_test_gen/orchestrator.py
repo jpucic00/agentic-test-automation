@@ -132,7 +132,16 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             issue_key, result.status, heal_attempts, max_heal_attempts,
         )
         try:
-            healed = await heal_test(config, test, result, plan=plan, test_case=test_case)
+            # Pass a snapshot of the summaries so far: the Healer rewrites the whole
+            # file, and without the history attempt 2 can silently undo attempt 1.
+            healed = await heal_test(
+                config,
+                test,
+                result,
+                plan=plan,
+                test_case=test_case,
+                heal_history=list(heal_summaries),
+            )
         except Exception as exc:
             # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not
             # discard the run — stop healing and fall through to open the MR with the best

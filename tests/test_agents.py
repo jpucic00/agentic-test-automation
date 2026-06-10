@@ -145,6 +145,39 @@ def test_generation_message_retry_includes_previous_code_and_error():
     assert "SyntaxError: unexpected end" in msg
 
 
+def _heal_message_fixtures():
+    case = models.ManualTestCase(key="QA-7", title="Create org", steps=["click Add org"])
+    plan = models.TestPlan(
+        test_case_key="QA-7",
+        title="Create org",
+        target_url="https://staging.example.internal",
+        steps=[models.PlanStep(action="click Add org")],
+    )
+    test = models.GeneratedTest(file_name="QA-7.spec.ts", code="// spec", description="x")
+    failure = models.TestRunResult(
+        status="failed", stdout="", stderr="boom", error_message="locator timeout"
+    )
+    return test, failure, plan, case
+
+
+def test_heal_message_first_attempt_has_no_history_section():
+    msg = healer_mod._build_heal_message(*_heal_message_fixtures())
+    assert "Previous heal attempts" not in msg
+
+
+def test_heal_message_second_attempt_lists_prior_changes():
+    # The Healer rewrites the whole file: without the history, attempt 2 can silently
+    # undo attempt 1's fix. The message must carry the prior summaries + a numbered list
+    # and the don't-undo instruction.
+    msg = healer_mod._build_heal_message(
+        *_heal_message_fixtures(),
+        heal_history=["added exact:true to the Add button locator"],
+    )
+    assert "Previous heal attempts" in msg
+    assert "1. added exact:true to the Add button locator" in msg
+    assert "Do NOT undo a previous attempt's change" in msg
+
+
 def test_healer_prompt_allows_intent_reconciliation():
     # The Healer may now restructure to reconcile with intent (add a skipped step / drop a
     # hallucinated one); the old blanket "DO NOT restructure" must be gone, while live-verified

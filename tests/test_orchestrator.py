@@ -197,6 +197,18 @@ def test_heal_receives_plan_and_test_case(cfg, monkeypatch):
     assert kwargs["test_case"].key == "QA-1"
 
 
+def test_second_heal_attempt_receives_first_attempts_summary(cfg, monkeypatch):
+    # Attempt 1 gets an empty history; attempt 2 must see attempt 1's changes_summary
+    # so the whole-file rewrite builds on the fix instead of undoing it.
+    _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("passed")])
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    first, second = heal.call_args_list
+    assert first.kwargs["heal_history"] == []
+    assert second.kwargs["heal_history"] == ["fixed selector"]
+
+
 def test_context_hash_changes_with_context_content(cfg, monkeypatch):
     _wire(monkeypatch, cfg, [_result("passed"), _result("passed")])
     cfg.project_context_path.write_text("context version A")

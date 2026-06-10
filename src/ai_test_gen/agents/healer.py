@@ -78,6 +78,7 @@ def _build_heal_message(
     failure: TestRunResult,
     plan: TestPlan,
     test_case: ManualTestCase,
+    heal_history: list[str] | None = None,
 ) -> str:
     """Assemble the Healer's user message: intent + plan + failing code + failure.
 
@@ -85,8 +86,24 @@ def _build_heal_message(
     ``notes`` and verified selectors — are included so the Healer can reconcile the failing code
     against what the test is meant to do (add a skipped step, drop a hallucinated one), not just
     react to the error text.
+
+    ``heal_history`` carries the ``changes_summary`` of every earlier heal attempt in this
+    run. The Healer rewrites the whole file, so without that history attempt 2 can silently
+    undo attempt 1's fix and ping-pong between two wrong versions.
     """
     planner_notes = plan.notes.strip() or "(none)"
+
+    history_block = ""
+    if heal_history:
+        attempts = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(heal_history))
+        history_block = f"""
+## Previous heal attempts on this test (oldest first)
+{attempts}
+
+The failing code above ALREADY CONTAINS these changes, and the test STILL fails with the
+error below. Do NOT undo a previous attempt's change unless the current error shows that
+change itself was wrong — build on it or fix something else.
+"""
     return f"""Fix this failing Playwright test.
 
 Diagnose first: compare the ORIGINAL INTENT and the PLAN below against the failing code and the
@@ -114,7 +131,7 @@ Planned steps (selectors here were verified live by the Planner):
 ```typescript
 {test.code}
 ```
-
+{history_block}
 **Failure:**
 - Status: {failure.status}
 - Error: {failure.error_message}
@@ -139,10 +156,15 @@ async def heal_test(
     plan: TestPlan,
     test_case: ManualTestCase,
     storage_state: Path | None = None,
+    heal_history: list[str] | None = None,
 ) -> HealedTest:
-    """Run the Healer on a failing test + its failure result and return the fix."""
+    """Run the Healer on a failing test + its failure result and return the fix.
+
+    ``heal_history`` is the list of earlier attempts' ``changes_summary`` for this
+    run, so a later attempt builds on (rather than undoes) the previous fix.
+    """
     agent = build_healer(config, storage_state=storage_state)
-    user_message = _build_heal_message(test, failure, plan, test_case)
+    user_message = _build_heal_message(test, failure, plan, test_case, heal_history)
     # MCP toolset → enter the agent as an async context manager around the run.
     async with agent:
         result = await agent.run(

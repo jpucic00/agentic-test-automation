@@ -88,11 +88,12 @@ flowchart LR
 
 Defined in [`src/ai_test_gen/models.py`](../src/ai_test_gen/models.py).
 
-> The Healer additionally receives the originating `ManualTestCase` (intent) and `TestPlan`
-> (including the Planner's `notes` + verified selectors) at heal time — not new artifacts, but extra
-> context so it can **reconcile the failing code with the original intent** (add a step the Generator
-> skipped, drop one it hallucinated) instead of reacting to the error text alone. It still stays
-> within the one test case and prefers the smallest change that makes it correct and green.
+> The Healer additionally receives the originating `ManualTestCase` (intent), the `TestPlan`
+> (including the Planner's `notes` + verified selectors), and the summaries of earlier heal attempts
+> in the same run — not new artifacts, but extra context so it can **reconcile the failing code with
+> the original intent** (add a step the Generator skipped, drop one it hallucinated) instead of
+> reacting to the error text alone, and **build on previous fixes instead of undoing them**. It still
+> stays within the one test case and prefers the smallest change that makes it correct and green.
 
 ## Package map (where each concern lives)
 

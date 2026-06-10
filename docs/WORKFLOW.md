@@ -60,7 +60,7 @@ sequenceDiagram
     R-->>O: TestRunResult
 
     loop while failing, up to 2 attempts
-        O->>H: heal_test(test, failure, plan, case)
+        O->>H: heal_test(test, failure, plan, case, heal history)
         H->>B: inspect live app + browser_generate_locator
         B-->>H: correct locators
         H-->>O: HealedTest
@@ -91,6 +91,7 @@ sequenceDiagram
 - **Compile errors never reach the Healer.** A run that produced no JSON report (`did_run=false` — the spec failed to compile/collect and never executed) goes back to the **Generator** for one regeneration with its own code + the error text. No browser is involved; only a test that actually *ran* enters the heal loop. A persistent compile error still falls through to the MR so a human sees it.
 - While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: the Healer inspects the live app and makes the smallest change that turns the test green — usually a selector/wait/URL fix, but it MAY add a step the Generator skipped or drop one it hallucinated to reconcile the test with its intent. It never re-plans from scratch or adds unrelated test cases.
 - **The Healer reconciles against the original intent.** It also receives the `ManualTestCase` and the `TestPlan` (incl. the Planner's `notes` + verified selectors), so it compares what the test *should* do against the failing code — staying faithful to that intent (never going green by dropping a real check) and verifying any selector it adds live via `browser_generate_locator`, never inventing one.
+- **Each attempt sees the previous attempts' changes.** The accumulated `changes_summary` history is in the heal message with an explicit "the code already contains these changes — don't undo them" instruction, so a whole-file rewrite on attempt 2 builds on attempt 1 instead of ping-ponging back.
 - **The Healer has a failure-mode catalog** — locator timeout, wrong URL, language mismatch, and **strict-mode violations** (`resolved N elements`), which it fixes by making the name match `exact: true` or scoping to the active dialog. It re-derives selectors via `browser_generate_locator` rather than hand-writing them.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away.
 - **If it still fails after 2 attempts, the MR is opened anyway.** Healing is a convenience, not a gate — a human reviews every result regardless. The MR labels (`ai-generated`, `qa-review-needed`) and the committed plan JSON give the reviewer full context.
