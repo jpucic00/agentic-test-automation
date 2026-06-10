@@ -86,20 +86,6 @@ If `uv sync` errors with "no interpreter found for Python 3.12", install Python 
 [Prerequisites](#1-prerequisites)) — `uv` reads [`.python-version`](.python-version) and refuses to
 substitute a different minor version.
 
-### 2.1 Dependency guardrail (Claude Code hook)
-
-If you drive this repo with Claude Code, a `PreToolUse` hook ([`.claude/hooks/guard-deps.py`](.claude/hooks/guard-deps.py),
-wired in [`.claude/settings.json`](.claude/settings.json)) pauses for your explicit approval whenever a tool
-call would add or change a dependency — any `uv add` / `uv remove` / `uv lock` / `pip install` / `poetry add`
-/ `conda install`, or a direct edit to `pyproject.toml` or `uv.lock`. It never blocks; it forces an "ask"
-prompt so a human vets the package (real name, actually needed, no typosquat) **before** it reaches the
-hash-pinned `uv.lock` and gets installed. `uv sync` (install-from-lock) is intentionally not gated.
-
-- **Activate:** the first time you open this repo in Claude Code, approve the project hook when prompted, or
-  run `/hooks` once to load it. Pure stdlib — it needs only `python3` on PATH.
-- **Extend / disable:** edit the `DEP_COMMAND_MARKERS` and `DEP_FILES` lists at the top of the script (e.g. add
-  `requirements.txt`), or remove the `hooks` block from `.claude/settings.json` (toggle via `/hooks`).
-
 ---
 
 ## 3. Access prerequisites (file requests for missing ones now)
@@ -144,35 +130,7 @@ section at a time. Watch out for:
 
 ---
 
-## 5. Describe your app (`project_context.md` + `project_map.md`)
-
-The agents read two human-authored context files. Copy the templates and fill them in for your app:
-
-```bash
-cp project_context.example.md project_context.md   # conventions, test users (disposable creds), quirks
-cp project_map.example.md   project_map.md          # routes, auth/login flow, key screens & selectors
-```
-
-`project_context.md` goes to every agent; `project_map.md` goes only to the browser-driving agents
-(Planner, Healer). Both templates spell out the level of detail to provide.
-
-The loader strips HTML comments (`<!-- … -->`) before injecting these files — write guidance for
-humans in comments freely; it never reaches the model. If a file still contains template
-placeholders (the `<e.g. …>` / `<APP NAME>` style, or legacy `[REPLACE …]` markers), every run logs
-a **warning** naming the file: the agents are then being prompted with the template's fictional
-examples instead of your app's real conventions, and plan quality will reflect that. Fill the files
-in until the warning disappears.
-
-**Authentication is context-driven — no saved session.** Each agent, and each generated test, logs in
-live as the role the scenario needs, using the disposable credentials and login flow you record in
-`project_context.md` (test users) and `project_map.md` (auth flow — e.g. a Keycloak SSO form). There is no
-stored `storage_state` (sessions expire between runs, and most cases need a different role or must register
-first). The optional `scripts/save_auth_state.py` / `verify_auth_state.py` remain only as a manual
-session-capture utility for debugging a login flow — they are not part of the pipeline.
-
----
-
-## 6. Verify access (Step 0)
+## 5. Verify access (Step 0)
 
 In order:
 
@@ -196,7 +154,7 @@ open "$STAGING_BASE_URL"   # macOS; use xdg-open on Linux or start on Windows
 
 Detailed expected output and a failure-mode table are in [`scripts/README.md`](scripts/README.md).
 
-### 6.1 Xray client check
+### 5.1 Xray client check
 
 `step0c` only *detects* the steps field; this exercises the actual client (`XrayClient.fetch()` →
 `ManualTestCase`). For Server/DC, needs `XRAY_IS_CLOUD=false` and `JIRA_TOKEN` set to your PAT (sent as Bearer):
@@ -207,6 +165,33 @@ uv run python scripts/test_xray.py --issue-key <one-real-QA-key>
 
 Expect a `ManualTestCase` JSON with **non-empty `steps` and `expected_results`**. If your tenant's steps
 field isn't the default, set `XRAY_STEPS_FIELD_ID` to the ID that `step0c_xray_flavor.py --issue-key` reports.
+
+---
+
+## 6. Describe your app (`project_context.md` + `project_map.md`)
+
+The agents read two human-authored context files. Copy the templates and fill them in for your app:
+
+```bash
+cp project_context.example.md project_context.md   # conventions, test users (disposable creds), quirks
+cp project_map.example.md   project_map.md          # routes, auth/login flow, key screens & selectors
+```
+
+`project_context.md` goes to every agent; `project_map.md` goes only to the browser-driving agents
+(Planner, Healer). Both templates spell out the level of detail to provide.
+
+The loader strips HTML comments (`<!-- … -->`) before injecting these files — write guidance for
+humans in comments freely; it never reaches the model. If a file still contains template
+placeholders (the `<e.g. …>` / `<APP NAME>` style, or legacy `[REPLACE …]` markers), every run logs
+a **warning** naming the file: the agents are then being prompted with the template's fictional
+examples instead of your app's real conventions, and plan quality will reflect that. Fill the files
+in until the warning disappears.
+
+**Authentication is context-driven — no saved session.** Each agent, and each generated test, logs in
+live as the role the scenario needs, using the disposable credentials and login flow you record in
+`project_context.md` (test users) and `project_map.md` (auth flow — e.g. a Keycloak SSO form). There is no
+stored `storage_state` (sessions expire between runs, and most cases need a different role or must register
+first).
 
 ---
 

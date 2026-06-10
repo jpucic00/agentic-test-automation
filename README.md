@@ -31,13 +31,13 @@ free text. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design and
 1. **Set up your machine** — Python 3.12, Node 20, `uv`. Full instructions in [`SETUP.md`](SETUP.md).
 2. **Configure** — `cp .env.example .env` and fill in your model gateway, Jira/Xray, staging app, and
    (optionally) GitLab values. Every variable is documented inline.
-3. **Describe your app** — copy the two context templates and fill them in:
+3. **Verify access** — run the Step 0 scripts to confirm your gateway, Jira/Xray, and embedding
+   endpoints respond (see [`scripts/README.md`](scripts/README.md)).
+4. **Describe your app** — copy the two context templates and fill them in:
    ```bash
    cp project_context.example.md project_context.md   # conventions, test users, quirks
    cp project_map.example.md   project_map.md          # routes, auth flow, key screens
    ```
-4. **Verify access** — run the Step 0 scripts to confirm your gateway, Jira/Xray, and embedding
-   endpoints respond (see [`scripts/README.md`](scripts/README.md)).
 5. **Generate a test:**
    ```bash
    uv run python -m ai_test_gen.orchestrator QA-1234 --verbose

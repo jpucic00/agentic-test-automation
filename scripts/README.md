@@ -108,22 +108,3 @@ If `--issue-key` is omitted, the steps-field check is skipped and only flavor is
 | step0c: "No customfield_* matches" | Steps field has a non-standard name | Eyeball the printed list, then set `XRAY_STEPS_FIELD_ID` in `.env` for the Xray client |
 
 The same gotchas are documented in [`AI_TEST_GENERATION_GUIDE.md`](../AI_TEST_GENERATION_GUIDE.md) §3.2.
-
----
-
-## Auth-state scripts (legacy, optional)
-
-> **Legacy / optional.** The pipeline uses **context-driven login** — each agent and each generated test logs in live from the `project_context.md` dummy creds, so there is no saved `storage_state.json` in the runtime path. These two scripts are kept only as a manual session-capture utility (e.g. to debug a login flow). They drive the live staging app.
-
-| Script | What it does |
-|---|---|
-| `save_auth_state.py` | Opens a headed Chromium, logs into staging with `STAGING_USERNAME` / `STAGING_PASSWORD`, and writes `output/storage_state.json`. |
-| `verify_auth_state.py` | Loads that file, hits a protected route, and exits non-zero if it's bounced back to the login page. Run it right after `save_auth_state.py`. |
-
-```bash
-uv run playwright install chromium          # one-time: Chromium binary for the Python playwright pkg
-uv run python scripts/save_auth_state.py
-uv run python scripts/verify_auth_state.py
-```
-
-If you do use them, adjust the Keycloak selectors (nav login `#metaMenuItem5` → `#username` / `#password` / submit `#kc-login`) to the real staging form, and record the auth flow in [`project_map.md`](../project_map.md). `output/storage_state.json` is gitignored. The pipeline itself does not read this file.
