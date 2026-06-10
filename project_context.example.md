@@ -81,4 +81,7 @@ first test cases need and grow it over time. Delete the guidance comments.
 - Stay within the test's scope — don't delete other users' data or change billing/settings
   unless the test is about that.
 - Don't switch UI language/locale unless the test requires it.
+- **Session-invalidating actions** — these kill the CURRENT live login mid-scenario: signing
+  out, "sign out of all devices", changing or resetting a password, <your app's equivalents>.
+  Never trigger them while exploring; if a test requires one, it must be the test's final steps.
 - <project-specific guardrails>
