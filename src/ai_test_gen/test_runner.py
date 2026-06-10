@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from pathlib import Path
 
 from .config import Config
@@ -96,7 +97,7 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
         return TestRunResult(status="passed", stdout=stdout, stderr=stderr)
 
     did_run = _report_parses(stdout)
-    failed_test, error_message = _parse_failure(stdout)
+    failed_test, error_message, error_line = _parse_failure(stdout, test.file_name)
     if error_message is None:
         # No parseable JSON report (compile error, no tests, crash): the spec never
         # actually ran. Surface the stderr tail; did_run=False routes this class back
@@ -110,6 +111,7 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
         stderr=stderr,
         failed_test=failed_test,
         error_message=error_message,
+        error_line=error_line,
         trace_path=_find_trace(config.output_dir),
     )
 
@@ -137,34 +139,59 @@ def _find_trace(output_dir: Path) -> str | None:
     return str(traces[-1]) if traces else None
 
 
-def _parse_failure(stdout: str) -> tuple[str | None, str | None]:
-    """Extract ``(failed_test_title, error_message)`` from Playwright JSON output.
+def _parse_failure(
+    stdout: str, file_name: str | None = None
+) -> tuple[str | None, str | None, int | None]:
+    """Extract ``(failed_test_title, error_message, error_line)`` from Playwright JSON.
 
-    Returns ``(None, None)`` when the output is not parseable JSON, so the caller can
-    fall back to stderr.
+    Returns ``(None, None, None)`` when the output is not parseable JSON, so the
+    caller can fall back to stderr.
     """
     try:
         report = json.loads(stdout)
     except json.JSONDecodeError:
-        return None, None
+        return None, None, None
 
     for suite in report.get("suites", []):
-        found = _scan_suite(suite)
+        found = _scan_suite(suite, file_name)
         if found is not None:
             return found
-    return None, None
+    return None, None, None
 
 
-def _scan_suite(suite: dict) -> tuple[str | None, str | None] | None:
+def _scan_suite(
+    suite: dict, file_name: str | None
+) -> tuple[str | None, str | None, int | None] | None:
     """Depth-first search for the first failed/timedOut spec in a Playwright suite tree."""
     for spec in suite.get("specs", []):
         for test_entry in spec.get("tests", []):
             for run in test_entry.get("results", []):
                 if run.get("status") in ("failed", "timedOut"):
-                    message = (run.get("error") or {}).get("message")
-                    return spec.get("title"), message
+                    error = run.get("error") or {}
+                    return spec.get("title"), error.get("message"), _error_line(error, file_name)
     for child in suite.get("suites", []):
-        found = _scan_suite(child)
+        found = _scan_suite(child, file_name)
         if found is not None:
             return found
+    return None
+
+
+def _error_line(error: dict, file_name: str | None) -> int | None:
+    """The spec line the run died on: error location if present, else stack/message parse.
+
+    The line lets the Healer separate code that ran from code that NEVER executed —
+    without it, a downstream timeout reads as a downstream bug.
+    """
+    location = error.get("location") or {}
+    line = location.get("line")
+    if isinstance(line, int) and line > 0:
+        return line
+    if not file_name:
+        return None
+    # Stack frames (and often the message) reference "<path>/<file>:<line>:<col>".
+    pattern = re.compile(re.escape(file_name) + r":(\d+):\d+")
+    for text in (error.get("stack") or "", error.get("message") or ""):
+        match = pattern.search(text)
+        if match:
+            return int(match.group(1))
     return None

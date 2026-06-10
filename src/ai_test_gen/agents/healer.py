@@ -100,6 +100,28 @@ def _format_plan_steps(plan: TestPlan) -> str:
     return "\n".join(lines)
 
 
+def _failure_boundary(test: GeneratedTest, failure: TestRunResult) -> str:
+    """Quote the dying line and state the execution boundary, when the line is known.
+
+    Without this, a downstream timeout reads as a downstream bug: the Healer "fixes"
+    tail steps that never even executed while the real blocker (often a wrong early
+    locator that mis-acted silently) goes untouched.
+    """
+    if not failure.error_line:
+        return ""
+    lines = test.code.splitlines()
+    if not 1 <= failure.error_line <= len(lines):
+        return ""
+    dying_line = lines[failure.error_line - 1].strip()
+    return f"""
+The run DIED at line {failure.error_line}:
+    {dying_line}
+Code AFTER this line NEVER EXECUTED — do not change it based on this failure. Code BEFORE it may
+have silently mis-acted (a wrong locator can hit the wrong element without erroring) — replay the
+earlier locators live, starting from the top, before trusting them.
+"""
+
+
 def _build_heal_message(
     test: GeneratedTest,
     failure: TestRunResult,
@@ -162,6 +184,7 @@ Planned steps (selectors here were verified live by the Planner):
 **Failure:**
 - Status: {failure.status}
 - Error: {failure.error_message}
+{_failure_boundary(test, failure)}
 
 **stderr:**
 ```

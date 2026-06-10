@@ -256,6 +256,50 @@ def test_plan_step_page_context_is_optional():
     assert plan.steps[0].container is None
 
 
+def test_heal_message_quotes_dying_line_and_execution_boundary():
+    # The misdiagnosis fix: the Healer must know WHERE the run died and that code
+    # after that line never executed — otherwise a downstream timeout reads as a
+    # downstream bug and it "fixes" tail steps while the real blocker stays broken.
+    case = models.ManualTestCase(key="QA-9", title="Login", steps=["log in"])
+    plan = models.TestPlan(
+        test_case_key="QA-9", title="Login",
+        target_url="https://staging.example.internal", steps=[],
+    )
+    test = models.GeneratedTest(
+        file_name="QA-9.spec.ts",
+        code="line one\nawait page.getByTestId('logon-btn').click();\nline three",
+        description="x",
+    )
+    failure = models.TestRunResult(
+        status="failed", stdout="", stderr="", error_message="timeout", error_line=2
+    )
+    msg = healer_mod._build_heal_message(test, failure, plan, case)
+    assert "The run DIED at line 2" in msg
+    assert "getByTestId('logon-btn')" in msg
+    assert "NEVER EXECUTED" in msg
+
+
+def test_heal_message_has_no_boundary_without_error_line():
+    case = models.ManualTestCase(key="QA-9", title="Login", steps=["log in"])
+    plan = models.TestPlan(
+        test_case_key="QA-9", title="Login",
+        target_url="https://staging.example.internal", steps=[],
+    )
+    test = models.GeneratedTest(file_name="QA-9.spec.ts", code="// spec", description="x")
+    failure = models.TestRunResult(
+        status="failed", stdout="", stderr="", error_message="timeout"
+    )
+    msg = healer_mod._build_heal_message(test, failure, plan, case)
+    assert "The run DIED" not in msg
+
+
+def test_healer_prompt_has_diagnosis_order():
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "Diagnosis order" in healer_md
+    assert "IN ORDER" in healer_md  # replay locators from the top, login first
+    assert "login first" in healer_md
+
+
 def test_healer_prompt_allows_intent_reconciliation():
     # The Healer may now restructure to reconcile with intent (add a skipped step / drop a
     # hallucinated one); the old blanket "DO NOT restructure" must be gone, while live-verified

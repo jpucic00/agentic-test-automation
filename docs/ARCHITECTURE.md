@@ -79,7 +79,7 @@ These typed Pydantic models *are* the interfaces between stages. Each step takes
 flowchart LR
     MTC["ManualTestCase<br/>key · title · steps · expected"] -->|Planner| TP["TestPlan<br/>target_url · steps · notes"]
     TP -->|Generator| GT["GeneratedTest<br/>file_name · code · description"]
-    GT -->|Runner| TRR["TestRunResult<br/>status · stderr · trace_path"]
+    GT -->|Runner| TRR["TestRunResult<br/>status · error line · trace_path"]
     TRR -->|Healer| HT["HealedTest<br/>code · changes_summary"]
     HT -.re-run.-> TRR
     MTC -.intent.-> HT

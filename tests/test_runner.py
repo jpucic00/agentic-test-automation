@@ -137,6 +137,59 @@ def test_run_test_failed_empty_output_uses_default_message(cfg, monkeypatch):
     assert result.error_message == "Playwright run failed (no JSON report produced)"
 
 
+def test_run_test_extracts_error_line_from_location(cfg, monkeypatch):
+    failed_run = {
+        "status": "failed",
+        "error": {"message": "locator timeout", "location": {"line": 7, "column": 11}},
+    }
+    report = {
+        "suites": [
+            {"title": "x.spec.ts", "specs": [
+                {"title": "QA-1: x", "tests": [{"results": [failed_run]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.error_line == 7
+
+
+def test_run_test_extracts_error_line_from_stack_fallback(cfg, monkeypatch):
+    # No structured location — the line is parsed from the stack frame that names
+    # the spec file ("<path>/<file>:<line>:<col>").
+    failed_run = {
+        "status": "failed",
+        "error": {
+            "message": "locator.click: Timeout 30000ms exceeded",
+            "stack": "Error: ...\n    at /app/output/tests/QA-1-login.spec.ts:12:31",
+        },
+    }
+    report = {
+        "suites": [
+            {"title": "x.spec.ts", "specs": [
+                {"title": "QA-1: x", "tests": [{"results": [failed_run]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.error_line == 12
+
+
+def test_run_test_error_line_none_when_unavailable(cfg, monkeypatch):
+    failed_run = {"status": "failed", "error": {"message": "boom, no location anywhere"}}
+    report = {
+        "suites": [
+            {"title": "x.spec.ts", "specs": [
+                {"title": "QA-1: x", "tests": [{"results": [failed_run]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.error_line is None
+
+
 def test_run_test_no_report_marks_did_run_false(cfg, monkeypatch):
     # Unparseable stdout = compile/collection error: the spec never executed, so the
     # orchestrator must route it to the Generator (did_run=False), not the Healer.

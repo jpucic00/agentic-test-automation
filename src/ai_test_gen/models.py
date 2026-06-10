@@ -160,6 +160,13 @@ class TestRunResult(BaseModel):
     error_message: str | None = Field(
         default=None, description="Error message extracted from the failure, if any"
     )
+    error_line: int | None = Field(
+        default=None,
+        description=(
+            "1-based line in the spec file where the run died (from the Playwright "
+            "error location/stack). Code after this line never executed."
+        ),
+    )
     trace_path: str | None = Field(
         default=None, description="Path to the Playwright trace.zip, if one was produced"
     )
