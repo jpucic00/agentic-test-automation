@@ -8,7 +8,7 @@ import pytest
 
 from ai_test_gen import mtls
 from ai_test_gen.config import Config
-from ai_test_gen.llm import build_openai_model
+from ai_test_gen.llm import build_openai_model, judge_reasoning_effort_support
 
 
 def test_mtls_defaults_to_direct_connection(monkeypatch):
@@ -37,6 +37,31 @@ def test_build_openai_model_offline(monkeypatch):
     from pydantic_ai.models.openai import OpenAIChatModel
 
     assert isinstance(model, OpenAIChatModel)
+
+
+# --- reasoning-effort support verdict (consumed by scripts/step0d_*) ---------------
+
+
+def test_reasoning_effort_honored_when_high_materially_larger():
+    assert judge_reasoning_effort_support(100, 400) == "honored"
+    assert judge_reasoning_effort_support(100, 150) == "honored"  # exactly min_ratio
+
+
+def test_reasoning_effort_not_honored_when_usage_near_identical():
+    # The silent-drop case: the gateway accepted the param but usage barely moves.
+    assert judge_reasoning_effort_support(100, 110) == "not-honored"
+    assert judge_reasoning_effort_support(100, 100) == "not-honored"
+
+
+def test_reasoning_effort_inconclusive_without_usable_usage():
+    assert judge_reasoning_effort_support(None, 400) == "inconclusive"
+    assert judge_reasoning_effort_support(100, None) == "inconclusive"
+    assert judge_reasoning_effort_support(0, 0) == "inconclusive"
+
+
+def test_reasoning_effort_custom_ratio():
+    assert judge_reasoning_effort_support(100, 130, min_ratio=1.2) == "honored"
+    assert judge_reasoning_effort_support(100, 130, min_ratio=2.0) == "not-honored"
 
 
 # --- requests-based clients (Xray/GitLab) share the gateway proxy/CA policy --------

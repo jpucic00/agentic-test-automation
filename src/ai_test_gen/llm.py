@@ -24,6 +24,31 @@ from . import mtls
 from .config import Config
 
 
+def judge_reasoning_effort_support(
+    low_tokens: int | None,
+    high_tokens: int | None,
+    *,
+    min_ratio: float = 1.5,
+) -> str:
+    """Verdict on whether a gateway honored the ``reasoning_effort`` request param.
+
+    Compares the (reasoning or completion) token usage of the SAME prompt sent at
+    ``low`` vs ``high`` effort. A gateway that silently drops the param produces
+    near-identical usage; an honoring one deliberates materially longer at high.
+    Pure comparison logic so ``scripts/step0d_verify_reasoning_effort.py``'s verdict
+    is unit-testable without a network.
+
+    Returns one of:
+    - ``"honored"`` — high-effort usage >= ``min_ratio`` x low-effort usage.
+    - ``"not-honored"`` — both probes answered but usage is too similar; assume the
+      gateway dropped the param (fail-closed: don't trust the knob).
+    - ``"inconclusive"`` — usage missing/zero on either probe; nothing to compare.
+    """
+    if not low_tokens or not high_tokens or low_tokens <= 0 or high_tokens <= 0:
+        return "inconclusive"
+    return "honored" if high_tokens >= low_tokens * min_ratio else "not-honored"
+
+
 def build_openai_model(config: Config, model_name: str) -> OpenAIChatModel:
     """Return an ``OpenAIChatModel`` for ``model_name`` on the corp gateway.
 

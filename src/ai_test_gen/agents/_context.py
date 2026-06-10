@@ -19,10 +19,14 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Literal, cast
 
 from ..config import Config
 
 logger = logging.getLogger(__name__)
+
+ReasoningEffort = Literal["low", "medium", "high"]
+_VALID_REASONING_EFFORTS = ("low", "medium", "high")
 
 _MISSING_PLACEHOLDER = "(no project context provided)"
 
@@ -113,6 +117,34 @@ def agent_retries(default: int = 5) -> int:
         return max(1, int(raw))
     except ValueError:
         return default
+
+
+def reasoning_effort(env_var: str) -> ReasoningEffort | None:
+    """Validated reasoning-effort setting from ``env_var`` (None when unset).
+
+    Only meaningful on reasoning models (e.g. gpt-oss). An invalid value fails fast —
+    a typo'd effort that silently disappears would masquerade as a tuned pipeline.
+    When set, a warning reminds that gateway support must be PROVEN: OpenAI-compatible
+    gateways commonly accept unknown params and silently drop them, so the setting is
+    only trustworthy after ``scripts/step0d_verify_reasoning_effort.py`` reports HONORED.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value not in _VALID_REASONING_EFFORTS:
+        raise ValueError(
+            f"{env_var}={raw!r} is not a valid reasoning effort; "
+            f"use one of {_VALID_REASONING_EFFORTS} or unset it"
+        )
+    logger.warning(
+        "%s=%s is set. Gateways may silently DROP unknown request params — only trust "
+        "this setting if scripts/step0d_verify_reasoning_effort.py reported HONORED "
+        "against your gateway/model.",
+        env_var,
+        value,
+    )
+    return cast(ReasoningEffort, value)
 
 
 def agent_request_limit(default: int = 150) -> int:

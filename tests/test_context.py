@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from ai_test_gen.agents._context import (
     _load_context_file,
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
+    reasoning_effort,
 )
 
 _BASE_PROMPT = "# Base agent prompt"
@@ -111,3 +114,24 @@ def test_agent_request_limit_default_env_and_invalid(monkeypatch):
     assert agent_request_limit() == 300
     monkeypatch.setenv("AGENT_REQUEST_LIMIT", "x")  # invalid -> default
     assert agent_request_limit() == 150
+
+
+def test_reasoning_effort_unset_returns_none(monkeypatch):
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    assert reasoning_effort("PLANNER_REASONING_EFFORT") is None
+
+
+def test_reasoning_effort_valid_value_warns_about_gateway_support(monkeypatch, caplog):
+    # The knob must never be silent: gateways can drop unknown params, so a set value
+    # always reminds that step0d must have proven support.
+    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "High")
+    with caplog.at_level(logging.WARNING, logger=_CONTEXT_LOGGER):
+        assert reasoning_effort("PLANNER_REASONING_EFFORT") == "high"
+    warning = [r.getMessage() for r in caplog.records if "REASONING_EFFORT" in r.getMessage()]
+    assert warning and "step0d_verify_reasoning_effort" in warning[0]
+
+
+def test_reasoning_effort_invalid_value_fails_fast(monkeypatch):
+    monkeypatch.setenv("HEALER_REASONING_EFFORT", "max")
+    with pytest.raises(ValueError, match="HEALER_REASONING_EFFORT"):
+        reasoning_effort("HEALER_REASONING_EFFORT")

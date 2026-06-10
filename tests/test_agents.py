@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from pydantic_ai.models.test import TestModel
 
 from ai_test_gen import models
@@ -120,6 +121,20 @@ def test_heal_message_includes_intent_plan_and_notes():
     assert "getByTestId('add-org')" in msg  # verified selector carried from the plan
     assert "animates in" in msg  # Planner note surfaced
     assert "locator timeout" in msg  # failure still present
+
+
+def test_planner_builds_with_valid_reasoning_effort(cfg, monkeypatch):
+    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "high")
+    out = _run_offline(build_planner(cfg))  # knob must not break the agent
+    assert isinstance(out, models.TestPlan)
+
+
+def test_planner_invalid_reasoning_effort_fails_at_build(cfg, monkeypatch):
+    # Fail fast on a typo — a silently-vanishing effort value would masquerade as
+    # a tuned pipeline (the whole reason the knob ships with a validation story).
+    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "ultra")
+    with pytest.raises(ValueError, match="PLANNER_REASONING_EFFORT"):
+        build_planner(cfg)
 
 
 def test_generation_message_plain_has_no_retry_section():

@@ -10,9 +10,14 @@ These scripts confirm your LLM gateway, Jira/Xray, and embedding endpoints are r
 3. uv run python scripts/step0_verify_tool_calling.py
 4. uv run python scripts/step0b_verify_embeddings.py
 5. uv run python scripts/step0c_xray_flavor.py --issue-key <real-QA-key>
+6. uv run python scripts/step0d_verify_reasoning_effort.py   # only if you plan to set *_REASONING_EFFORT
 ```
 
 Step 0 is the most important — if any candidate model fails tool calling, stop and fix the gateway before continuing.
+
+Step 0d is optional: it proves whether the gateway honors the `reasoning_effort` request param
+(many gateways silently drop unknown params). Set `PLANNER_REASONING_EFFORT` /
+`HEALER_REASONING_EFFORT` in `.env` only after it reports **HONORED**.
 
 ## Environment variables per script
 
