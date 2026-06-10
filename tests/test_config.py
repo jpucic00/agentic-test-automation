@@ -22,8 +22,11 @@ _BASE_ENV = {
     "GITLAB_PROJECT_ID": "qa/playwright-tests",
 }
 
+# Staging creds are optional (legacy — only save_auth_state.py consumes them).
+_LEGACY_OPTIONAL_VARS = ("STAGING_USERNAME", "STAGING_PASSWORD")
+
 # Every env var that must trigger a clear error when missing.
-_REQUIRED_VARS = list(_BASE_ENV)
+_REQUIRED_VARS = [k for k in _BASE_ENV if k not in _LEGACY_OPTIONAL_VARS]
 
 _OPTIONAL_VARS = (
     "PLANNER_MODEL",
@@ -46,7 +49,7 @@ def env(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(config, "load_dotenv", lambda: None)
     monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
-    for key in (*_REQUIRED_VARS, *_OPTIONAL_VARS):
+    for key in (*_REQUIRED_VARS, *_LEGACY_OPTIONAL_VARS, *_OPTIONAL_VARS):
         monkeypatch.delenv(key, raising=False)
     for key, value in _BASE_ENV.items():
         monkeypatch.setenv(key, value)
@@ -86,6 +89,16 @@ def test_missing_required_var_raises_clear_message(env, missing):
     with pytest.raises(RuntimeError) as exc:
         load_config()
     assert missing in str(exc.value)
+
+
+def test_staging_creds_are_optional(env):
+    """STAGING_USERNAME/PASSWORD are legacy (save_auth_state.py only) — the pipeline
+    must load without them."""
+    for var in _LEGACY_OPTIONAL_VARS:
+        env.delenv(var, raising=False)
+    cfg = load_config()
+    assert cfg.staging_username is None
+    assert cfg.staging_password is None
 
 
 @pytest.mark.usefixtures("env")

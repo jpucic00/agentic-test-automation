@@ -90,10 +90,11 @@ class Config:
     jira_token: str
     xray_is_cloud: bool  # True for Xray Cloud, False for Server/DC
 
-    # Staging app
+    # Staging app. Username/password are LEGACY: the pipeline authenticates from the
+    # test users in project_context.md; only scripts/save_auth_state.py reads these.
     staging_base_url: str
-    staging_username: str
-    staging_password: str
+    staging_username: str | None
+    staging_password: str | None
 
     # GitLab (optional — GITLAB_ENABLED=false runs the pipeline without opening an MR)
     gitlab_enabled: bool
@@ -147,8 +148,10 @@ def load_config() -> Config:
         jira_token=_required("JIRA_TOKEN"),
         xray_is_cloud=os.environ.get("XRAY_IS_CLOUD", "true").lower() == "true",
         staging_base_url=staging_base_url,
-        staging_username=_required("STAGING_USERNAME"),
-        staging_password=_required("STAGING_PASSWORD"),
+        # Optional: only the legacy save_auth_state.py needs these; the pipeline's
+        # test logins come from project_context.md, so a missing value is fine.
+        staging_username=os.environ.get("STAGING_USERNAME"),
+        staging_password=os.environ.get("STAGING_PASSWORD"),
         gitlab_base_url=_required_if("GITLAB_BASE_URL", required=gitlab_enabled),
         gitlab_token=_required_if("GITLAB_TOKEN", required=gitlab_enabled),
         gitlab_project_id=_required_if("GITLAB_PROJECT_ID", required=gitlab_enabled),

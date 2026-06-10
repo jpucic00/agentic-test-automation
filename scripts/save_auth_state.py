@@ -94,6 +94,13 @@ async def save_auth_state(
 ) -> Path:
     """Drive a headed browser through the Keycloak login and persist session state."""
     cfg = load_config()
+    # These vars are optional for the pipeline (config no longer requires them);
+    # this legacy script is their only consumer, so it validates them itself.
+    if not cfg.staging_username or not cfg.staging_password:
+        raise SystemExit(
+            "save_auth_state.py needs STAGING_USERNAME and STAGING_PASSWORD in .env "
+            "(optional for the pipeline itself, which logs in from project_context.md)."
+        )
     out = output or (cfg.output_dir / "storage_state.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     app_host = urlparse(cfg.staging_base_url).hostname or ""
