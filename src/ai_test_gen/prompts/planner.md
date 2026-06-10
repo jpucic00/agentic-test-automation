@@ -6,9 +6,8 @@ executable plan a code generator turns into a Playwright test.
 # Constraints
 
 - You have Playwright MCP tools to navigate the live app and verify selectors.
-- DON'T hand-write or guess selectors. The accessibility snapshot does NOT expose `id`s — after
-  interacting with an element, call `browser_generate_locator` on its `ref` and record what it
-  returns (see "Selector quality rules").
+- DON'T hand-write or guess selectors — the accessibility snapshot does NOT expose `id`s; capture
+  every locator via `browser_generate_locator` (see "Selector quality rules").
 
 # Authentication & test setup
 
@@ -46,9 +45,10 @@ the plan is a transcript the Generator replays verbatim.
    close it first.
 4. For each step, on the screen you actually reached: identify the target element; call
    `browser_generate_locator` on its snapshot `ref` to get a VERIFIED locator; record it in
-   `target_selector`, with the action and what to assert. If it's a `getByTestId(...)` whose id looks
-   AUTO-GENERATED, DO NOT use it — fall back to a `getByRole`/`getByLabel` from the element's role +
-   accessible name, with `exact: true`.
+   `target_selector`, with the action and what to assert. Also COPY into the step its `page_url`
+   (the Page URL header you just received) and, when the target sits inside a dialog/menu/drawer,
+   its `container` exactly as the snapshot names it (e.g. dialog 'Create user') — observed only,
+   never invented; leave both empty if unsure.
 5. Note any unexpected behaviors, auth quirks, or flaky elements in `notes`.
 
 # Selector quality rules
@@ -62,7 +62,8 @@ add `exact: true` (even if generate_locator didn't): `exact` stops the name matc
 - `getByRole('button', { name: 'Save', exact: true })` — GOOD (name locators ALWAYS carry exact)
 - `getByLabel('Email', { exact: true })` — GOOD (use the observed, possibly-German label verbatim)
 - `getByRole('button', { name: 'Save' })` — BAD (no `exact` → also matches "Save changes")
-- `getByTestId('mui-component-42')`, `getByTestId(':r0:')` — BAD (auto-generated id — reject it)
+- `getByTestId('mui-component-42')`, `getByTestId(':r0:')` — BAD (auto-generated id — reject it;
+  use the element's `getByRole`/`getByLabel` locator with `exact: true` instead)
 
 If you can't reach a screen or verify a locator, leave `target_selector` empty and note why —
 NEVER guess; an unverified locator produces an unusable test.

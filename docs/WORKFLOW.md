@@ -77,8 +77,8 @@ sequenceDiagram
 | # | Stage | Who | In → Out | Touches | ~Time |
 |---|---|---|---|---|---|
 | 1 | Fetch | Xray Client | Jira key → `ManualTestCase` | Jira/Xray API | <1s |
-| 2 | Plan | **Planner** (+MCP) | case → `TestPlan` | reads staging in a browser | 30–90s |
-| 3 | Generate | **Generator** | `TestPlan` → `GeneratedTest` | none (writes file) | 10–20s |
+| 2 | Plan | **Planner** (+MCP) | case → `TestPlan` (verified selectors + page context) | reads staging in a browser | 30–90s |
+| 3 | Generate | **Generator** | `TestPlan` → `GeneratedTest` (container-scoped locators) | none (writes file) | 10–20s |
 | 4 | Run | Test Runner | test → `TestRunResult` | runs the test on staging | 10–60s |
 | 5 | Heal *(only if step 4 failed)* | **Healer** (+MCP) | failed test + error + plan + intent → `HealedTest`, then back to step 4 | reads staging | 30–60s / attempt |
 | 6 | Open MR *(skipped if `GITLAB_ENABLED=false`)* | GitLab Client | final test + plan → MR URL | pushes branch, opens MR | <2s |
@@ -90,7 +90,7 @@ sequenceDiagram
 - The Runner **never throws on a failing test** — a failure is a *healable state*, not a crash. (A genuinely hung run is caught by a hard timeout and reported as `status=error`, so the pipeline can't wedge.)
 - **Compile errors never reach the Healer.** A run that produced no JSON report (`did_run=false` — the spec failed to compile/collect and never executed) goes back to the **Generator** for one regeneration with its own code + the error text. No browser is involved; only a test that actually *ran* enters the heal loop. A persistent compile error still falls through to the MR so a human sees it.
 - While the test is failing, the Orchestrator calls the Healer up to **`MAX_HEAL_ATTEMPTS = 2`** times. Each attempt: the Healer inspects the live app and makes the smallest change that turns the test green — usually a selector/wait/URL fix, but it MAY add a step the Generator skipped or drop one it hallucinated to reconcile the test with its intent. It never re-plans from scratch or adds unrelated test cases.
-- **The Healer reconciles against the original intent.** It also receives the `ManualTestCase` and the `TestPlan` (incl. the Planner's `notes` + verified selectors), so it compares what the test *should* do against the failing code — staying faithful to that intent (never going green by dropping a real check) and verifying any selector it adds live via `browser_generate_locator`, never inventing one.
+- **The Healer reconciles against the original intent.** It also receives the `ManualTestCase` and the `TestPlan` (incl. the Planner's `notes`, verified selectors, and each step's plan-time page context — `page_url` / enclosing `container`), so it compares what the test *should* do against the failing code — staying faithful to that intent (never going green by dropping a real check) and verifying any selector it adds live via `browser_generate_locator`, never inventing one.
 - **Each attempt sees the previous attempts' changes.** The accumulated `changes_summary` history is in the heal message with an explicit "the code already contains these changes — don't undo them" instruction, so a whole-file rewrite on attempt 2 builds on attempt 1 instead of ping-ponging back.
 - **The Healer has a failure-mode catalog** — locator timeout, wrong URL, language mismatch, and **strict-mode violations** (`resolved N elements`), which it fixes by making the name match `exact: true` or scoping to the active dialog. It re-derives selectors via `browser_generate_locator` rather than hand-writing them.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away.

@@ -35,6 +35,10 @@ from structured plans. Your output must be production-quality code.
   - BAD: `page.getByRole('button', { name: 'Submit' })` (no `exact` — matches "Submit form" too)
   - If two elements share the SAME exact name (one in a dialog, one behind it), scope to the
     container: `page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })`.
+- **The plan marks containers for you:** when a step has `container` set (e.g. "dialog 'Create
+  user'"), ALWAYS scope that step's locator to it — `page.getByRole('dialog').getBy…`. Scope by
+  role alone (locale-independent); add the container's name only if several such containers can
+  be open at once.
 - If a step has NO selector, do NOT invent one. Use the closest accessible locator from the step's
   wording (`getByRole` / `getByLabel`) WITH `exact: true`, and add a `// TODO: selector not verified
   by the Planner` comment so the gap is visible to the reviewer.

@@ -75,6 +75,22 @@ class PlanStep(BaseModel):
     expected: str | None = Field(
         default=None, description="Expected outcome to assert, if any"
     )
+    page_url: str | None = Field(
+        default=None,
+        description=(
+            "URL of the page this step was performed on, copied from the live session's "
+            "Page URL header. None if unknown."
+        ),
+    )
+    container: str | None = Field(
+        default=None,
+        description=(
+            "Closest enclosing dialog/menu/drawer of the target element exactly as the "
+            "live snapshot names it, e.g. \"dialog 'Create user'\" — observed only, never "
+            "invented. None for page-level elements. The Generator scopes the step's "
+            "locator to this container."
+        ),
+    )
 
 
 class TestPlan(BaseModel):

@@ -88,6 +88,19 @@ def test_prompts_carry_generate_locator_contract():
     assert "#login-submit" not in planner_md  # retired GOOD-example marker
 
 
+def test_prompts_carry_page_context_contract():
+    # The distilled-page-context contract: the Planner extracts page_url + container
+    # per step (observed, never invented); the Generator scopes locators when a step
+    # carries a container.
+    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
+    assert "page_url" in planner_md
+    assert "container" in planner_md
+    assert "never invented" in planner_md
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    assert "container" in generator_md
+    assert "page.getByRole('dialog')" in generator_md
+
+
 def test_heal_message_includes_intent_plan_and_notes():
     # Path A: the heal message must surface the original intent, the plan's verified selectors,
     # and the Planner's notes — not just the failing code + error.
@@ -191,6 +204,56 @@ def test_heal_message_second_attempt_lists_prior_changes():
     assert "Previous heal attempts" in msg
     assert "1. added exact:true to the Add button locator" in msg
     assert "Do NOT undo a previous attempt's change" in msg
+
+
+def _plan_with_page_context():
+    return models.TestPlan(
+        test_case_key="QA-8",
+        title="Invite member",
+        target_url="https://staging.example.internal",
+        steps=[
+            models.PlanStep(
+                action="click Add in the invite dialog",
+                target_selector="getByRole('button', { name: 'Add', exact: true })",
+                page_url="https://staging.example.internal/users",
+                container="dialog 'Create user'",
+            )
+        ],
+    )
+
+
+def test_generation_message_carries_step_page_context():
+    # The plan JSON is the Generator's whole world view — the distilled context must
+    # be present there for the scoping rule in generator.md to act on.
+    msg = generator_mod._build_generation_message(_plan_with_page_context())
+    assert "dialog 'Create user'" in msg
+    assert "https://staging.example.internal/users" in msg
+
+
+def test_heal_message_shows_plan_time_page_context():
+    case = models.ManualTestCase(key="QA-8", title="Invite member", steps=["click Add"])
+    test = models.GeneratedTest(file_name="QA-8.spec.ts", code="// spec", description="x")
+    failure = models.TestRunResult(
+        status="failed", stdout="", stderr="boom",
+        error_message="strict mode violation: resolved 2 elements",
+    )
+    msg = healer_mod._build_heal_message(test, failure, _plan_with_page_context(), case)
+    assert "container (observed at plan time): dialog 'Create user'" in msg
+    assert "page: https://staging.example.internal/users" in msg
+
+
+def test_plan_step_page_context_is_optional():
+    # Old plan JSON (pre-page-context) must still validate; defaults are None.
+    plan = models.TestPlan.model_validate(
+        {
+            "test_case_key": "QA-1",
+            "title": "Login",
+            "target_url": "https://staging.example.internal",
+            "steps": [{"action": "log in"}],
+        }
+    )
+    assert plan.steps[0].page_url is None
+    assert plan.steps[0].container is None
 
 
 def test_healer_prompt_allows_intent_reconciliation():
