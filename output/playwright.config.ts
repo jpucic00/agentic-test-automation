@@ -18,7 +18,10 @@ export default defineConfig({
     testIdAttribute: 'id',
     headless: true,
     ignoreHTTPSErrors: true,
-    trace: 'on-first-retry',
+    // retain-on-failure, NOT on-first-retry: retries stay 0 (the Healer owns retries),
+    // so an on-first-retry trace would never be produced. Failed runs leave a
+    // test-results/**/trace.zip that the runner surfaces as TestRunResult.trace_path.
+    trace: 'retain-on-failure',
   },
   retries: 0, // we handle retries via the Healer
   reporter: [['json'], ['list']],

@@ -111,6 +111,25 @@ def test_mr_description_no_summary_recorded_when_heals_but_empty_summaries(cfg, 
     assert "- (no summary recorded)" in desc
 
 
+def test_mr_description_renders_trace_path_when_present(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(
+        _generated(), _plan(), "QA-1",
+        final_status="failed",
+        trace_path="output/test-results/QA-1-login/trace.zip",
+    )
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "Playwright trace" in desc
+    assert "output/test-results/QA-1-login/trace.zip" in desc
+
+
+def test_mr_description_omits_trace_line_without_trace(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1", final_status="passed")
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "Playwright trace" not in desc
+
+
 def test_branch_name_random_suffix_shape_and_uniqueness(cfg, monkeypatch):
     monkeypatch.delenv("CI_JOB_ID", raising=False)
     client, project = _client(monkeypatch, cfg)

@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from pathlib import Path
 
 from .config import Config
 from .models import GeneratedTest, TestRunResult
@@ -106,7 +107,22 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
         stderr=stderr,
         failed_test=failed_test,
         error_message=error_message,
+        trace_path=_find_trace(config.output_dir),
     )
+
+
+def _find_trace(output_dir: Path) -> str | None:
+    """Path of the newest ``trace.zip`` under ``output/test-results``, if any.
+
+    Playwright (``trace: 'retain-on-failure'``) writes a trace per failed test and
+    clears ``test-results/`` at the start of every run, so any trace found here
+    belongs to the run that just finished.
+    """
+    results_dir = output_dir / "test-results"
+    if not results_dir.is_dir():
+        return None
+    traces = sorted(results_dir.rglob("trace.zip"), key=lambda p: p.stat().st_mtime)
+    return str(traces[-1]) if traces else None
 
 
 def _parse_failure(stdout: str) -> tuple[str | None, str | None]:

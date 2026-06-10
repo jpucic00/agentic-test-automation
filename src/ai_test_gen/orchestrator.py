@@ -116,12 +116,15 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             config.tests_dir / test.file_name,
             config.plans_dir / f"{issue_key}.json",
         )
-        return {
+        summary = {
             "issue_key": issue_key,
             "status": result.status,
             "heal_attempts": heal_attempts,
             "mr_url": None,
         }
+        if result.trace_path:
+            summary["trace_path"] = result.trace_path
+        return summary
 
     logger.info("[%s] Opening GitLab MR", issue_key)
     try:
@@ -134,6 +137,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             heal_summaries=heal_summaries,
             heal_attempts=heal_attempts,
             final_status=result.status,
+            trace_path=result.trace_path,
         )
     except Exception as exc:
         # GitLab/auth/network failure must not discard the run: the generated test and plan
@@ -154,12 +158,15 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         }
     logger.info("[%s] MR opened: %s", issue_key, mr_url)
 
-    return {
+    summary = {
         "issue_key": issue_key,
         "status": result.status,
         "heal_attempts": heal_attempts,
         "mr_url": mr_url,
     }
+    if result.trace_path:
+        summary["trace_path"] = result.trace_path
+    return summary
 
 
 def plan_json_with_context_hash(plan: TestPlan, config: Config) -> str:

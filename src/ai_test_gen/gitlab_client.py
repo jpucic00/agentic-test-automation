@@ -58,6 +58,7 @@ class GitLabClient:
         heal_summaries: list[str] | None = None,
         heal_attempts: int = 0,
         final_status: str | None = None,
+        trace_path: str | None = None,
     ) -> str:
         """Create a branch, commit the test + plan JSON, open an MR. Returns the MR web URL.
 
@@ -102,6 +103,7 @@ class GitLabClient:
                         heal_summaries=heal_summaries,
                         heal_attempts=heal_attempts,
                         final_status=final_status,
+                        trace_path=trace_path,
                     ),
                     "labels": MR_LABELS,
                     "remove_source_branch": True,
@@ -130,16 +132,23 @@ def _build_mr_description(
     heal_summaries: list[str] | None,
     heal_attempts: int,
     final_status: str | None,
+    trace_path: str | None = None,
 ) -> str:
     healer_block = ""
     if heal_attempts > 0:
         bullets = "\n".join(f"- {s}" for s in (heal_summaries or [])) or "- (no summary recorded)"
         healer_block = f"\n### Healer attempts ({heal_attempts})\n{bullets}\n"
 
+    # The trace is a local artifact on the machine that ran the pipeline (not committed);
+    # pointing at it saves the reviewer of a red MR from re-running to get a trace.
+    trace_line = ""
+    if trace_path:
+        trace_line = f"\n**Playwright trace (local artifact on the runner):** `{trace_path}`"
+
     return f"""## AI-Generated Playwright Test
 
 **Source Jira ticket:** `{key}`
-**Final run status:** `{final_status or "unknown"}` · **Heal attempts:** {heal_attempts}
+**Final run status:** `{final_status or "unknown"}` · **Heal attempts:** {heal_attempts}{trace_line}
 
 ### What this test does
 {test.description}

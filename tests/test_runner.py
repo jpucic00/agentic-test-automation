@@ -135,3 +135,22 @@ def test_run_test_failed_empty_output_uses_default_message(cfg, monkeypatch):
     result = asyncio.run(runner.run_test(cfg, _generated()))
     assert result.status == "failed"
     assert result.error_message == "Playwright run failed (no JSON report produced)"
+
+
+def test_run_test_failed_surfaces_trace_path(cfg, monkeypatch):
+    # trace: 'retain-on-failure' leaves test-results/**/trace.zip; the runner must
+    # surface the newest one so the MR/result summary can point a reviewer at it.
+    trace = cfg.output_dir / "test-results" / "QA-1-login" / "trace.zip"
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    trace.write_bytes(b"zip")
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=b"boom"))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.trace_path == str(trace)
+
+
+def test_run_test_failed_without_trace_has_none(cfg, monkeypatch):
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=b"boom"))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.trace_path is None
