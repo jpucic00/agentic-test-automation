@@ -61,6 +61,26 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         plan = await plan_test_case(config, test_case)
         plan_json = plan_json_with_context_hash(plan, config)
         (config.plans_dir / f"{issue_key}.json").write_text(plan_json)
+
+        if not plan.steps:
+            # planner.md instructs the Planner to REFUSE unclear/unsafe cases (forbidden
+            # routes, PII, production) by returning a plan with no steps and the reason
+            # in notes. Nothing runnable exists — generating, running, healing, or
+            # opening an MR for a stepless test would only burn heal attempts on junk.
+            # The plan JSON is already on disk for audit; surface the refusal instead.
+            logger.warning(
+                "[%s] Planner returned no steps (refusal) — stopping. Notes: %s",
+                issue_key,
+                plan.notes or "(none)",
+            )
+            return {
+                "issue_key": issue_key,
+                "status": "refused",
+                "heal_attempts": 0,
+                "mr_url": None,
+                "notes": plan.notes,
+            }
+
         logger.info("[%s] Generating Playwright code", issue_key)
         test = await generate_test(config, plan)
     except Exception as exc:

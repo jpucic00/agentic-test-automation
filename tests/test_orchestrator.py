@@ -210,6 +210,38 @@ def test_context_hash_changes_with_context_content(cfg, monkeypatch):
     assert hash_a != hash_b
 
 
+def test_empty_plan_short_circuits_as_refused(cfg, monkeypatch):
+    # planner.md's refusal contract: empty steps + reason in notes. Nothing runnable
+    # exists, so generation/run/heal/MR must all be skipped — not burn heal attempts
+    # on a stepless test and open a junk MR.
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    refusal = models.TestPlan(
+        test_case_key="QA-1",
+        title="Login",
+        target_url="https://staging.example.internal",
+        steps=[],
+        notes="touches forbidden /admin/billing — refusing per project_map.md",
+    )
+    monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=refusal))
+    gen = AsyncMock()
+    run = AsyncMock()
+    heal = AsyncMock()
+    monkeypatch.setattr(orchestrator, "generate_test", gen)
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "refused"
+    assert out["heal_attempts"] == 0
+    assert out["mr_url"] is None
+    assert "forbidden" in out["notes"]  # the Planner's reason is surfaced
+    gen.assert_not_called()
+    run.assert_not_called()
+    heal.assert_not_called()
+    gl.open_mr.assert_not_called()
+    assert (cfg.plans_dir / "QA-1.json").exists()  # refusal plan persisted for audit
+
+
 def test_no_report_failure_retries_generator_not_healer(cfg, monkeypatch):
     # did_run=False = compile/collection error: the Generator gets ONE retry with the
     # error; the browser-driving Healer is never invoked for code that never ran.
