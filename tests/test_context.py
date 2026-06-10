@@ -5,8 +5,10 @@ into the fixture's tmp_path-backed paths per test.
 """
 from __future__ import annotations
 
+import logging
+
 from ai_test_gen.agents._context import (
-    _safe_read,
+    _load_context_file,
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
@@ -16,20 +18,58 @@ _BASE_PROMPT = "# Base agent prompt"
 _CONTEXT_TEXT = "PROJECT-CONTEXT-MARKER conventions go here."
 _MAP_TEXT = "APPLICATION-MAP-MARKER routes go here."
 
+_CONTEXT_LOGGER = "ai_test_gen.agents._context"
+
 
 def _write_context_files(cfg):
     cfg.project_context_path.write_text(_CONTEXT_TEXT)
     cfg.project_map_path.write_text(_MAP_TEXT)
 
 
-def test_safe_read_returns_text_when_present(tmp_path):
+def test_load_context_file_returns_text_when_present(tmp_path):
     p = tmp_path / "f.md"
     p.write_text("hello")
-    assert _safe_read(p) == "hello"
+    assert _load_context_file(p) == "hello"
 
 
-def test_safe_read_returns_placeholder_when_missing(tmp_path):
-    assert _safe_read(tmp_path / "missing.md") == "(no project context provided)"
+def test_load_context_file_returns_placeholder_when_missing(tmp_path):
+    assert _load_context_file(tmp_path / "missing.md") == "(no project context provided)"
+
+
+def test_html_comments_stripped_from_assembled_prompt(cfg):
+    # Comments are author guidance ("fill this in"), not app facts — to a model they
+    # read as instructions with system-prompt authority, so they must never be injected.
+    cfg.project_context_path.write_text(
+        "real rule A\n<!-- GUIDANCE-MARKER: replace every\nplaceholder below -->\nreal rule B"
+    )
+    cfg.project_map_path.write_text(_MAP_TEXT)
+    out = assemble_system_prompt(cfg, _BASE_PROMPT, include_map=True)
+    assert "GUIDANCE-MARKER" not in out
+    assert "real rule A" in out
+    assert "real rule B" in out
+
+
+def test_template_placeholders_trigger_warning_with_file_and_count(cfg, caplog):
+    # Both template generations must be detected: legacy [REPLACE/[EXAMPLE markers and
+    # the current <e.g. …> / header style. Markers inside comments count too (raw scan).
+    cfg.project_context_path.write_text(
+        "[REPLACE WITH YOUR DESCRIPTION]\nEmail pattern: <e.g. qa@example.com>"
+    )
+    cfg.project_map_path.write_text(_MAP_TEXT)
+    with caplog.at_level(logging.WARNING, logger=_CONTEXT_LOGGER):
+        assemble_system_prompt(cfg, _BASE_PROMPT, include_map=True)
+    warnings = [r for r in caplog.records if "placeholder" in r.getMessage()]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "project_context.md" in msg
+    assert "2 template placeholder marker(s)" in msg
+
+
+def test_filled_files_produce_no_placeholder_warning(cfg, caplog):
+    _write_context_files(cfg)  # realistic filled content, no markers
+    with caplog.at_level(logging.WARNING, logger=_CONTEXT_LOGGER):
+        assemble_system_prompt(cfg, _BASE_PROMPT, include_map=True)
+    assert not [r for r in caplog.records if "placeholder" in r.getMessage()]
 
 
 def test_assemble_includes_context_and_map_when_include_map_true(cfg):

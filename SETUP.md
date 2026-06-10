@@ -156,6 +156,13 @@ cp project_map.example.md   project_map.md          # routes, auth/login flow, k
 `project_context.md` goes to every agent; `project_map.md` goes only to the browser-driving agents
 (Planner, Healer). Both templates spell out the level of detail to provide.
 
+The loader strips HTML comments (`<!-- … -->`) before injecting these files — write guidance for
+humans in comments freely; it never reaches the model. If a file still contains template
+placeholders (the `<e.g. …>` / `<APP NAME>` style, or legacy `[REPLACE …]` markers), every run logs
+a **warning** naming the file: the agents are then being prompted with the template's fictional
+examples instead of your app's real conventions, and plan quality will reflect that. Fill the files
+in until the warning disappears.
+
 **Authentication is context-driven — no saved session.** Each agent, and each generated test, logs in
 live as the role the scenario needs, using the disposable credentials and login flow you record in
 `project_context.md` (test users) and `project_map.md` (auth flow — e.g. a Keycloak SSO form). There is no
