@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
@@ -20,6 +21,7 @@ from ..llm import build_openai_model
 from ..models import ManualTestCase, TestPlan
 from ..playwright_mcp import build_playwright_mcp
 from ._context import agent_request_limit, agent_retries, assemble_system_prompt
+from ._history import trim_stale_snapshots
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -39,6 +41,9 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         toolsets=[mcp],
         system_prompt=system_prompt,
         retries=agent_retries(),  # room to recover from transient MCP tool errors
+        # Long explorations accumulate dozens of stale page snapshots; keep only the
+        # newest few so the model stays out of its long-context degradation zone.
+        capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
 
 
