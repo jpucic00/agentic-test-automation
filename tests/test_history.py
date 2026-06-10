@@ -24,7 +24,7 @@ from ai_test_gen.agents._history import (
     trim_stale_snapshots,
 )
 
-_STUB_MARKER = "[older page snapshot trimmed"
+_STUB_MARKER = "[page snapshot omitted]"
 _HISTORY_LOGGER = "ai_test_gen.agents._history"
 
 
@@ -90,10 +90,12 @@ def test_keeps_latest_n_and_stubs_older(monkeypatch):
     assert _kept_ids(out) == {"3", "4"}
     assert _stubbed_ids(out) == {"0", "1", "2"}
     # The action confirmation survives the trim — only the snapshot body is gone —
-    # and the stub points forward instead of inviting re-verification.
-    stub = next(p for p in _tool_returns(out) if p.tool_call_id == "0")
-    assert str(stub.content).startswith("Clicked step 0")
-    assert "re-capture only if you changed the page since" in str(stub.content)
+    # and the stub is instruction-free: wording steers the model (re-verify loops
+    # OR stop-verifying-and-fabricate), so it must state facts only.
+    stub_text = str(next(p for p in _tool_returns(out) if p.tool_call_id == "0").content)
+    assert stub_text.startswith("Clicked step 0")
+    assert "re-capture" not in stub_text
+    assert "most recent" not in stub_text
 
 
 def test_no_trim_when_at_or_under_keep(monkeypatch):
@@ -242,13 +244,23 @@ def test_tripwire_warning_when_anchor_count_excessive(monkeypatch, caplog):
 
 def test_snapshot_history_keep_env_and_default(monkeypatch):
     monkeypatch.delenv("SNAPSHOT_HISTORY_KEEP", raising=False)
-    assert snapshot_history_keep() == 2
+    assert snapshot_history_keep() is None  # trimming disabled by default
     monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "5")
     assert snapshot_history_keep() == 5
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "-1")  # clamped
+    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "-1")  # clamped, but enabled
     assert snapshot_history_keep() == 0
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "x")  # invalid -> default
-    assert snapshot_history_keep() == 2
+    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "x")  # invalid -> disabled (safe)
+    assert snapshot_history_keep() is None
+
+
+def test_trimming_disabled_by_default_leaves_history_untouched(monkeypatch):
+    # The opt-in contract: without SNAPSHOT_HISTORY_KEEP set, the processor is a
+    # pure pass-through — same object, no stubs — regardless of history size.
+    monkeypatch.delenv("SNAPSHOT_HISTORY_KEEP", raising=False)
+    monkeypatch.delenv("ANCHOR_SNAPSHOTS", raising=False)
+    messages = _history(20)
+    assert trim_stale_snapshots(messages) is messages
+    assert _stubbed_ids(messages) == set()
 
 
 def test_anchor_snapshots_enabled_env_and_default(monkeypatch):

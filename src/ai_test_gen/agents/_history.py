@@ -1,14 +1,14 @@
 """History processor: trim stale accessibility snapshots from browser-agent runs.
 
-Every Playwright MCP browser tool result embeds a full page snapshot (the YAML
-accessibility tree). pydantic-ai replays the complete message history on every
-model request, so a Planner/Healer exploration at up to ``AGENT_REQUEST_LIMIT``
-round-trips drags dozens of large snapshots along — almost all stale the moment
-the agent navigates on. That pushes the conversation deep into the token range
-where mid-tier models degrade (the same heuristic behind the ~800-word prompt
-budget) and inflates gateway cost per run.
+**OPT-IN EXPERIMENT — disabled by default.** Trimming was built to cut the cost of
+replaying dozens of large page snapshots (every Playwright MCP browser tool result
+embeds the full YAML accessibility tree), but live runs showed the mid-tier
+reasoning model losing coherence with it enabled: giving up exploration early,
+skipping pages, and fabricating plan steps. Until a controlled A/B proves a net
+win, the default is the full untrimmed history; set ``SNAPSHOT_HISTORY_KEEP`` to a
+number to enable trimming for an experiment.
 
-Two retention rules, two different jobs:
+When ENABLED — two retention rules, two different jobs:
 
 - **Transient window** (``SNAPSHOT_HISTORY_KEEP``, default 2): the newest snapshots,
   i.e. "what's in front of me right now". Deliberately small and independent of
@@ -43,13 +43,10 @@ logger = logging.getLogger(__name__)
 
 # Playwright MCP marks the accessibility tree section of every browser tool result.
 _SNAPSHOT_MARKER = "Page Snapshot"
-# Forward-pointing on purpose: an "only the most recent are kept" stub reads to a
-# deliberating model as "your history is unreliable — re-verify", inviting recapture
-# loops. This wording tells it the newest snapshots are authoritative instead.
-_STUB = (
-    "[older page snapshot trimmed — the most recent snapshots reflect the current "
-    "page state; re-capture only if you changed the page since]"
-)
+# Deliberately instruction-free: stub wording steers the model. "Only the most
+# recent are kept" provoked re-verification loops; "re-capture only if you changed
+# the page" made it stop verifying and fabricate. State what happened, nothing more.
+_STUB = "[page snapshot omitted]"
 
 # Tool returns that must NEVER be trimmed, regardless of size or content.
 _PROTECTED_TOOLS = ("browser_generate_locator",)
@@ -65,12 +62,13 @@ _DIALOG_RE = re.compile(r"^\s*-\s+(?:alert)?dialog\b", re.MULTILINE)
 _ANCHOR_TRIPWIRE = 10
 
 
-def snapshot_history_keep(default: int = 2) -> int:
-    """Size of the transient window: newest page snapshots kept verbatim.
+def snapshot_history_keep(default: int | None = None) -> int | None:
+    """Transient-window size, or ``None`` when trimming is disabled (the default).
 
-    Override via the ``SNAPSHOT_HISTORY_KEEP`` env var. Covers only "what's in
-    front of me right now" — milestone pages are retained by anchors instead, so
-    this stays small even at high reasoning effort.
+    Trimming is an opt-in experiment: set the ``SNAPSHOT_HISTORY_KEEP`` env var to
+    a number to enable it (that many newest snapshots kept verbatim, plus anchors).
+    Unset or unparseable → ``None`` → the history passes through untouched, which is
+    the proven-safe behavior for the mid-tier gateway models.
     """
     raw = os.environ.get("SNAPSHOT_HISTORY_KEEP")
     if raw is None:
@@ -96,13 +94,16 @@ def anchor_snapshots_enabled(default: bool = True) -> bool:
 def trim_stale_snapshots(messages: list[ModelMessage]) -> list[ModelMessage]:
     """Truncate stale snapshot-bearing browser tool returns.
 
-    Keeps the newest ``SNAPSHOT_HISTORY_KEEP`` snapshots (transient window) plus all
-    anchor snapshots (latest state per ``(page URL, dialog-open?)`` of every page a
-    locator was captured on). Pure with respect to its input: returns new
-    message/part objects for anything it changes. Idempotent — stubbed parts no
-    longer carry the snapshot marker and are skipped on later passes.
+    No-op unless ``SNAPSHOT_HISTORY_KEEP`` is set (trimming is opt-in). When enabled,
+    keeps the newest N snapshots (transient window) plus all anchor snapshots (latest
+    state per ``(page URL, dialog-open?)`` of every page a locator was captured on).
+    Pure with respect to its input: returns new message/part objects for anything it
+    changes. Idempotent — stubbed parts no longer carry the snapshot marker and are
+    skipped on later passes.
     """
     keep = snapshot_history_keep()
+    if keep is None:
+        return messages  # trimming disabled (the default) — full history untouched
 
     snapshot_locs: list[tuple[tuple[int, int], ToolReturnPart]] = []
     locator_locs: list[tuple[int, int]] = []
