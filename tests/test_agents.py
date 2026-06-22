@@ -54,9 +54,9 @@ def test_planner_attaches_playwright_mcp(cfg, monkeypatch):
     calls: list[object] = []
     real = planner_mod.build_playwright_mcp
 
-    def spy(config, storage_state=None):
+    def spy(config, storage_state=None, *, process_tool_call=None):
         calls.append(storage_state)
-        return real(config, storage_state=storage_state)
+        return real(config, storage_state=storage_state, process_tool_call=process_tool_call)
 
     monkeypatch.setattr(planner_mod, "build_playwright_mcp", spy)
     build_planner(cfg)

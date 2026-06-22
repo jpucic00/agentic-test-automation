@@ -33,6 +33,7 @@ from ._context import (
     reasoning_effort,
 )
 from ._history import trim_stale_snapshots
+from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
 from .vision import ask_vision
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,9 @@ def _register_inspect_screen(
         opened, a modal/overlay is covering the page, a success/error toast appeared, or whether
         an element is actually visible. FIRST call browser_take_screenshot to capture the current
         page, THEN call this with a specific question, e.g. "Is a modal dialog covering the page?"
-        or "Did a success toast appear?". Returns a short text description. It NEVER returns a
-        selector — keep using browser_generate_locator for targeting.
+        or "Did a success toast appear?". Returns a short text description. Ask ONLY about visible
+        state — never ask it for an id, data-testid, selector, or locator (it cannot read those from
+        pixels); capture every selector with browser_generate_locator instead.
         """
         nonlocal calls_made
         if calls_made >= max_calls:
@@ -154,7 +156,20 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         base_prompt += "\n\n" + (PROMPTS_DIR / "planner_vision.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
-    mcp = build_playwright_mcp(config, storage_state=storage_state)
+    # Optional locator→vision steer: after N consecutive browser_generate_locator failures it
+    # swaps the bland MCP error for a ModelRetry pushing the Planner to screenshot +
+    # inspect_screen and re-orient. Gated on the same flag as inspect_screen — vision off ⇒
+    # hook is None, toolset unchanged. Planner-only; the Healer has no inspect_screen tool.
+    steer: LocatorVisionSteer | None = None
+    if config.vision_max_calls > 0:
+        steer = LocatorVisionSteer(agent_retries())
+        logger.info(
+            "Planner locator-failure vision steer ENABLED: after %d consecutive %s failure(s) → "
+            "browser_take_screenshot + inspect_screen",
+            steer.steer_after,
+            LOCATOR_TOOL,
+        )
+    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=steer)
 
     # Optional reasoning effort (PLANNER_REASONING_EFFORT) — sent only when set, and
     # only trustworthy after step0d proved the gateway honors it (see _context helper).

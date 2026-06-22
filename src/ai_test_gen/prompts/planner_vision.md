@@ -16,6 +16,9 @@ How: call `browser_take_screenshot`, then `inspect_screen("…")` as the very ne
 latest screenshot, so don't do other steps in between) with a narrow question — e.g. "Is the user
 menu dropdown open?", "Did the dialog close?", "Did the form submit, or is an error shown?".
 
-`inspect_screen` is for UNDERSTANDING the page only — it NEVER returns a selector; keep capturing
-every locator with `browser_generate_locator`. Calls count against a per-run budget, so spend them
-on these checkpoints (opening/closing menus & dialogs, submitting) rather than idle looks.
+`inspect_screen` is for UNDERSTANDING the page only — is it open/closed, did it submit, is something
+covering it, are you stuck. It NEVER returns a selector, and you must NEVER ask it for one: do not ask
+for an `id`, a `data-testid`, a CSS/HTML selector, or a locator. EVERY selector comes only from
+`browser_generate_locator` (Playwright reads the DOM; vision only reads pixels, and pixels carry no
+ids). Calls count against a per-run budget, so spend them on these checkpoints (opening/closing menus &
+dialogs, submitting) rather than idle looks or selector hunts.

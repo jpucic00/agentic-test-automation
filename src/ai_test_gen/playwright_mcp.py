@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai import RunContext
-from pydantic_ai.mcp import MCPToolset, StdioTransport
+from pydantic_ai.mcp import MCPToolset, ProcessToolCallback, StdioTransport
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -109,7 +109,12 @@ def _agent_safe_tool(ctx: RunContext[Any], tool: ToolDefinition) -> bool:
     return not any(marker in tool.name for marker in _BLOCKED_TOOL_MARKERS)
 
 
-def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> AbstractToolset[Any]:
+def build_playwright_mcp(
+    config: Config,
+    storage_state: Path | None = None,
+    *,
+    process_tool_call: ProcessToolCallback | None = None,
+) -> AbstractToolset[Any]:
     """Create an ``MCPToolset`` that runs Playwright MCP over stdio.
 
     Args:
@@ -119,6 +124,11 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
             for a pre-authenticated session. The pipeline now uses context-driven
             login (agents log in live from ``project_context.md`` creds), so this is
             ``None`` in normal runs; kept for manual/debug session reuse.
+        process_tool_call: optional pydantic-ai hook wrapping every MCP tool call
+            (``MCPToolset.process_tool_call``). The Planner passes a
+            ``LocatorVisionSteer`` here to steer itself to vision after repeated
+            ``browser_generate_locator`` failures; the Healer and other callers leave
+            it ``None`` (no interception, behaviour unchanged).
 
     Returns an ``MCPToolset`` to attach via ``Agent(model, toolsets=[...])``.
 
@@ -157,6 +167,9 @@ def build_playwright_mcp(config: Config, storage_state: Path | None = None) -> A
         # all absolute, so changing cwd is safe.
         StdioTransport(command="node", args=args, cwd=str(MCP_OUTPUT_DIR), keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
+        # Optional per-call hook (Planner's locator→vision steer). None for the Healer / default
+        # callers, so their tool calls dispatch straight to the server exactly as before.
+        process_tool_call=process_tool_call,
     )
     # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.
     return toolset.filtered(_agent_safe_tool)

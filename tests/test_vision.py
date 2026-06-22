@@ -255,7 +255,27 @@ def test_planner_prompt_has_vision_block_only_when_enabled(cfg, monkeypatch):
 
 @pytest.mark.usefixtures("cfg")
 def test_vision_prompt_fragment_forbids_selectors():
-    # The gated fragment must keep the "vision never yields a selector" guardrail.
+    # The gated fragment must keep the "vision never yields a selector" guardrail AND forbid the
+    # Planner from ASKING vision for ids/selectors (vision is diagnostic only).
     fragment = (planner_mod.PROMPTS_DIR / "planner_vision.md").read_text()
     assert "browser_generate_locator" in fragment
     assert "NEVER" in fragment or "never" in fragment
+    assert "data-testid" in fragment  # names the thing the Planner must not ask vision for
+    assert "never ask it" in fragment.lower() or "must never ask" in fragment.lower()
+
+
+def test_vision_system_prompt_redirects_selector_requests():
+    # Backstop: asked for an id/selector, the vision model must redirect to browser_generate_locator
+    # rather than invent one.
+    system_prompt = vision_mod._SYSTEM_PROMPT
+    assert "browser_generate_locator" in system_prompt
+    assert "data-testid" in system_prompt
+
+
+def test_inspect_screen_docstring_forbids_selector_questions(cfg, monkeypatch):
+    # The tool's own docstring (what the Planner reads to decide how to call it) must forbid asking
+    # for a selector and redirect to browser_generate_locator.
+    _, tool = _tool_with_fake_vision(cfg, monkeypatch)
+    doc = (tool.__doc__ or "").lower()
+    assert "never ask it" in doc
+    assert "browser_generate_locator" in doc
