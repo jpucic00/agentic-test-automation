@@ -148,3 +148,72 @@ def test_orphan_branch_deleted_when_commit_fails(cfg, monkeypatch):
         client.open_mr(_generated(), _plan(), "QA-1")
     created_branch = project.branches.create.call_args[0][0]["branch"]
     project.branches.delete.assert_called_once_with(created_branch)
+
+
+def test_open_mr_commits_one_commit_per_revision(cfg, monkeypatch):
+    # The per-attempt history -> one commit each, all on the same file path, so the MR's
+    # commit view shows the diff from one attempt to the next.
+    client, project = _client(monkeypatch, cfg)
+    revisions = [
+        gitlab_client.TestRevision(message="[AI] QA-1: initial generated test", code="// v1"),
+        gitlab_client.TestRevision(message="[AI] QA-1: heal attempt 1", code="// v2"),
+        gitlab_client.TestRevision(message="[AI] QA-1: heal attempt 2", code="// v3"),
+    ]
+    client.open_mr(_generated(), _plan(), "QA-1", revisions=revisions)
+
+    calls = project.commits.create.call_args_list
+    assert len(calls) == 3  # one commit per attempt
+
+    # First commit CREATES the test file + the plan JSON.
+    first = calls[0].args[0]
+    assert first["commit_message"] == "[AI] QA-1: initial generated test"
+    first_actions = {a["file_path"]: a for a in first["actions"]}
+    assert set(first_actions) == {
+        "tests/generated/QA-1-login.spec.ts",
+        "tests/generated/_plans/QA-1.json",
+    }
+    assert first_actions["tests/generated/QA-1-login.spec.ts"]["action"] == "create"
+    assert first_actions["tests/generated/QA-1-login.spec.ts"]["content"] == "// v1"
+
+    # Later commits UPDATE the same test path (plan is not re-committed), one per attempt.
+    second = calls[1].args[0]
+    assert second["commit_message"] == "[AI] QA-1: heal attempt 1"
+    assert second["actions"] == [
+        {"action": "update", "file_path": "tests/generated/QA-1-login.spec.ts", "content": "// v2"}
+    ]
+    assert calls[2].args[0]["actions"][0]["content"] == "// v3"
+
+
+def test_open_mr_skips_identical_consecutive_revision(cfg, monkeypatch):
+    # A heal that returns code identical to the previous attempt makes no commit (GitLab
+    # rejects an empty diff); the surrounding attempts still commit.
+    client, project = _client(monkeypatch, cfg)
+    revisions = [
+        gitlab_client.TestRevision(message="m1", code="// same"),
+        gitlab_client.TestRevision(message="m2", code="// same"),  # no change -> skipped
+        gitlab_client.TestRevision(message="m3", code="// different"),
+    ]
+    client.open_mr(_generated(), _plan(), "QA-1", revisions=revisions)
+    messages = [c.args[0]["commit_message"] for c in project.commits.create.call_args_list]
+    assert messages == ["m1", "m3"]
+
+
+def test_open_mr_without_revisions_makes_one_commit(cfg, monkeypatch):
+    # Back-compat: no revisions -> a single commit with the test code + the plan JSON.
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1")
+    assert project.commits.create.call_count == 1
+
+
+def test_orphan_branch_deleted_when_a_later_commit_fails(cfg, monkeypatch):
+    # Cleanup must also fire when a NON-first commit in the revision chain fails.
+    client, project = _client(monkeypatch, cfg)
+    project.commits.create.side_effect = [MagicMock(), RuntimeError("gitlab 500 on commit 2")]
+    revisions = [
+        gitlab_client.TestRevision(message="m1", code="// v1"),
+        gitlab_client.TestRevision(message="m2", code="// v2"),
+    ]
+    with pytest.raises(RuntimeError):
+        client.open_mr(_generated(), _plan(), "QA-1", revisions=revisions)
+    created_branch = project.branches.create.call_args[0][0]["branch"]
+    project.branches.delete.assert_called_once_with(created_branch)

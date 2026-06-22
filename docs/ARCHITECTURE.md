@@ -68,7 +68,7 @@ flowchart TB
 | **Generator Agent** | `TestPlan` | `GeneratedTest` (`.spec.ts`) | devstral-small-2 · no browser |
 | **Test Runner** | `GeneratedTest` | `TestRunResult` (pass/fail + trace) | — (runs Playwright) |
 | **Healer Agent** | failed test + error + plan + intent | `HealedTest` (reconciled fix) | gpt-oss-120b · **MCP** |
-| **GitLab Client** | final test + plan | open MR (branch + commit) | — |
+| **GitLab Client** | per-attempt test revisions + plan | open MR (branch + one commit per attempt) | — |
 
 All three agents and the glue around them — Test Runner, GitLab Client, Orchestrator — are built and unit-tested offline and wired into one end-to-end run. A live run additionally needs the model gateway, the staging app, and the Jira/Xray tenant.
 
@@ -144,8 +144,8 @@ data models, the Xray client, Playwright MCP with context-driven login, the thre
 prompts, the **Test Runner** (subprocess + hard timeout), the **GitLab MR creator** (collision-safe branch,
 heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run →
 Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean, each
-iteration saved to its own `output/tests/` file while the MR commits the final code under the first
-iteration's name). Every
+iteration saved to its own `output/tests/` file, and the MR committing one revision per attempt to a single
+file path under the first iteration's name so attempt-to-attempt diffs are visible in GitLab). Every
 piece is unit-tested offline with Pydantic AI's `TestModel`. It also ships as a container — a
 [`Dockerfile`](../Dockerfile) (official Playwright base, non-root `appuser`, pinned `uv`/`npm` deps) and
 [`docker-compose.yml`](../docker-compose.yml) run it standalone, including a local mode without GitLab

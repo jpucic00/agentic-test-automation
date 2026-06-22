@@ -14,10 +14,12 @@ Improvements over the guide's template:
   regenerated every run) is emptied at the start of each run so it doesn't accumulate.
 - **Heal transparency.** Every Healer ``changes_summary`` is collected and rendered into
   the MR; an MR is opened even when healing is exhausted, so a human always reviews.
-- **Per-iteration artifacts.** The first generated spec keeps its filename; the compile
-  retry and each heal attempt are written to their own sibling files
+- **Per-iteration artifacts + per-attempt MR commits.** The first generated spec keeps its
+  filename; the compile retry and each heal attempt are written to their own sibling files
   (``<name>.healer-attempt-N.spec.ts``) so no iteration overwrites another and the full
-  history stays on disk. The MR commits only the final code, under the original filename.
+  history stays on disk. The MR then commits one revision per attempt (initial → optional
+  regen → each heal) to a single committed file path, so a reviewer can diff one attempt
+  against the next in GitLab's commit view.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ from .agents.generator import generate_test
 from .agents.healer import heal_test
 from .agents.planner import plan_test_case
 from .config import Config, load_config
-from .gitlab_client import GitLabClient
+from .gitlab_client import GitLabClient, TestRevision
 from .models import GeneratedTest, TestPlan
 from .test_runner import run_test
 from .xray_client import XrayClient
@@ -103,10 +105,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
 
     # The Generator owns the canonical filename. Every later iteration (the compile-retry
     # regeneration, each heal attempt) is written to its OWN sibling file so nothing
-    # overwrites the first iteration and the full history stays on disk; the MR later
-    # commits only the final code, under this base name (see the open_mr call below).
+    # overwrites the first iteration and the full history stays on disk. Each iteration is
+    # ALSO captured as a `revisions` entry: the MR commits one per attempt under this base
+    # name (see the open_mr call below), so attempt-to-attempt diffs show up in GitLab.
     base_file_name = test.file_name
     description = test.description
+    revisions: list[TestRevision] = [
+        TestRevision(
+            message=_commit_message(issue_key, "initial generated test", description),
+            code=test.code,
+        )
+    ]
 
     logger.info("[%s] Running test (attempt 1)", issue_key)
     result = await run_test(config, test)
@@ -133,6 +142,14 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 file_name=_iteration_file_name(base_file_name, "regen"),
                 code=regenerated.code,
                 description=description,
+            )
+            revisions.append(
+                TestRevision(
+                    message=_commit_message(
+                        issue_key, "regenerate after compile/collection error"
+                    ),
+                    code=regenerated.code,
+                )
             )
             logger.info("[%s] Re-running regenerated test", issue_key)
             result = await run_test(config, test)
@@ -170,11 +187,19 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         heal_summaries.append(healed.changes_summary)
         # Each heal lands in its OWN file (<name>.healer-attempt-N.spec.ts). The Healer's
         # returned file_name is deliberately ignored so an attempt can never overwrite an
-        # earlier iteration; the MR commits this code under base_file_name, not this name.
+        # earlier iteration; the MR commits this code under base_file_name as its own commit.
         test = GeneratedTest(
             file_name=_iteration_file_name(base_file_name, f"healer-attempt-{heal_attempts}"),
             code=healed.code,
             description=description,
+        )
+        revisions.append(
+            TestRevision(
+                message=_commit_message(
+                    issue_key, f"heal attempt {heal_attempts}", healed.changes_summary
+                ),
+                code=healed.code,
+            )
         )
         logger.info("[%s] Re-running test", issue_key)
         result = await run_test(config, test)
@@ -203,8 +228,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         return summary
 
     logger.info("[%s] Opening GitLab MR", issue_key)
-    # The MR carries ONE file: the latest code under the original first-iteration filename.
-    # The per-attempt artifacts (<name>.healer-attempt-N.spec.ts) stay local for inspection.
+    # The MR carries ONE file path (the original first-iteration filename) but one commit
+    # per attempt (the `revisions` list), so a reviewer can diff one attempt against the
+    # next. The per-attempt artifacts (<name>.healer-attempt-N.spec.ts) stay local too.
     mr_test = GeneratedTest(
         file_name=base_file_name, code=test.code, description=description
     )
@@ -214,6 +240,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             mr_test,
             plan,
             issue_key,
+            revisions=revisions,
             plan_json=plan_json,
             heal_summaries=heal_summaries,
             heal_attempts=heal_attempts,
@@ -301,6 +328,18 @@ def _iteration_file_name(base_file_name: str, label: str) -> str:
             return f"{name[: -len(compound)]}.{label}{compound}"
     stem, dot, ext = name.rpartition(".")
     return f"{stem}.{label}.{ext}" if dot else f"{name}.{label}"
+
+
+def _commit_message(issue_key: str, label: str, detail: str | None = None) -> str:
+    """Commit message for one MR revision: a short subject, full ``detail`` in the body.
+
+    GitLab shows the subject in the commit list, so each attempt is identifiable at a
+    glance (``[AI] QA-1: heal attempt 2``); the Healer's ``changes_summary`` — which can be
+    long or multi-line — goes in the commit body where it doesn't clutter that list.
+    """
+    subject = f"[AI] {issue_key}: {label}"
+    detail = (detail or "").strip()
+    return f"{subject}\n\n{detail}" if detail else subject
 
 
 def _resolve_max_heal_attempts() -> int:

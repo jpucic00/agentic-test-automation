@@ -1,11 +1,14 @@
 """Push a generated test to GitLab as a new branch and open a merge request.
 
 Phase 1.D — tasks ``6i6kv7d`` (MR opener) + ``1ich5gw`` (heal-attempt summaries in
-the MR). Per AI_TEST_GENERATION_GUIDE.md §3.12, with two improvements:
+the MR). Per AI_TEST_GENERATION_GUIDE.md §3.12, with three improvements:
 
 - **Collision-resistant branch name** (`ai-gen/<key>-<utc>-<suffix>`): the CI job id
   when running in CI, else a short random token — two runs for the same Jira key in
   the same second won't collide.
+- **One commit per attempt**: the initial generation, the optional compile-retry, and
+  each heal are committed separately to the *same* test file path, so a reviewer can open
+  the MR's commit view and diff one attempt against the next (see ``TestRevision``).
 - **Heal-attempt transparency**: the heal count, final status, and each Healer
   ``changes_summary`` are rendered into the MR description so reviewers can spot tests
   that needed multiple rounds.
@@ -19,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import os
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import gitlab
@@ -28,6 +32,22 @@ from .config import Config
 from .models import GeneratedTest, TestPlan
 
 MR_LABELS = ["ai-generated", "qa-review-needed"]
+
+
+@dataclass(frozen=True)
+class TestRevision:
+    """One commit in the MR: a labeled revision of the generated test file.
+
+    The orchestrator produces one per code-producing attempt (initial generation, the
+    optional compile-retry regeneration, each heal). ``open_mr`` commits them in order to
+    the SAME file path, so GitLab's commit view shows the diff from one attempt to the
+    next — that's how a reviewer compares heal attempts. ``message`` is the commit message
+    (subject, optionally followed by a body); ``code`` is the full file content at that
+    attempt.
+    """
+
+    message: str
+    code: str
 
 
 class GitLabClient:
@@ -54,43 +74,43 @@ class GitLabClient:
         plan: TestPlan,
         test_case_key: str,
         *,
+        revisions: list[TestRevision] | None = None,
         plan_json: str | None = None,
         heal_summaries: list[str] | None = None,
         heal_attempts: int = 0,
         final_status: str | None = None,
         trace_path: str | None = None,
     ) -> str:
-        """Create a branch, commit the test + plan JSON, open an MR. Returns the MR web URL.
+        """Create a branch, commit one revision per attempt + the plan JSON, open an MR.
+
+        ``revisions`` is the ordered per-attempt history of the test code (initial
+        generation → optional compile-retry → each heal). Each becomes its OWN commit
+        writing the same ``tests/generated/<file>`` path, so the MR's commit view shows the
+        diff from one attempt to the next — that is how a reviewer compares heal attempts.
+        When omitted, a single commit with ``test.code`` is made. The plan JSON is committed
+        once, in the first commit. ``test.file_name`` is the committed path and
+        ``test.description`` titles the MR.
 
         ``plan_json`` is the serialized plan to commit (the orchestrator passes the
         context-hash-enriched JSON so the committed copy matches the local one); falls
         back to ``plan.model_dump_json`` when omitted.
         """
         branch_name = _branch_name(test_case_key)
-        actions = [
-            {
-                "action": "create",
-                "file_path": f"tests/generated/{test.file_name}",
-                "content": test.code,
-            },
-            {
-                "action": "create",
-                "file_path": f"tests/generated/_plans/{test_case_key}.json",
-                "content": plan_json or plan.model_dump_json(indent=2),
-            },
+        file_path = f"tests/generated/{test.file_name}"
+        plan_path = f"tests/generated/_plans/{test_case_key}.json"
+        plan_content = plan_json or plan.model_dump_json(indent=2)
+        revs = revisions or [
+            TestRevision(
+                message=f"AI-generated test for {test_case_key}: {test.description}",
+                code=test.code,
+            )
         ]
 
         self.project.branches.create(
             {"branch": branch_name, "ref": self.config.gitlab_target_branch}
         )
         try:
-            self.project.commits.create(
-                {
-                    "branch": branch_name,
-                    "commit_message": f"AI-generated test for {test_case_key}: {test.description}",
-                    "actions": actions,
-                }
-            )
+            self._commit_revisions(branch_name, file_path, plan_path, plan_content, revs)
             mr = self.project.mergerequests.create(
                 {
                     "source_branch": branch_name,
@@ -110,11 +130,51 @@ class GitLabClient:
                 }
             )
         except Exception:
-            # Don't leave an orphan branch behind if the commit or MR creation fails.
+            # Don't leave an orphan branch behind if a commit or MR creation fails.
             with contextlib.suppress(Exception):
                 self.project.branches.delete(branch_name)
             raise
         return mr.web_url
+
+    def _commit_revisions(
+        self,
+        branch_name: str,
+        file_path: str,
+        plan_path: str,
+        plan_content: str,
+        revisions: list[TestRevision],
+    ) -> None:
+        """Commit each revision in order to ``file_path`` — one commit per attempt.
+
+        The first commit ``create``s the test file and the plan JSON; every later commit
+        ``update``s the test file in place, so consecutive commits diff cleanly in the MR.
+        A revision whose code is identical to the previously committed one is skipped:
+        GitLab rejects a commit with an empty diff, and an unchanged attempt has nothing
+        to show anyway.
+        """
+        last_code: str | None = None
+        created = False
+        for revision in revisions:
+            if created and revision.code == last_code:
+                continue
+            if not created:
+                actions = [
+                    {"action": "create", "file_path": file_path, "content": revision.code},
+                    {"action": "create", "file_path": plan_path, "content": plan_content},
+                ]
+                created = True
+            else:
+                actions = [
+                    {"action": "update", "file_path": file_path, "content": revision.code}
+                ]
+            self.project.commits.create(
+                {
+                    "branch": branch_name,
+                    "commit_message": revision.message,
+                    "actions": actions,
+                }
+            )
+            last_code = revision.code
 
 
 def _branch_name(test_case_key: str) -> str:

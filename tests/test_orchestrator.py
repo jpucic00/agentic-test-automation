@@ -201,14 +201,60 @@ def test_each_heal_attempt_written_to_its_own_file(cfg, monkeypatch):
     ]
 
 
-def test_mr_commits_latest_code_under_original_filename(cfg, monkeypatch):
-    # The MR gets ONE file: the final healed code, named like the FIRST iteration (not the
-    # per-attempt sibling). _healed() returns code "// healed".
+def test_mr_commits_under_original_filename(cfg, monkeypatch):
+    # The committed file PATH is the first-iteration filename (not the per-attempt sibling),
+    # and the final code matches the last attempt. _healed() returns code "// healed".
     gl = _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
     asyncio.run(orchestrator.process_test_case("QA-1"))
     mr_test = gl.open_mr.call_args.args[0]
     assert mr_test.file_name == "QA-1-login.spec.ts"
     assert mr_test.code == "// healed"
+
+
+def test_mr_revisions_one_commit_per_attempt(cfg, monkeypatch):
+    # The MR gets the full attempt chain as `revisions` — one per code-producing attempt —
+    # so a reviewer can diff attempt-to-attempt in GitLab. Here: initial gen + one heal.
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    revisions = gl.open_mr.call_args.kwargs["revisions"]
+    assert [r.code for r in revisions] == ["// spec", "// healed"]
+    assert "initial generated test" in revisions[0].message
+    assert "heal attempt 1" in revisions[1].message
+    # The Healer's changes_summary rides in the heal commit's body.
+    assert "fixed selector" in revisions[1].message
+
+
+def test_mr_revisions_label_each_heal_attempt(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    revisions = gl.open_mr.call_args.kwargs["revisions"]
+    subjects = [r.message.splitlines()[0] for r in revisions]
+    assert subjects == [
+        "[AI] QA-1: initial generated test",
+        "[AI] QA-1: heal attempt 1",
+        "[AI] QA-1: heal attempt 2",
+    ]
+
+
+def test_mr_revisions_include_compile_retry(cfg, monkeypatch):
+    # did_run=False -> a Generator regeneration; that regen is its own MR commit, between
+    # the initial generation and any heal.
+    gl = _wire(monkeypatch, cfg, [_result("failed", did_run=False), _result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    subjects = [r.message.splitlines()[0] for r in gl.open_mr.call_args.kwargs["revisions"]]
+    assert subjects == [
+        "[AI] QA-1: initial generated test",
+        "[AI] QA-1: regenerate after compile/collection error",
+    ]
+
+
+def test_mr_single_revision_when_first_run_passes(cfg, monkeypatch):
+    # A test that passes on the first run yields exactly one revision (one commit).
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    revisions = gl.open_mr.call_args.kwargs["revisions"]
+    assert len(revisions) == 1
+    assert revisions[0].code == "// spec"
 
 
 def test_healer_returned_filename_is_ignored(cfg, monkeypatch):
@@ -247,6 +293,18 @@ def test_iteration_file_name_inserts_label_before_suffix():
     assert f("QA-1.test.ts", "regen") == "QA-1.regen.test.ts"
     assert f("plain.ts", "regen") == "plain.regen.ts"
     assert f("noext", "regen") == "noext.regen"
+
+
+def test_commit_message_subject_only_and_with_body():
+    m = orchestrator._commit_message
+    # No detail -> subject only.
+    assert m("QA-1", "initial generated test") == "[AI] QA-1: initial generated test"
+    # Detail -> subject + blank line + full (possibly multi-line) body.
+    msg = m("QA-1", "heal attempt 2", "fixed the login selector\nand awaited submit")
+    assert msg.startswith("[AI] QA-1: heal attempt 2\n\n")
+    assert "and awaited submit" in msg
+    # Whitespace-only detail collapses to subject only.
+    assert m("QA-1", "regenerate", "   ") == "[AI] QA-1: regenerate"
 
 
 def test_heal_receives_plan_and_test_case(cfg, monkeypatch):
