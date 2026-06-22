@@ -109,11 +109,11 @@ def test_agent_retries_default_env_and_invalid(monkeypatch):
 
 def test_agent_request_limit_default_env_and_invalid(monkeypatch):
     monkeypatch.delenv("AGENT_REQUEST_LIMIT", raising=False)
-    assert agent_request_limit() == 150
-    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "300")
     assert agent_request_limit() == 300
+    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "500")
+    assert agent_request_limit() == 500
     monkeypatch.setenv("AGENT_REQUEST_LIMIT", "x")  # invalid -> default
-    assert agent_request_limit() == 150
+    assert agent_request_limit() == 300
 
 
 def test_reasoning_effort_unset_returns_none(monkeypatch):

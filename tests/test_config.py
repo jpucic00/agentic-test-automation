@@ -32,6 +32,8 @@ _OPTIONAL_VARS = (
     "PLANNER_MODEL",
     "GENERATOR_MODEL",
     "HEALER_MODEL",
+    "VISION_MODEL",
+    "PLANNER_VISION",
     "XRAY_IS_CLOUD",
     "GITLAB_ENABLED",
     "GITLAB_TARGET_BRANCH",
@@ -67,6 +69,9 @@ def test_happy_path_loads_full_config(env, tmp_path):
     assert cfg.planner_model == "openai/gpt-oss-120b"
     assert cfg.generator_model == "mistralai/devstral-small-2-2512"
     assert cfg.healer_model == "openai/gpt-oss-120b"
+    # vision sensor: configured model present, disabled by default
+    assert cfg.vision_model == "mistralai/devstral-small-2-2512"
+    assert cfg.vision_max_calls == 0
     assert cfg.gitlab_target_branch == "main"
     # bool parsing
     assert cfg.xray_is_cloud is False
@@ -177,3 +182,27 @@ def test_no_secret_leak_to_stdout(capsys):
     assert _FAKE_PASSWORD not in captured.err
     # sanity: the secret really is loaded, so the assertion above is meaningful
     assert cfg.staging_password == _FAKE_PASSWORD
+
+
+def test_planner_vision_disabled_by_default_false_and_zero(env):
+    assert load_config().vision_max_calls == 0  # unset -> off
+    for off in ("false", "0", "off", "no"):
+        env.setenv("PLANNER_VISION", off)
+        assert load_config().vision_max_calls == 0, off
+
+
+def test_planner_vision_positive_int_sets_budget(env):
+    env.setenv("PLANNER_VISION", "4")
+    assert load_config().vision_max_calls == 4
+
+
+def test_planner_vision_invalid_fails_fast(env):
+    env.setenv("PLANNER_VISION", "lots")
+    with pytest.raises(RuntimeError, match="PLANNER_VISION"):
+        load_config()
+
+
+def test_vision_model_defaults_and_override(env):
+    assert load_config().vision_model == "mistralai/devstral-small-2-2512"
+    env.setenv("VISION_MODEL", "custom/vision-model")
+    assert load_config().vision_model == "custom/vision-model"

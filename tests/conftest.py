@@ -25,6 +25,8 @@ def cfg(tmp_path: Path) -> Config:
         planner_model="planner-model",
         generator_model="generator-model",
         healer_model="healer-model",
+        vision_model="vision-model",
+        vision_max_calls=0,
         jira_base_url="https://jira.internal",
         jira_email="qa.bot@example.com",
         jira_token="fake-token",

@@ -75,6 +75,34 @@ def _assert_non_prod_url(url: str, markers: Sequence[str]) -> None:
         )
 
 
+def _vision_max_calls() -> int:
+    """Max Devstral vision calls per planning run from ``PLANNER_VISION`` (0 = feature off).
+
+    Tri-state, mirroring the env-knob style of ``agent_request_limit`` / ``reasoning_effort``:
+    unset / ``false`` / ``0`` / ``off`` / ``no`` → 0 (disabled); a positive integer → that cap.
+    Any other value fails fast — a typo'd ``PLANNER_VISION`` that silently disabled the feature
+    would masquerade as "vision isn't helping".
+    """
+    raw = os.environ.get("PLANNER_VISION")
+    if raw is None:
+        return 0
+    value = raw.strip().lower()
+    if value in ("", "false", "0", "off", "no"):
+        return 0
+    try:
+        n = int(value)
+    except ValueError:
+        raise RuntimeError(
+            f"PLANNER_VISION={raw!r} is not valid; use 'false' to disable or a positive "
+            "integer (max vision calls per planning run)."
+        ) from None
+    if n < 0:
+        raise RuntimeError(
+            f"PLANNER_VISION={raw!r} must be a positive integer (or 'false' to disable)."
+        )
+    return n
+
+
 @dataclass(frozen=True)
 class Config:
     # LLM gateway
@@ -83,6 +111,10 @@ class Config:
     planner_model: str
     generator_model: str
     healer_model: str
+    # Optional Devstral vision sensor for the Planner (agents/vision.py + inspect_screen).
+    # vision_max_calls == 0 means the feature is OFF (PLANNER_VISION unset/false).
+    vision_model: str
+    vision_max_calls: int
 
     # Jira / Xray
     jira_base_url: str
@@ -143,6 +175,8 @@ def load_config() -> Config:
         planner_model=os.environ.get("PLANNER_MODEL", "openai/gpt-oss-120b"),
         generator_model=os.environ.get("GENERATOR_MODEL", "mistralai/devstral-small-2-2512"),
         healer_model=os.environ.get("HEALER_MODEL", "openai/gpt-oss-120b"),
+        vision_model=os.environ.get("VISION_MODEL", "mistralai/devstral-small-2-2512"),
+        vision_max_calls=_vision_max_calls(),
         jira_base_url=_required("JIRA_BASE_URL"),
         jira_email=_required("JIRA_EMAIL"),
         jira_token=_required("JIRA_TOKEN"),

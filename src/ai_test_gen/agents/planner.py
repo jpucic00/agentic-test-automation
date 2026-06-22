@@ -10,7 +10,10 @@ gets BOTH context files (project_context.md and project_map.md).
 """
 from __future__ import annotations
 
+import time
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ProcessHistory
@@ -28,8 +31,68 @@ from ._context import (
     reasoning_effort,
 )
 from ._history import trim_stale_snapshots
+from .vision import ask_vision
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+# A screenshot older than this (seconds) is treated as stale by inspect_screen: the model must
+# take a fresh browser_take_screenshot before the vision sensor will describe "the current page".
+_STALE_AFTER_S = 5.0
+
+
+def _latest_png(directory: Path) -> Path | None:
+    """Newest ``*.png`` under ``directory`` by mtime, or None if there are none."""
+    pngs = list(directory.rglob("*.png"))
+    if not pngs:
+        return None
+    return max(pngs, key=lambda p: p.stat().st_mtime)
+
+
+def _register_inspect_screen(
+    agent: Agent[None, TestPlan], config: Config
+) -> Callable[[str], Coroutine[Any, Any, str]]:
+    """Attach the optional Devstral ``inspect_screen`` vision tool to a Planner agent.
+
+    gpt-oss stays the MCP driver; this tool just turns the latest screenshot into a short text
+    answer (via ``ask_vision``) so the text-only Planner can "see". Per-run call budget =
+    ``config.vision_max_calls``. Advisory only — it never returns a selector. Also returns the
+    tool function (the registration target), which unit tests call directly.
+    """
+    max_calls = config.vision_max_calls
+    calls_made = 0
+
+    async def inspect_screen(question: str) -> str:
+        """Look at the CURRENT page screenshot and answer a question about what is visible.
+
+        Use when the accessibility snapshot is ambiguous or silent — to confirm a dropdown
+        opened, a modal/overlay is covering the page, a success/error toast appeared, or whether
+        an element is actually visible. FIRST call browser_take_screenshot to capture the current
+        page, THEN call this with a specific question, e.g. "Is a modal dialog covering the page?"
+        or "Did a success toast appear?". Returns a short text description. It NEVER returns a
+        selector — keep using browser_generate_locator for targeting.
+        """
+        nonlocal calls_made
+        if calls_made >= max_calls:
+            return (
+                f"Vision budget reached ({max_calls} calls this run). Proceed using the "
+                "accessibility snapshot."
+            )
+        png = _latest_png(config.snapshots_dir)
+        if png is None:
+            return (
+                "No screenshot is available yet. Call browser_take_screenshot first, then retry "
+                "inspect_screen."
+            )
+        if time.time() - png.stat().st_mtime > _STALE_AFTER_S:
+            return (
+                f"The latest screenshot is stale (older than {_STALE_AFTER_S:.0f}s). Call "
+                "browser_take_screenshot first, then retry inspect_screen."
+            )
+        calls_made += 1
+        return await ask_vision(config, question, png.read_bytes())
+
+    agent.tool_plain(inspect_screen)
+    return inspect_screen
 
 
 def build_planner(config: Config, storage_state: Path | None = None) -> Agent[None, TestPlan]:
@@ -37,6 +100,9 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     model = build_openai_model(config, config.planner_model)
 
     base_prompt = (PROMPTS_DIR / "planner.md").read_text()
+    if config.vision_max_calls > 0:
+        # Gated so a disabled run's system prompt is byte-identical to before.
+        base_prompt += "\n\n" + (PROMPTS_DIR / "planner_vision.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
     mcp = build_playwright_mcp(config, storage_state=storage_state)
@@ -48,7 +114,7 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         OpenAIChatModelSettings(openai_reasoning_effort=effort) if effort else None
     )
 
-    return Agent(
+    agent = Agent(
         model=model,
         output_type=TestPlan,
         toolsets=[mcp],
@@ -59,6 +125,11 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         # newest few so the model stays out of its long-context degradation zone.
         capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
+    # Optional Devstral vision sensor (PLANNER_VISION). Registered only when enabled so a
+    # disabled run's toolset — and behaviour — is identical to before.
+    if config.vision_max_calls > 0:
+        _register_inspect_screen(agent, config)
+    return agent
 
 
 async def plan_test_case(

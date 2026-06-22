@@ -147,7 +147,7 @@ def reasoning_effort(env_var: str) -> ReasoningEffort | None:
     return cast(ReasoningEffort, value)
 
 
-def agent_request_limit(default: int = 150) -> int:
+def agent_request_limit(default: int = 300) -> int:
     """Max model requests per agent run (pydantic-ai ``UsageLimits.request_limit``).
 
     A browser agent exploring a multi-step flow makes many tool round-trips; pydantic-ai's

@@ -10,7 +10,7 @@ An AI pipeline that turns a **manual Jira/Xray test case** into a **reviewed Pla
 ## The five core ideas
 
 1. **Three narrow agents beat one mega-prompt.** A single "convert this test case to Playwright" prompt works on a frontier model but is unreliable on mid-tier open-weights models. Splitting the job into three tightly-scoped roles — plan, generate, heal — makes each step's output far more dependable and lets us pick a different model per role.
-2. **The browser is in the loop.** The Planner and Healer don't guess selectors — they open the live staging app via Playwright MCP (accessibility tree, no screenshots) and capture each selector with the read-only `browser_generate_locator` tool before committing it. The Generator deliberately works blind from the plan, because a focused code model writes better code with less context.
+2. **The browser is in the loop.** The Planner and Healer don't guess selectors — they open the live staging app via Playwright MCP (accessibility tree, no screenshots by default) and capture each selector with the read-only `browser_generate_locator` tool before committing it. The Generator deliberately works blind from the plan, because a focused code model writes better code with less context.
 3. **A structured artifact is the contract.** The Planner emits a typed `TestPlan` (JSON). Every downstream step consumes a precise schema instead of free text — no "what does success look like?" ambiguity between stages.
 4. **Human review is the safety mechanism.** The pipeline's output is a GitLab MR labeled `ai-generated` + `qa-review-needed`. A person always approves before merge. The MR — not the model — is the gate.
 5. **Staging-only, fail-closed.** Config refuses to start unless the target URL's host carries a non-prod marker. A misconfigured URL fails *before* any browser launches or any model is called.
@@ -27,7 +27,7 @@ flowchart TB
 
     subgraph gw[" Model gateway — OpenAI-compatible, optional mTLS "]
         REASON[["gpt-oss-120b<br/>reasoning + tools"]]
-        CODER[["devstral-small-2<br/>code"]]
+        CODER[["devstral-small-2<br/>code · vision"]]
     end
 
     subgraph app[" ai_test_gen — orchestrated pipeline "]
@@ -55,6 +55,7 @@ flowchart TB
     PL -. uses .-> REASON
     HE -. uses .-> REASON
     GE -. uses .-> CODER
+    PL -. optional vision .-> CODER
 ```
 
 ## Components & responsibilities
@@ -125,6 +126,7 @@ them behaves exactly as before.
 - **History trimming exists but is OFF by default (experimental).** Every MCP browser tool result embeds a full accessibility snapshot, so a long exploration replays a heavy history — a real cost. A history processor on the Planner/Healer can trim it: setting `SNAPSHOT_HISTORY_KEEP=N` keeps the newest N snapshots plus **anchors** — the latest snapshot of every page where a `browser_generate_locator` capture happened, deduped per (page URL, dialog-open) so modal and page states coexist (`ANCHOR_SNAPSHOTS=off` for a pure chronological window); everything else is stubbed down to its action confirmation, and `browser_generate_locator` results are never trimmed, so captured locators are unlosable. **It ships disabled** because live runs showed mid-tier reasoning models losing coherence with trimming enabled — exploring less, giving up early, fabricating steps; the full untrimmed history is the proven-safe default until a controlled A/B shows a net win.
 - **Context-driven login (no saved session).** Each generated test logs *itself* in as its first steps — as the role the scenario needs — using the disposable staging dummy credentials in `project_context.md`; the Planner/Healer log in live while exploring. There is no `storage_state` (sessions expire between runs, and most cases need a different role or register first).
 - **Selectors: verified, never guessed.** The accessibility tree carries no `id`s to read, so the Planner/Healer call Playwright MCP's read-only `browser_generate_locator` to capture a real locator per element instead of hand-writing one. The server sets `testIdAttribute: "id"`, so the app's manually-written `id` attributes surface as `getByTestId('…')` (resolves to `[id="…"]`); elements without an id fall back to `getByRole`/`getByLabel`. If the app is **multilingual**, text/role fallbacks may appear in any of its languages — another reason the id-based locators (locale-independent) are preferred. Name-based locators (`getByRole({ name })` / `getByText` / `getByLabel`) always carry **`exact: true`** — the Planner records it and the Generator adds it if a plan locator lacks it — so a default substring match (`{ name: 'Add' }` ↔ "Add admin") can't trip a `strict mode violation … resolved N elements`; steps the Planner observed inside a dialog carry a `container` hint that the Generator turns into a scoped locator (same-name-behind-a-dialog collisions never reach run time), and the Healer's failure-mode catalog adds `exact` / dialog-scoping if a generated test hits one anyway. The generated-test runner mirrors `testIdAttribute: 'id'` so those locators resolve at run time.
+- **Optional vision sensor for the Planner (off by default).** The Planner reads the page as an accessibility tree, which can be silent about *visual* state — whether a dropdown actually opened, a modal/overlay is covering the page, or a toast appeared. Setting `PLANNER_VISION=N` gives the (text-only) Planner an `inspect_screen` tool: it screenshots the page and asks a vision-capable model (`VISION_MODEL`, default `devstral-small-2-2512`) to describe what is rendered, returning a short text answer the Planner acts on — up to N calls per run, with a freshness guard that rejects a stale screenshot. It is a **sensor only**: the image never reaches the text Planner, and the tool never yields a selector (targeting stays on `browser_generate_locator`). Unset / `false` leaves the Planner's prompt and toolset byte-identical to before; it requires a multimodal model on the gateway.
 - **Regression-safe test data.** Generated tests randomize the data they *create* (new user/org/project names, signup emails) **at run time** — a fresh suffix computed in the test, not a one-off literal baked in by the model — so reruns don't collide (`already exists`). Login credentials stay literal: they must match an existing account.
 - **Pin everything.** Exact versions for Python deps, the Playwright MCP server, and the Playwright test runner — version drift masks whether a failure is ours or upstream's.
 
