@@ -53,6 +53,14 @@ the plan is a transcript the Generator replays verbatim.
 
 # Selector quality rules
 
+**Every `target_selector` is the VERBATIM output of `browser_generate_locator` on the real element
+— any form it returns (`getByTestId` / `getByRole` / `getByLabel` / css / xpath) is valid. NEVER
+hand-write or "recognize" a locator.** The #1 failure is inventing `getByRole('button', { name })`
+for a text label: menu items, dropdown options, and custom controls are often `<div>`/`<span>`, NOT
+buttons, so a guessed button role matches nothing and the step silently fails (e.g. a "Log out"
+item that never clicks). Open the menu/dropdown, then `browser_generate_locator` the item and use
+exactly what it returns.
+
 Record the locator from `browser_generate_locator` (no `page.` prefix). Manually-id'd elements come
 back as locale-independent `getByTestId(...)` — keep those exactly. For NAME-based locators ALWAYS
 add `exact: true` (even if generate_locator didn't): `exact` stops the name matching a longer one

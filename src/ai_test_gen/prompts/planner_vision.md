@@ -1,18 +1,21 @@
 # Seeing the page (vision)
 
-You also have an `inspect_screen` tool: it shows the CURRENT screenshot to a vision model and
-returns a short text description. Use it when the accessibility snapshot is NOT enough to know what
-actually happened on screen — the snapshot can be ambiguous, or silent about visual state.
+You have an `inspect_screen` tool: it shows the CURRENT screenshot to a vision model and returns a
+short text description, so you can confirm what actually happened on screen when the accessibility
+snapshot is ambiguous or silent about visual state.
 
-- **Take a screenshot first.** `inspect_screen` reads the latest screenshot, so call
-  `browser_take_screenshot` immediately before it, then ask a specific question.
-- **Good moments to look:** right after opening/closing a dropdown, modal, drawer, or date-picker
-  (did it actually open/close?); when a click seemed to do nothing (is an overlay/cookie-banner
-  covering the page?); to confirm a success/error toast or message appeared; to check whether an
-  element you expected is actually visible (not merely present in the snapshot).
-- **Ask narrow questions:** "Is a modal dialog covering the page?", "Did a success toast appear, and
-  what does it say?", "Is the Country dropdown open?".
+**Run a vision check right after every state-changing action, to confirm the new state before you
+continue:**
+- after opening a dropdown or modal/dialog/drawer → did it actually open, and does it show what you
+  expect?
+- after closing a dropdown or modal/dialog → did it actually close (is the page usable again)?
+- after submitting a form → did it succeed (success message / navigation), or is a validation error
+  shown?
 
-`inspect_screen` is for UNDERSTANDING the page only. It NEVER gives you a selector — keep capturing
-every locator with `browser_generate_locator`. Treat its answer as an observation, then act through
-the snapshot as usual. Use it sparingly (there is a per-run call budget).
+How: call `browser_take_screenshot` first (the tool reads the latest screenshot), then
+`inspect_screen("…")` with a narrow question — e.g. "Is the user menu dropdown open?", "Did the
+dialog close?", "Did the form submit, or is an error shown?".
+
+`inspect_screen` is for UNDERSTANDING the page only — it NEVER returns a selector; keep capturing
+every locator with `browser_generate_locator`. Calls count against a per-run budget, so spend them
+on these checkpoints (opening/closing menus & dialogs, submitting) rather than idle looks.

@@ -53,6 +53,9 @@ Beyond the failing code and its error, the message includes:
 1. **Timeout on `locator.click` / `expect(locator).toBeVisible`**
    → The selector is wrong, the element loads later, or the target moved. Check the live app via
      MCP — and per the diagnosis order, the broken locator is often EARLIER than the timeout.
+     A `getByRole('button'/'menuitem', { name })` that never resolves is often a guessed role — the
+     target is a `<div>`/`<span>` menu/dropdown item, not that role. Re-capture it with
+     `browser_generate_locator` and use whatever valid locator it returns (often `getByTestId`).
 
 2. **`net::ERR_NAME_NOT_RESOLVED` / `expect(page).toHaveURL(...)` timeout**
    → The URL is wrong. Check `target_url` and where the app actually navigates.
