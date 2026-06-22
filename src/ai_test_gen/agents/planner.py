@@ -10,6 +10,7 @@ gets BOTH context files (project_context.md and project_map.md).
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -32,6 +33,8 @@ from ._context import (
 )
 from ._history import trim_stale_snapshots
 from .vision import ask_vision
+
+logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -73,23 +76,29 @@ def _register_inspect_screen(
         """
         nonlocal calls_made
         if calls_made >= max_calls:
+            logger.info("Planner vision: budget of %d call(s) reached — skipping", max_calls)
             return (
                 f"Vision budget reached ({max_calls} calls this run). Proceed using the "
                 "accessibility snapshot."
             )
         png = _latest_png(config.snapshots_dir)
         if png is None:
+            logger.debug("Planner vision: no screenshot yet — asked to capture one first")
             return (
                 "No screenshot is available yet. Call browser_take_screenshot first, then retry "
                 "inspect_screen."
             )
         if time.time() - png.stat().st_mtime > _STALE_AFTER_S:
+            logger.debug("Planner vision: latest screenshot stale — asked to recapture")
             return (
                 f"The latest screenshot is stale (older than {_STALE_AFTER_S:.0f}s). Call "
                 "browser_take_screenshot first, then retry inspect_screen."
             )
         calls_made += 1
-        return await ask_vision(config, question, png.read_bytes())
+        logger.info("Planner vision check %d/%d: %s", calls_made, max_calls, question)
+        answer = await ask_vision(config, question, png.read_bytes())
+        logger.info("Planner vision answer: %s", answer)
+        return answer
 
     agent.tool_plain(inspect_screen)
     return inspect_screen

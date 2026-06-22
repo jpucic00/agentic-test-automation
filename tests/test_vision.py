@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import os
 
 import pytest
@@ -149,6 +150,22 @@ def test_inspect_screen_enforces_per_run_budget(cfg, monkeypatch):
     assert asyncio.run(tool("q1")) == "VISION_OK"  # within budget
     out = asyncio.run(tool("q2"))  # exceeds budget of 1
     assert "budget" in out.lower()
+
+
+def test_inspect_screen_logs_each_trigger(cfg, monkeypatch, caplog):
+    vcfg = _vision_cfg(cfg)
+    (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
+
+    async def fake_ask(config, question, png):
+        return "a modal dialog is visible"
+
+    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg)
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+        asyncio.run(tool("is a modal open?"))
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("vision check" in m and "is a modal open?" in m for m in messages)
 
 
 # --- gating: off by default -> Planner unchanged ------------------------------
