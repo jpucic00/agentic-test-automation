@@ -14,6 +14,10 @@ Improvements over the guide's template:
   regenerated every run) is emptied at the start of each run so it doesn't accumulate.
 - **Heal transparency.** Every Healer ``changes_summary`` is collected and rendered into
   the MR; an MR is opened even when healing is exhausted, so a human always reviews.
+- **Per-iteration artifacts.** The first generated spec keeps its filename; the compile
+  retry and each heal attempt are written to their own sibling files
+  (``<name>.healer-attempt-N.spec.ts``) so no iteration overwrites another and the full
+  history stays on disk. The MR commits only the final code, under the original filename.
 """
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ import json
 import logging
 import os
 import shutil
+from pathlib import Path
 
 from .agents.generator import generate_test
 from .agents.healer import heal_test
@@ -96,6 +101,13 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             "error": f"Planning/generation failed: {exc}",
         }
 
+    # The Generator owns the canonical filename. Every later iteration (the compile-retry
+    # regeneration, each heal attempt) is written to its OWN sibling file so nothing
+    # overwrites the first iteration and the full history stays on disk; the MR later
+    # commits only the final code, under this base name (see the open_mr call below).
+    base_file_name = test.file_name
+    description = test.description
+
     logger.info("[%s] Running test (attempt 1)", issue_key)
     result = await run_test(config, test)
 
@@ -110,11 +122,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             issue_key,
         )
         try:
-            test = await generate_test(
+            regenerated = await generate_test(
                 config,
                 plan,
                 previous_code=test.code,
                 error_text=result.error_message or result.stderr[:2000],
+            )
+            # Keep the failed first attempt on disk; the regeneration is its own artifact.
+            test = GeneratedTest(
+                file_name=_iteration_file_name(base_file_name, "regen"),
+                code=regenerated.code,
+                description=description,
             )
             logger.info("[%s] Re-running regenerated test", issue_key)
             result = await run_test(config, test)
@@ -150,8 +168,13 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             heal_summaries.append(f"(attempt {heal_attempts} aborted before completing: {exc})")
             break
         heal_summaries.append(healed.changes_summary)
+        # Each heal lands in its OWN file (<name>.healer-attempt-N.spec.ts). The Healer's
+        # returned file_name is deliberately ignored so an attempt can never overwrite an
+        # earlier iteration; the MR commits this code under base_file_name, not this name.
         test = GeneratedTest(
-            file_name=healed.file_name, code=healed.code, description=test.description
+            file_name=_iteration_file_name(base_file_name, f"healer-attempt-{heal_attempts}"),
+            code=healed.code,
+            description=description,
         )
         logger.info("[%s] Re-running test", issue_key)
         result = await run_test(config, test)
@@ -180,10 +203,15 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         return summary
 
     logger.info("[%s] Opening GitLab MR", issue_key)
+    # The MR carries ONE file: the latest code under the original first-iteration filename.
+    # The per-attempt artifacts (<name>.healer-attempt-N.spec.ts) stay local for inspection.
+    mr_test = GeneratedTest(
+        file_name=base_file_name, code=test.code, description=description
+    )
     try:
         gitlab_client = GitLabClient(config)
         mr_url = gitlab_client.open_mr(
-            test,
+            mr_test,
             plan,
             issue_key,
             plan_json=plan_json,
@@ -256,6 +284,23 @@ def _clear_snapshots_dir(config: Config) -> None:
             shutil.rmtree(child, ignore_errors=True)
         else:
             child.unlink(missing_ok=True)
+
+
+def _iteration_file_name(base_file_name: str, label: str) -> str:
+    """Sibling filename for one pipeline iteration, e.g. ``QA-1.healer-attempt-1.spec.ts``.
+
+    The first generated test keeps ``base_file_name``; every later iteration (the
+    compile-retry regeneration, each heal attempt) gets its own file so no iteration
+    overwrites another and the full history stays on disk for inspection. The ``label`` is
+    inserted before the ``.spec.ts`` / ``.test.ts`` compound suffix when present, else
+    before the final extension.
+    """
+    name = Path(base_file_name).name
+    for compound in (".spec.ts", ".test.ts"):
+        if name.endswith(compound):
+            return f"{name[: -len(compound)]}.{label}{compound}"
+    stem, dot, ext = name.rpartition(".")
+    return f"{stem}.{label}.{ext}" if dot else f"{name}.{label}"
 
 
 def _resolve_max_heal_attempts() -> int:

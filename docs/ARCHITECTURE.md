@@ -136,7 +136,9 @@ The pipeline runs end-to-end today: central config with the fail-closed prod-URL
 data models, the Xray client, Playwright MCP with context-driven login, the three agents with their
 prompts, the **Test Runner** (subprocess + hard timeout), the **GitLab MR creator** (collision-safe branch,
 heal-attempt summaries, committed plan JSON), and the **Orchestrator** that runs Plan → Generate → Run →
-Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean). Every
+Heal → MR for one case (heal cap, `context_hash` in the saved plan, `output/snapshots/` auto-clean, each
+iteration saved to its own `output/tests/` file while the MR commits the final code under the first
+iteration's name). Every
 piece is unit-tested offline with Pydantic AI's `TestModel`. It also ships as a container — a
 [`Dockerfile`](../Dockerfile) (official Playwright base, non-root `appuser`, pinned `uv`/`npm` deps) and
 [`docker-compose.yml`](../docker-compose.yml) run it standalone, including a local mode without GitLab

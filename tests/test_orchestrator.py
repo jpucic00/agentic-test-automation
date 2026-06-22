@@ -185,6 +185,70 @@ def test_two_round_heal_accumulates_summaries(cfg, monkeypatch):
     assert gl.open_mr.call_args.kwargs["heal_summaries"] == ["fixed selector", "fixed selector"]
 
 
+def test_each_heal_attempt_written_to_its_own_file(cfg, monkeypatch):
+    # The output folder keeps every iteration: the first generation under its own name,
+    # then one sibling file per heal attempt — nothing is overwritten.
+    _wire(monkeypatch, cfg, [_result("passed")])
+    # Local handle so .call_args_list is typed (the _wire monkeypatch swap is opaque to pyright).
+    run = AsyncMock(side_effect=[_result("failed"), _result("failed"), _result("passed")])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=2))
+    written = [call.args[1].file_name for call in run.call_args_list]
+    assert written == [
+        "QA-1-login.spec.ts",
+        "QA-1-login.healer-attempt-1.spec.ts",
+        "QA-1-login.healer-attempt-2.spec.ts",
+    ]
+
+
+def test_mr_commits_latest_code_under_original_filename(cfg, monkeypatch):
+    # The MR gets ONE file: the final healed code, named like the FIRST iteration (not the
+    # per-attempt sibling). _healed() returns code "// healed".
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    mr_test = gl.open_mr.call_args.args[0]
+    assert mr_test.file_name == "QA-1-login.spec.ts"
+    assert mr_test.code == "// healed"
+
+
+def test_healer_returned_filename_is_ignored(cfg, monkeypatch):
+    # Whatever name the Healer returns, the orchestrator names the artifact itself, so a
+    # drifting/hallucinated file_name can never fork or clobber the wrong file.
+    _wire(monkeypatch, cfg, [_result("passed")])
+    run = AsyncMock(side_effect=[_result("failed"), _result("passed")])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    monkeypatch.setattr(
+        orchestrator,
+        "heal_test",
+        AsyncMock(
+            return_value=models.HealedTest(
+                file_name="some-other-name.spec.ts", code="// healed", changes_summary="x"
+            )
+        ),
+    )
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert run.call_args_list[1].args[1].file_name == "QA-1-login.healer-attempt-1.spec.ts"
+
+
+def test_compile_retry_regeneration_written_to_its_own_file(cfg, monkeypatch):
+    # did_run=False routes to a Generator retry; that regeneration is also a separate
+    # artifact (.regen.spec.ts), leaving the failed first attempt on disk.
+    _wire(monkeypatch, cfg, [_result("passed")])
+    run = AsyncMock(side_effect=[_result("failed", did_run=False), _result("passed")])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    written = [call.args[1].file_name for call in run.call_args_list]
+    assert written == ["QA-1-login.spec.ts", "QA-1-login.regen.spec.ts"]
+
+
+def test_iteration_file_name_inserts_label_before_suffix():
+    f = orchestrator._iteration_file_name
+    assert f("QA-1-login.spec.ts", "healer-attempt-1") == "QA-1-login.healer-attempt-1.spec.ts"
+    assert f("QA-1.test.ts", "regen") == "QA-1.regen.test.ts"
+    assert f("plain.ts", "regen") == "plain.regen.ts"
+    assert f("noext", "regen") == "noext.regen"
+
+
 def test_heal_receives_plan_and_test_case(cfg, monkeypatch):
     # Path A: the Healer must get the originating plan + manual test case (intent), not just the
     # failing code + error — so it can diagnose/reconcile against what the test is meant to do.
