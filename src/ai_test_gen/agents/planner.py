@@ -11,6 +11,7 @@ gets BOTH context files (project_context.md and project_map.md).
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -40,7 +41,26 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 # A screenshot older than this (seconds) is treated as stale by inspect_screen: the model must
 # take a fresh browser_take_screenshot before the vision sensor will describe "the current page".
-_STALE_AFTER_S = 5.0
+# The default is generous on purpose: two gateway round-trips (browser_take_screenshot, then a
+# SEPARATE inspect_screen turn) sit between capture and use, so a tight window made every real call
+# bounce as "stale" — invisibly. Override per-run with PLANNER_VISION_STALE_S.
+_DEFAULT_STALE_AFTER_S = 45.0
+
+
+def _stale_after_s() -> float:
+    """Staleness window (seconds) for inspect_screen, from ``PLANNER_VISION_STALE_S`` (default 45).
+
+    Invalid or non-positive values fall back to the default rather than failing the run — this is a
+    latency-tuning knob, not a correctness gate.
+    """
+    raw = os.environ.get("PLANNER_VISION_STALE_S")
+    if raw is None:
+        return _DEFAULT_STALE_AFTER_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_STALE_AFTER_S
+    return value if value > 0 else _DEFAULT_STALE_AFTER_S
 
 
 def _latest_png(directory: Path) -> Path | None:
@@ -83,15 +103,27 @@ def _register_inspect_screen(
             )
         png = _latest_png(config.snapshots_dir)
         if png is None:
-            logger.debug("Planner vision: no screenshot yet — asked to capture one first")
+            logger.info(
+                "Planner vision: inspect_screen called but no screenshot in %s yet — asked the "
+                "model to browser_take_screenshot first",
+                config.snapshots_dir,
+            )
             return (
                 "No screenshot is available yet. Call browser_take_screenshot first, then retry "
                 "inspect_screen."
             )
-        if time.time() - png.stat().st_mtime > _STALE_AFTER_S:
-            logger.debug("Planner vision: latest screenshot stale — asked to recapture")
+        stale_after = _stale_after_s()
+        age = time.time() - png.stat().st_mtime
+        if age > stale_after:
+            logger.info(
+                "Planner vision: inspect_screen called but the latest screenshot is %.0fs old "
+                "(> %.0fs) — asked the model to recapture; raise PLANNER_VISION_STALE_S if the "
+                "gateway round-trip is the cause",
+                age,
+                stale_after,
+            )
             return (
-                f"The latest screenshot is stale (older than {_STALE_AFTER_S:.0f}s). Call "
+                f"The latest screenshot is stale (older than {stale_after:.0f}s). Call "
                 "browser_take_screenshot first, then retry inspect_screen."
             )
         calls_made += 1
@@ -101,6 +133,14 @@ def _register_inspect_screen(
         return answer
 
     agent.tool_plain(inspect_screen)
+    logger.info(
+        "Planner vision sensor ENABLED: up to %d inspect_screen call(s)/run via %s "
+        "(staleness window %.0fs); reads the newest *.png from %s",
+        max_calls,
+        config.vision_model,
+        _stale_after_s(),
+        config.snapshots_dir,
+    )
     return inspect_screen
 
 

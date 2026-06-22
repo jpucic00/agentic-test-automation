@@ -12,9 +12,9 @@ continue:**
 - after submitting a form → did it succeed (success message / navigation), or is a validation error
   shown?
 
-How: call `browser_take_screenshot` first (the tool reads the latest screenshot), then
-`inspect_screen("…")` with a narrow question — e.g. "Is the user menu dropdown open?", "Did the
-dialog close?", "Did the form submit, or is an error shown?".
+How: call `browser_take_screenshot`, then `inspect_screen("…")` as the very next action (it reads the
+latest screenshot, so don't do other steps in between) with a narrow question — e.g. "Is the user
+menu dropdown open?", "Did the dialog close?", "Did the form submit, or is an error shown?".
 
 `inspect_screen` is for UNDERSTANDING the page only — it NEVER returns a selector; keep capturing
 every locator with `browser_generate_locator`. Calls count against a per-run budget, so spend them

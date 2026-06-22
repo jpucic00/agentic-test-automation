@@ -11,6 +11,7 @@ import asyncio
 import dataclasses
 import logging
 import os
+import time
 
 import pytest
 from pydantic_ai import Agent, BinaryContent
@@ -102,10 +103,13 @@ def _tool_with_fake_vision(cfg, monkeypatch, *, max_calls=2, answer="VISION_OK")
     )
 
 
-def test_inspect_screen_nudges_when_no_screenshot(cfg, monkeypatch):
+def test_inspect_screen_nudges_when_no_screenshot(cfg, monkeypatch, caplog):
     _, tool = _tool_with_fake_vision(cfg, monkeypatch)
-    out = asyncio.run(tool("anything visible?"))
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+        out = asyncio.run(tool("anything visible?"))
     assert "browser_take_screenshot" in out  # tell the model to capture first
+    # The bounce logs at INFO (was DEBUG) so a call that never reaches vision is still visible.
+    assert any("no screenshot" in r.getMessage().lower() for r in caplog.records)
 
 
 def test_inspect_screen_fresh_png_calls_vision(cfg, monkeypatch):
@@ -121,7 +125,7 @@ def test_inspect_screen_fresh_png_calls_vision(cfg, monkeypatch):
     assert asyncio.run(tool("is a modal open?")) == "VISION_OK"
 
 
-def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch):
+def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch, caplog):
     vcfg = _vision_cfg(cfg)
     shot = vcfg.snapshots_dir / "shot.png"
     shot.write_bytes(b"img")
@@ -133,8 +137,11 @@ def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch):
     monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
-    out = asyncio.run(tool("is a modal open?"))
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+        out = asyncio.run(tool("is a modal open?"))
     assert "stale" in out.lower()
+    # The stale bounce logs at INFO (was DEBUG) so it can't hide from a default-level run.
+    assert any("old" in r.getMessage().lower() for r in caplog.records)
 
 
 def test_inspect_screen_enforces_per_run_budget(cfg, monkeypatch):
@@ -166,6 +173,51 @@ def test_inspect_screen_logs_each_trigger(cfg, monkeypatch, caplog):
         asyncio.run(tool("is a modal open?"))
     messages = [r.getMessage() for r in caplog.records]
     assert any("vision check" in m and "is a modal open?" in m for m in messages)
+
+
+def test_register_inspect_screen_logs_enabled(cfg, caplog):
+    # Registration logs at INFO so a run can confirm the sensor is on (vs. the silent "is it even
+    # enabled?" ambiguity that made "no vision in the logs" undiagnosable).
+    vcfg = _vision_cfg(cfg)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+        _register_inspect_screen(agent, vcfg)
+    assert any("vision sensor enabled" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_stale_after_s_reads_env(monkeypatch):
+    f = planner_mod._stale_after_s
+    monkeypatch.delenv("PLANNER_VISION_STALE_S", raising=False)
+    assert f() == planner_mod._DEFAULT_STALE_AFTER_S  # default
+    monkeypatch.setenv("PLANNER_VISION_STALE_S", "120")
+    assert f() == 120.0
+    monkeypatch.setenv("PLANNER_VISION_STALE_S", "not-a-number")  # invalid -> default
+    assert f() == planner_mod._DEFAULT_STALE_AFTER_S
+    monkeypatch.setenv("PLANNER_VISION_STALE_S", "0")  # non-positive -> default
+    assert f() == planner_mod._DEFAULT_STALE_AFTER_S
+
+
+def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
+    # A screenshot ~20s old is FRESH under the 45s default (vision runs) but STALE under a
+    # tightened PLANNER_VISION_STALE_S=5 (bounces) — proves the knob and the generous default.
+    vcfg = _vision_cfg(cfg)
+    shot = vcfg.snapshots_dir / "shot.png"
+    shot.write_bytes(b"img")
+    twenty_s_ago = time.time() - 20
+    os.utime(shot, (twenty_s_ago, twenty_s_ago))
+
+    async def fake_ask(config, question, png):
+        return "VISION_OK"
+
+    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg)
+
+    monkeypatch.delenv("PLANNER_VISION_STALE_S", raising=False)  # default 45 -> fresh
+    assert asyncio.run(tool("is a modal open?")) == "VISION_OK"
+
+    monkeypatch.setenv("PLANNER_VISION_STALE_S", "5")  # 20s > 5s -> stale
+    assert "stale" in asyncio.run(tool("is a modal open?")).lower()
 
 
 # --- gating: off by default -> Planner unchanged ------------------------------
