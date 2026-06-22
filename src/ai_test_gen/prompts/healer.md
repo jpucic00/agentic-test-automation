@@ -26,6 +26,23 @@ Beyond the failing code and its error, the message includes:
 3. Fix that first blocking step (smallest change, live-verified locator). Only then reconcile the
    rest with the intent.
 
+# Reading the step guards
+
+Generated tests wrap each step in `test.step('<action>', …)` and guard it: a pre-action
+`await expect(target, '…').toBeVisible()` BEFORE the interaction, and — for a step that opens a
+modal/menu or navigates — a post-action `await expect(page.getByRole('dialog')).toBeVisible()` (or the
+step's expected) AFTER it. WHICH guard failed tells you what broke:
+
+- **A pre-action guard failed** (`toBeVisible()` just before a click/fill): either the target locator
+  is wrong/missing — re-capture it live with `browser_generate_locator` — OR the locator is fine and
+  the page never reached the state this step needs. Replay from the top: if the PRIOR state-changing
+  step (open modal/menu, navigate) ran but its effect never happened, the bug is in THAT prior step
+  (wrong trigger, missing wait), not here. Fix the prior step.
+- **A post-action state assert failed** (e.g. `expect(dialog).toBeVisible()` right after a click): the
+  click ran but didn't produce its effect — THIS step is the blocker. Its trigger is wrong (often a
+  guessed role on a `<div>`/`<span>` — re-capture via `browser_generate_locator`) or the state needs an
+  explicit wait. Don't go hunting downstream.
+
 # Constraints
 
 - Prefer the SMALLEST change that makes the test correct and green. Most fixes are a selector,

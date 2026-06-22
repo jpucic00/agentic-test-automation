@@ -96,6 +96,13 @@ where a same-named element behind a dialog only appears at run time; the Healer 
 context when diagnosing. Both fields are optional extractions, never invented — a plan without
 them behaves exactly as before.
 
+The Generator also **guards each step**: it wraps every plan step in `test.step('<action>', …)`, asserts
+the target is visible *before* acting (`await expect(target, '…').toBeVisible()`), and — for a step that
+opens a modal/menu or navigates — asserts the new state *after* (`await expect(page.getByRole('dialog')).toBeVisible()`).
+A missing element then fails fast at the expect timeout with a labeled message naming the step, not a 60s
+action timeout; and the step that *fails to open* a modal fails on its own line instead of the next step.
+The Healer reads which guard fired to tell a wrong locator from a prior step whose effect never landed.
+
 > The Healer additionally receives the originating `ManualTestCase` (intent), the `TestPlan`
 > (including the Planner's `notes` + verified selectors), and the summaries of earlier heal attempts
 > in the same run — not new artifacts, but extra context so it can **reconcile the failing code with

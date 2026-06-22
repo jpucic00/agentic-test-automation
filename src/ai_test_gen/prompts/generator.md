@@ -70,6 +70,22 @@ The app is bilingual. Text literals inside `getByText`, `getByRole({ name })`, a
 translate, "correct", or English-ize them. The Planner already verified them against the
 live app.
 
+# Guard each step (fast, localized failures)
+
+Wrap EACH plan step in `await test.step('<step.action>', async () => { … })` so a failure names the
+step, not just a line number. Inside each step:
+
+1. **Before** an interaction, assert the target is present, THEN act:
+   `await expect(<locator>, '<short what/where>').toBeVisible();`. A missing element then fails at the
+   expect timeout with your message + the locator — not a slow 60s action timeout. Use `expect(...)`,
+   never `if (!...) throw`.
+2. **After** an action that changes page state — opens a modal/menu/drawer, navigates, or submits —
+   assert the NEW state before the next step relies on it: the step's `expected`, or (when the step
+   has a `container`) that the container is open:
+   `await expect(page.getByRole('dialog')).toBeVisible();`. This makes the step that FAILS TO open the
+   modal fail on its OWN line, instead of the next step (which targets something inside the modal that
+   legitimately isn't there yet).
+
 # Structure
 
 ```typescript
@@ -78,9 +94,14 @@ import { test, expect } from '@playwright/test';
 test.describe('<title from plan>', () => {
   test('<test case key>: <description>', async ({ page }) => {
     await page.goto('<target_url from plan>');
-    // ... steps
-    // Each step from the plan becomes one or more Playwright commands.
-    // Each step's `expected` becomes an `expect(...)` assertion.
+
+    await test.step('<step.action>', async () => {
+      const target = page.getByTestId('open-create-user'); // page. + the step's plan selector
+      await expect(target, 'Create-user button should be visible').toBeVisible();
+      await target.click();
+      await expect(page.getByRole('dialog')).toBeVisible(); // state-changing step asserts its effect
+    });
+    // One test.step(...) per plan step. Each step's `expected` becomes an expect(...) assertion.
   });
 });
 ```
