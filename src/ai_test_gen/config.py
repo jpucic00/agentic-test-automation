@@ -16,6 +16,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -75,6 +76,35 @@ def _assert_non_prod_url(url: str, markers: Sequence[str]) -> None:
         )
 
 
+def _testcase_source() -> Literal["xray", "local"]:
+    """Test-case source from ``TESTCASE_SOURCE``: 'xray' (default) or 'local'.
+
+    Fails fast on any other value — a typo'd source that silently fell back to Xray
+    would surface as confusing "missing JIRA_*" errors during a local demo run.
+    """
+    source = os.environ.get("TESTCASE_SOURCE", "xray").strip().lower()
+    if source == "xray":
+        return "xray"
+    if source == "local":
+        return "local"
+    raise RuntimeError(
+        f"TESTCASE_SOURCE={source!r} is not valid; use 'xray' (live Jira/Xray) or "
+        "'local' (raw-Xray-shaped JSON from LOCAL_TESTCASE_DIR)."
+    )
+
+
+def _resolve_under_root(raw: str) -> Path:
+    """Expand ``~`` and resolve ``raw``; a relative path is taken relative to PROJECT_ROOT.
+
+    So an env value like ``packages/demo-notes-app/test-cases`` works regardless of the
+    process's current working directory.
+    """
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
 def _vision_max_calls() -> int:
     """Max Devstral vision calls per planning run from ``PLANNER_VISION`` (0 = feature off).
 
@@ -116,10 +146,15 @@ class Config:
     vision_model: str
     vision_max_calls: int
 
-    # Jira / Xray
-    jira_base_url: str
-    jira_email: str
-    jira_token: str
+    # Test-case source: "xray" (live Jira/Xray) or "local" (raw-Xray-shaped JSON on disk)
+    testcase_source: Literal["xray", "local"]
+    local_testcase_dir: Path | None  # required when testcase_source == "local"
+
+    # Jira / Xray. Optional: only the "xray" source needs them, so they are None in local
+    # mode. XrayClient — constructed only for the xray source — asserts they are present.
+    jira_base_url: str | None
+    jira_email: str | None
+    jira_token: str | None
     xray_is_cloud: bool  # True for Xray Cloud, False for Server/DC
 
     # Staging app. Username/password are LEGACY: the pipeline authenticates from the
@@ -168,8 +203,34 @@ def load_config() -> Config:
         "on",
     }
 
+    # Test-case source. "local" reads raw-Xray-shaped JSON from LOCAL_TESTCASE_DIR and
+    # needs no Jira/Xray; "xray" (default) requires the JIRA_* vars below.
+    testcase_source = _testcase_source()
+    local_dir_raw = (
+        _required("LOCAL_TESTCASE_DIR")
+        if testcase_source == "local"
+        else os.environ.get("LOCAL_TESTCASE_DIR")
+    )
+    local_testcase_dir = _resolve_under_root(local_dir_raw) if local_dir_raw else None
+
+    # Human-authored context files default to the repo root but are overridable, so a
+    # different app under test (e.g. the bundled demo) can point at its own committed
+    # context files without overwriting the root ones.
+    context_override = os.environ.get("PROJECT_CONTEXT_PATH")
+    map_override = os.environ.get("PROJECT_MAP_PATH")
+    project_context_path = (
+        _resolve_under_root(context_override)
+        if context_override
+        else PROJECT_ROOT / "project_context.md"
+    )
+    project_map_path = (
+        _resolve_under_root(map_override) if map_override else PROJECT_ROOT / "project_map.md"
+    )
+
     return Config(
         gitlab_enabled=gitlab_enabled,
+        testcase_source=testcase_source,
+        local_testcase_dir=local_testcase_dir,
         llm_base_url=_required("LLM_BASE_URL"),
         llm_api_key=_required("LLM_API_KEY"),
         planner_model=os.environ.get("PLANNER_MODEL", "openai/gpt-oss-120b"),
@@ -177,9 +238,9 @@ def load_config() -> Config:
         healer_model=os.environ.get("HEALER_MODEL", "openai/gpt-oss-120b"),
         vision_model=os.environ.get("VISION_MODEL", "mistralai/devstral-small-2-2512"),
         vision_max_calls=_vision_max_calls(),
-        jira_base_url=_required("JIRA_BASE_URL"),
-        jira_email=_required("JIRA_EMAIL"),
-        jira_token=_required("JIRA_TOKEN"),
+        jira_base_url=_required_if("JIRA_BASE_URL", required=testcase_source == "xray"),
+        jira_email=_required_if("JIRA_EMAIL", required=testcase_source == "xray"),
+        jira_token=_required_if("JIRA_TOKEN", required=testcase_source == "xray"),
         xray_is_cloud=os.environ.get("XRAY_IS_CLOUD", "true").lower() == "true",
         staging_base_url=staging_base_url,
         # Optional: only the legacy save_auth_state.py needs these; the pipeline's
@@ -194,6 +255,6 @@ def load_config() -> Config:
         plans_dir=plans_dir,
         tests_dir=tests_dir,
         snapshots_dir=snapshots_dir,
-        project_context_path=PROJECT_ROOT / "project_context.md",
-        project_map_path=PROJECT_ROOT / "project_map.md",
+        project_context_path=project_context_path,
+        project_map_path=project_map_path,
     )

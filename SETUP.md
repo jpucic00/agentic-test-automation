@@ -80,6 +80,11 @@ uv run pytest -q                               # offline unit suite (config, mod
 # Playwright runtime (needed to run generated tests against your app):
 uv run playwright install chromium             # one-time: the Chromium binary the Python `playwright` pkg drives
 (cd output && npm install)                     # the output/ Node harness → output/node_modules (gitignored); commit output/package-lock.json
+# The @playwright/mcp server bundles its OWN playwright-core, pinned to a DIFFERENT Chromium
+# build than the test runner above. Install that browser via its bundled core too, or the
+# Planner refuses with "Chromium browser is not installed" (it's a revision mismatch, not a
+# missing install — both builds end up side by side under ~/.cache/ms-playwright):
+node output/node_modules/@playwright/mcp/node_modules/playwright-core/cli.js install chromium
 ```
 
 If `uv sync` errors with "no interpreter found for Python 3.12", install Python 3.12 (see
@@ -207,6 +212,34 @@ The Orchestrator fetches the case, plans it against your staging app, generates 
 heals on failure (up to the configured cap), and — unless `GITLAB_ENABLED=false` — opens a merge request.
 The generated test and its plan are written to `output/`. To run the whole thing in a container instead, see
 the [Docker section in the README](README.md#run-in-docker).
+
+### 7.1 Or: try it against the bundled demo app (no Jira/staging needed)
+
+To watch the pipeline run without a Jira/Xray tenant or a staging environment — only a model gateway is
+required — use the bundled demo app and its ready-made test cases. This is the fastest end-to-end check of
+your gateway and lets you skip the Jira access (§3), the Xray client check (§5.1), and "describe your app"
+(§6) steps.
+
+```bash
+# 1. Start the demo app (separate shell; serves http://localhost:3000):
+cd packages/demo-notes-app && npm install && npm run dev
+
+# 2. In your .env, enable the "Demo profile" block from .env.example:
+#      TESTCASE_SOURCE=local
+#      LOCAL_TESTCASE_DIR=packages/demo-notes-app/test-cases
+#      PROJECT_CONTEXT_PATH=packages/demo-notes-app/project_context.md
+#      PROJECT_MAP_PATH=packages/demo-notes-app/project_map.md
+#      STAGING_BASE_URL=http://localhost:3000
+#      GITLAB_ENABLED=false
+
+# 3. Generate a test for a bundled case (NOTE-1 .. NOTE-4):
+uv run python scripts/run_one.py NOTE-2 --verbose
+```
+
+`TESTCASE_SOURCE=local` reads test cases from `packages/demo-notes-app/test-cases/` (raw-Xray-shaped JSON —
+the same shape the live Xray client produces, just read from disk), and the `PROJECT_*_PATH` overrides point
+the agents at the demo's own committed `project_context.md` / `project_map.md` without touching your app's
+root context files. See [`packages/demo-notes-app/README.md`](packages/demo-notes-app/README.md).
 
 ---
 

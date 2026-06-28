@@ -435,3 +435,71 @@ def test_planning_failure_returns_error_without_crashing(cfg, monkeypatch):
     assert "Planning/generation failed" in out["error"]
     assert out["mr_url"] is None
     gl.open_mr.assert_not_called()
+
+
+def test_local_source_uses_local_loader_not_xray_client(cfg, monkeypatch, tmp_path):
+    # TESTCASE_SOURCE=local routes through load_local_test_case; XrayClient is never built.
+    local_cfg = dataclasses.replace(cfg, testcase_source="local", local_testcase_dir=tmp_path)
+    _wire(monkeypatch, local_cfg, [_result("passed")])
+    xray_cls = MagicMock()
+    monkeypatch.setattr(orchestrator, "XrayClient", xray_cls)
+    loader = MagicMock(return_value=_manual_case())
+    monkeypatch.setattr(orchestrator, "load_local_test_case", loader)
+    out = asyncio.run(orchestrator.process_test_case("NOTE-1"))
+    assert out["status"] == "passed"
+    loader.assert_called_once()
+    assert loader.call_args.args[1] == "NOTE-1"  # called as (config, issue_key)
+    xray_cls.assert_not_called()
+
+
+def test_xray_source_uses_xray_client_not_local_loader(cfg, monkeypatch):
+    # Default (xray) mode must NOT touch the local loader.
+    _wire(monkeypatch, cfg, [_result("passed")])  # cfg.testcase_source == "xray"
+    loader = MagicMock()
+    monkeypatch.setattr(orchestrator, "load_local_test_case", loader)
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    loader.assert_not_called()
+
+
+def _failed(error_message, failed_test="QA-1: login"):
+    return models.TestRunResult(
+        status="failed", stdout="", stderr="", failed_test=failed_test, error_message=error_message
+    )
+
+
+def test_failure_signature_is_selector_agnostic():
+    # Two timeouts on the SAME test but DIFFERENT selectors are the same recurring failure —
+    # this is what makes a heal that swapped the selector (and still timed out) trigger escalation.
+    a = _failed("locator.click: Timeout 30000ms exceeded waiting for getByTestId('x')")
+    b = _failed("locator.click: Timeout 5000ms exceeded waiting for locator('xpath=//y')")
+    assert orchestrator._failure_signature(a) == orchestrator._failure_signature(b)
+
+
+def test_failure_signature_differs_by_category_and_test():
+    timeout = _failed("Timeout exceeded")
+    strict = _failed("strict mode violation: resolved 2 elements")
+    other_test = _failed("Timeout exceeded", failed_test="QA-1: logout")
+    assert orchestrator._failure_signature(timeout) != orchestrator._failure_signature(strict)
+    assert orchestrator._failure_signature(timeout) != orchestrator._failure_signature(other_test)
+
+
+def test_consecutive_repeats_counts_trailing_matches():
+    assert orchestrator._consecutive_repeats([], "a") == 0
+    assert orchestrator._consecutive_repeats(["a"], "a") == 1
+    assert orchestrator._consecutive_repeats(["a", "a"], "a") == 2
+    assert orchestrator._consecutive_repeats(["a", "b"], "a") == 0  # streak broken
+    assert orchestrator._consecutive_repeats(["b", "a"], "a") == 1
+
+
+def test_recurring_failure_escalates_locator_kind(cfg, monkeypatch):
+    # A failure that recurs the SAME way across attempts must raise the Healer's
+    # locator_escalation: 0 on the first sighting, then 1, 2 as it persists.
+    _wire(
+        monkeypatch, cfg,
+        [_result("failed"), _result("failed"), _result("failed"), _result("failed")],
+    )
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    escalations = [c.kwargs["locator_escalation"] for c in heal.call_args_list]
+    assert escalations == [0, 1, 2]

@@ -1,4 +1,4 @@
-"""End-to-end pipeline: Xray → Plan → Generate → Run → (Heal) → GitLab MR.
+"""End-to-end pipeline: test case (Xray or local JSON) → Plan → Generate → Run → (Heal) → GitLab MR.
 
 Phase 1.D — task ``kd2pvze`` (AI_TEST_GENERATION_GUIDE.md §3.13). Wires the three
 agents and the two integrations into a single run for one Jira/Xray test case.
@@ -29,15 +29,18 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from .agents.generator import generate_test
 from .agents.healer import heal_test
 from .agents.planner import plan_test_case
-from .config import Config, load_config
+from .config import PROJECT_ROOT, Config, load_config
 from .gitlab_client import GitLabClient, TestRevision
-from .models import GeneratedTest, TestPlan
+from .local_testcases import load_local_test_case
+from .models import GeneratedTest, ManualTestCase, TestPlan, TestRunResult
 from .test_runner import run_test
 from .xray_client import XrayClient
 
@@ -45,7 +48,22 @@ logger = logging.getLogger(__name__)
 
 # Default heal cap; override per run via the MAX_HEAL_ATTEMPTS env var (read after
 # load_config() so a value in .env is honored) or the process_test_case argument.
-MAX_HEAL_ATTEMPTS = 2
+# 3 (was 2) gives the locator-kind escalation room to descend the resilience ladder: a
+# persistently-failing step needs one attempt to confirm the failure recurs and another to
+# escalate to a different locator kind (e.g. roll a hallucinated id over to a verified XPath).
+MAX_HEAL_ATTEMPTS = 3
+
+
+def _load_test_case(config: Config, issue_key: str) -> ManualTestCase:
+    """Fetch one test case from the configured source.
+
+    ``TESTCASE_SOURCE=local`` reads a raw-Xray-shaped JSON file from ``LOCAL_TESTCASE_DIR``
+    (no Jira needed); the default ``xray`` source fetches it live from Jira/Xray. Both yield
+    the same ``ManualTestCase``, so everything downstream is identical.
+    """
+    if config.testcase_source == "local":
+        return load_local_test_case(config, issue_key)
+    return XrayClient(config).fetch(issue_key)
 
 
 async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = None) -> dict:
@@ -56,9 +74,8 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
 
     _clear_snapshots_dir(config)
 
-    logger.info("[%s] Fetching from Xray", issue_key)
-    xray = XrayClient(config)
-    test_case = xray.fetch(issue_key)
+    logger.info("[%s] Loading test case (source=%s)", issue_key, config.testcase_source)
+    test_case = _load_test_case(config, issue_key)
     (config.plans_dir / f"{issue_key}-input.json").write_text(
         test_case.model_dump_json(indent=2)
     )
@@ -159,12 +176,23 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             logger.warning("[%s] Generator retry failed: %s", issue_key, exc)
 
     heal_summaries: list[str] = []
+    failure_signatures: list[str] = []
     heal_attempts = 0
     while result.status != "passed" and heal_attempts < max_heal_attempts:
         heal_attempts += 1
+        # How many times in a row this exact failure has already recurred. When the SAME
+        # step keeps failing the same way, re-trying the same locator kind isn't working —
+        # tell the Healer to escalate down the resilience ladder (→ CSS → XPath) instead of
+        # re-emitting (and often re-hallucinating) the locator that already failed.
+        signature = _failure_signature(result)
+        escalation = _consecutive_repeats(failure_signatures, signature)
+        failure_signatures.append(signature)
+        escalation_note = (
+            f" — same failure recurred {escalation}×, escalating locator kind" if escalation else ""
+        )
         logger.info(
-            "[%s] Test %s — healing (attempt %d/%d)",
-            issue_key, result.status, heal_attempts, max_heal_attempts,
+            "[%s] Test %s — healing (attempt %d/%d)%s",
+            issue_key, result.status, heal_attempts, max_heal_attempts, escalation_note,
         )
         try:
             # Pass a snapshot of the summaries so far: the Healer rewrites the whole
@@ -176,6 +204,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 plan=plan,
                 test_case=test_case,
                 heal_history=list(heal_summaries),
+                locator_escalation=escalation,
             )
         except Exception as exc:
             # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not
@@ -342,6 +371,48 @@ def _commit_message(issue_key: str, label: str, detail: str | None = None) -> st
     return f"{subject}\n\n{detail}" if detail else subject
 
 
+def _failure_signature(result: TestRunResult) -> str:
+    """A selector-AGNOSTIC fingerprint of a run failure, used to detect a recurring failure.
+
+    Keys on the failing test title + a coarse failure *category* (timeout / strict-mode /
+    navigation / assertion / other). Deliberately ignores the specific locator text so that a
+    heal which swaps the selector but STILL fails the same way (e.g. timeout → timeout) is
+    recognized as the SAME failure recurring — which is what should trigger locator-kind
+    escalation. Digits are stripped from the fallback head so timeouts/line numbers don't
+    fragment otherwise-identical failures.
+    """
+    msg = (result.error_message or "").lower()
+    test = (result.failed_test or "").strip().lower()
+    if "strict mode" in msg or ("resolved" in msg and "element" in msg):
+        category = "strict-mode"
+    elif "timeout" in msg or "exceeded" in msg or "waiting for" in msg:
+        category = "timeout"
+    elif "err_" in msg or "net::" in msg or "tohaveurl" in msg:
+        category = "navigation"
+    elif "expect(" in msg or "assertion" in msg or "to be" in msg:
+        category = "assertion"
+    else:
+        head = re.sub(r"\s+", " ", re.sub(r"\d+", "", msg)).strip()[:80]
+        category = head or "unknown"
+    return f"{test}|{category}"
+
+
+def _consecutive_repeats(history: list[str], signature: str) -> int:
+    """Count how many trailing entries of ``history`` equal ``signature`` (0 if none/new).
+
+    This is the escalation level handed to the Healer: 0 = first time we've seen this failure
+    (heal normally); >= 1 = the failure persisted across that many prior attempts (escalate the
+    locator kind down the ladder).
+    """
+    count = 0
+    for prev in reversed(history):
+        if prev == signature:
+            count += 1
+        else:
+            break
+    return count
+
+
 def _resolve_max_heal_attempts() -> int:
     raw = os.environ.get("MAX_HEAL_ATTEMPTS")
     if raw is None:
@@ -352,6 +423,66 @@ def _resolve_max_heal_attempts() -> int:
         return MAX_HEAL_ATTEMPTS
 
 
+class _ExcludeLoggers(logging.Filter):
+    """Drop records emitted by the given logger-name prefixes.
+
+    Used on the FILE handler only, to keep the gateway's HTTP/SDK chatter — and any request
+    headers that carry the API key — out of the on-disk log. The console handler is left
+    unfiltered, so ``--verbose`` still streams that activity live in the terminal.
+    """
+
+    def __init__(self, prefixes: tuple[str, ...]) -> None:
+        super().__init__()
+        self._prefixes = prefixes
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.name.startswith(self._prefixes)
+
+
+def _configure_logging(issue_key: str, *, verbose: bool) -> Path:
+    """Log to the console AND to a persistent per-run file under ``output/runs/``.
+
+    Console honors ``--verbose`` (DEBUG vs INFO). The file captures **INFO by default** —
+    enough to diagnose a failed run, because the pipeline logs every step and every failure
+    (the Planner/Healer exception text, including the gateway's error body, is logged at
+    WARNING/ERROR). The file deliberately does NOT replay the agents' conversations: the large
+    accessibility snapshots stay in the agents' in-memory history and nothing logs them, so the
+    file stays small and easy to read/share. Set ``RUN_LOG_LEVEL=DEBUG`` for a deeper dive.
+    The console is unfiltered, so ``--verbose`` streams the live HTTP/agent activity as before;
+    the file excludes the noisy HTTP/SDK loggers (httpx/openai) so it stays readable and never
+    records the gateway request headers (which carry the API key). Returns the log file path.
+    """
+    runs_dir = PROJECT_ROOT / "output" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    log_path = runs_dir / f"run-{issue_key}-{stamp}.log"
+
+    level_name = os.environ.get("RUN_LOG_LEVEL", "INFO").strip().upper()
+    file_level = getattr(logging, level_name, logging.INFO)
+    console_level = logging.DEBUG if verbose else logging.INFO
+
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    console = logging.StreamHandler()
+    console.setLevel(console_level)
+    console.setFormatter(fmt)
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(file_level)
+    file_handler.setFormatter(fmt)
+    # File only: drop HTTP/SDK chatter and any header dumps that could leak the key. The console
+    # keeps them, so --verbose still shows live request activity.
+    file_handler.addFilter(_ExcludeLoggers(("httpx", "httpcore", "openai", "urllib3")))
+
+    root = logging.getLogger()
+    root.setLevel(min(file_level, console_level))  # don't starve either handler
+    root.handlers.clear()  # drop any prior handler so there's no duplicate console line
+    root.addHandler(console)
+    root.addHandler(file_handler)
+
+    return log_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the AI test-generation pipeline for one Jira/Xray test case."
@@ -360,15 +491,14 @@ def main() -> None:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    log_path = _configure_logging(args.issue_key, verbose=args.verbose)
+    logger.info("Run log: %s", log_path)
 
     result = asyncio.run(process_test_case(args.issue_key))
     print("\n=== Result ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
+    print(f"\nFull DEBUG log: {log_path}")
 
 
 if __name__ == "__main__":

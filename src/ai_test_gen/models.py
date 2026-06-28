@@ -67,9 +67,12 @@ class PlanStep(BaseModel):
     target_selector: str | None = Field(
         default=None,
         description=(
-            "Verified Playwright locator expression from browser_generate_locator "
-            "(no 'page.' prefix), e.g. \"getByTestId('login-submit')\" (id-based) or "
-            "\"getByRole('button', { name: 'Save' })\". None if the Planner couldn't verify one."
+            "Verified Playwright locator expression (no 'page.' prefix), the most robust kind "
+            "the element supports along the resilience ladder id > accessible > CSS > XPath: "
+            "getByTestId('login-submit') (id); getByRole('button', { name: 'Save', exact: true }) "
+            "or getByLabel('Email', { exact: true }) (accessible); locator('css=...') (CSS); or "
+            "locator('xpath=//...') (XPath, for inaccessible elements). Always captured + verified "
+            "live, never invented. None if none could be verified."
         ),
     )
     expected: str | None = Field(

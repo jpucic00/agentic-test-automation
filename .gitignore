@@ -5,10 +5,16 @@
 .env.*.local
 *.pem
 *.key
+reports/
+.claude/
 # Filled project-context docs hold staging credentials — NEVER commit them.
 # Tracked templates: project_context.example.md / project_map.example.md.
 project_context.md
 project_map.md
+# Exception: the bundled demo app ships its OWN filled-in context files (no real
+# secrets — local demo only), so re-include them despite the name-only rules above.
+!packages/demo-notes-app/project_context.md
+!packages/demo-notes-app/project_map.md
 
 # ─── Python ──────────────────────────────────────────────────────
 .venv/
@@ -43,6 +49,7 @@ storage_state*.json
 # the runtime artifacts; keep the harness. (node_modules/, test-results/,
 # playwright-report/, storage_state*.json are already ignored globally above.)
 output/plans/
+output/runs/
 output/snapshots/*
 !output/snapshots/.gitkeep
 output/storage_states/

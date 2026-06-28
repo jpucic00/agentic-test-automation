@@ -128,6 +128,7 @@ def _build_heal_message(
     plan: TestPlan,
     test_case: ManualTestCase,
     heal_history: list[str] | None = None,
+    locator_escalation: int = 0,
 ) -> str:
     """Assemble the Healer's user message: intent + plan + failing code + failure.
 
@@ -139,6 +140,12 @@ def _build_heal_message(
     ``heal_history`` carries the ``changes_summary`` of every earlier heal attempt in this
     run. The Healer rewrites the whole file, so without that history attempt 2 can silently
     undo attempt 1's fix and ping-pong between two wrong versions.
+
+    ``locator_escalation`` is how many times this same failure has already recurred (the
+    orchestrator counts consecutive identical failures). When >= 1 the message pushes the
+    Healer to stop re-trying the same locator KIND and descend the resilience ladder
+    (id → accessible → CSS → XPath), so a persistently-failing step on an inaccessible
+    element finally rolls over to a verified XPath instead of re-hallucinating an id.
     """
     planner_notes = plan.notes.strip() or "(none)"
 
@@ -152,6 +159,18 @@ def _build_heal_message(
 The failing code above ALREADY CONTAINS these changes, and the test STILL fails with the
 error below. Do NOT undo a previous attempt's change unless the current error shows that
 change itself was wrong — build on it or fix something else.
+"""
+
+    escalation_block = ""
+    if locator_escalation >= 1:
+        escalation_block = f"""
+## ⚠ This failure has PERSISTED across {locator_escalation} earlier heal attempt(s)
+The same step keeps failing the same way, so re-trying the SAME KIND of locator is not working —
+the locator kind itself is the problem. ESCALATE: go to the live element and capture a DIFFERENT
+kind of locator by descending the resilience ladder (id → accessible → CSS → XPath). If the element
+is inaccessible (no id, no usable role/name), use a VERIFIED `locator('xpath=...')` anchored on
+stable text/attributes — that is the correct fix, not a hack. Do NOT re-emit a tweaked version of
+the locator that already failed, and never re-emit a hallucinated id. See "Locator-kind escalation".
 """
     return f"""Fix this failing Playwright test.
 
@@ -180,7 +199,7 @@ Planned steps (selectors here were verified live by the Planner):
 ```typescript
 {test.code}
 ```
-{history_block}
+{history_block}{escalation_block}
 **Failure:**
 - Status: {failure.status}
 - Error: {failure.error_message}
@@ -207,14 +226,21 @@ async def heal_test(
     test_case: ManualTestCase,
     storage_state: Path | None = None,
     heal_history: list[str] | None = None,
+    locator_escalation: int = 0,
 ) -> HealedTest:
     """Run the Healer on a failing test + its failure result and return the fix.
 
     ``heal_history`` is the list of earlier attempts' ``changes_summary`` for this
     run, so a later attempt builds on (rather than undoes) the previous fix.
+
+    ``locator_escalation`` is the consecutive-recurrence count of the current failure
+    (from the orchestrator); when >= 1 the Healer is pushed to escalate the locator KIND
+    down the resilience ladder rather than re-trying the same one.
     """
     agent = build_healer(config, storage_state=storage_state)
-    user_message = _build_heal_message(test, failure, plan, test_case, heal_history)
+    user_message = _build_heal_message(
+        test, failure, plan, test_case, heal_history, locator_escalation
+    )
     # MCP toolset → enter the agent as an async context manager around the run.
     async with agent:
         result = await agent.run(

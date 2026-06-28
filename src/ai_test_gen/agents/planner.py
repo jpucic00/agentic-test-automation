@@ -219,10 +219,12 @@ async def plan_test_case(
 **Steps and Expected Results:**
 {_format_steps(test_case)}
 
-Now build a TestPlan. Navigate the staging app and, for each element you act on, call
-browser_generate_locator on its ref to capture a VERIFIED locator — never hand-write one.
-The app's manual id= attributes surface as getByTestId('...'); elements without an id come
-back as getByRole/getByLabel. Record each locator verbatim in target_selector.
+Now build a TestPlan. Navigate the staging app and, for each element you act on, capture a VERIFIED
+locator — the most robust kind that element supports (resilience ladder: id > accessible > CSS >
+XPath). Author-written id= attributes surface as getByTestId('...') via browser_generate_locator;
+accessible elements come back as getByRole/getByLabel; inaccessible ones need a verified
+locator('css=...') or locator('xpath=...'). Never hand-write an unverified locator — confirm it
+resolves to the intended element first. Record each locator verbatim in target_selector.
 """
 
     # MCP toolset → the agent must be entered as an async context manager so the

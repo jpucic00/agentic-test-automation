@@ -88,6 +88,42 @@ def test_prompts_carry_generate_locator_contract():
     assert "#login-submit" not in planner_md  # retired GOOD-example marker
 
 
+def test_prompts_carry_resilience_ladder():
+    # The locator strategy is the element-driven resilience ladder (id > accessible > CSS > XPath),
+    # not id-first: planner.md and healer.md must teach descending to a verified XPath for
+    # inaccessible elements, and the Generator must accept css/xpath plan selectors.
+    prompts = planner_mod.PROMPTS_DIR
+    planner_md = (prompts / "planner.md").read_text()
+    healer_md = (prompts / "healer.md").read_text()
+    generator_md = (prompts / "generator.md").read_text()
+    for md, name in ((planner_md, "planner.md"), (healer_md, "healer.md")):
+        assert "resilience ladder" in md.lower(), name
+        assert "xpath" in md.lower(), name
+    # The Generator carries css/xpath plan selectors verbatim (it has no MCP to re-capture).
+    assert "xpath" in generator_md.lower()
+    assert "locator('css=" in generator_md
+
+
+def test_healer_prompt_has_locator_kind_escalation():
+    # On a persistently-failing step the Healer must escalate the locator KIND down the ladder
+    # (the behavior the user asked for: roll a stuck id over to a verified XPath).
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "Locator-kind escalation" in healer_md
+    assert "escalat" in healer_md.lower()
+
+
+def test_heal_message_escalation_block_present_when_recurring():
+    msg = healer_mod._build_heal_message(*_heal_message_fixtures(), locator_escalation=2)
+    assert "PERSISTED across 2" in msg
+    assert "ladder" in msg.lower()
+    assert "xpath" in msg.lower()
+
+
+def test_heal_message_no_escalation_block_on_first_failure():
+    msg = healer_mod._build_heal_message(*_heal_message_fixtures(), locator_escalation=0)
+    assert "PERSISTED" not in msg
+
+
 def test_prompts_carry_page_context_contract():
     # The distilled-page-context contract: the Planner extracts page_url + container
     # per step (observed, never invented); the Generator scopes locators when a step

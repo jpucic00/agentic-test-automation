@@ -36,6 +36,14 @@ DEFAULT_STEPS_FIELD_ID = "customfield_11006"
 
 class XrayClient:
     def __init__(self, config: Config) -> None:
+        # The xray source needs Jira creds; in local mode they are None and this client
+        # is never constructed (mirrors GitLabClient when GITLAB_ENABLED=false). Fail fast
+        # with an actionable message instead of deep inside the atlassian client.
+        if not (config.jira_base_url and config.jira_email and config.jira_token):
+            raise RuntimeError(
+                "The 'xray' test-case source requires JIRA_BASE_URL, JIRA_EMAIL, and "
+                "JIRA_TOKEN. Set TESTCASE_SOURCE=local to read test cases from local JSON."
+            )
         self.config = config
         # Read after config has loaded .env. Default keeps the company tenant
         # working with zero extra config; the env var keeps the scaffold shareable.
@@ -186,6 +194,14 @@ class XrayClient:
 
 
 def _build_jira(config: Config) -> Jira:
+    # jira_* are Optional on Config (None in local mode) but always set here: the only
+    # caller, XrayClient.__init__, guards on them first. Assert to narrow the type for
+    # the Jira(...) construction below.
+    assert (
+        config.jira_base_url is not None
+        and config.jira_email is not None
+        and config.jira_token is not None
+    ), "XrayClient.__init__ guarantees JIRA_* are set before _build_jira runs"
     # Share the gateway proxy/CA/mTLS policy (direct over VPN, ignoring env
     # HTTP(S)_PROXY unless USE_HTTP_PROXY=true). atlassian-python-api uses the passed
     # session as-is, preserving its trust_env / verify / cert.

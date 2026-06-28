@@ -43,6 +43,28 @@ free text. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design and
    uv run python -m ai_test_gen.orchestrator QA-1234 --verbose
    ```
 
+## Try it with the bundled demo app (no Jira/Xray needed)
+
+The repo ships a tiny, self-contained Next.js notes app and ready-made test cases, so you can watch
+the whole pipeline run without a Jira/Xray tenant or a staging environment — you only need a model
+gateway.
+
+```bash
+# 1. Start the demo app (serves http://localhost:3000)
+cd packages/demo-notes-app && npm install && npm run dev
+
+# 2. In another shell, from the repo root, enable the "Demo profile" block in your .env
+#    (see .env.example): TESTCASE_SOURCE=local, STAGING_BASE_URL=http://localhost:3000, GITLAB_ENABLED=false.
+
+# 3. Generate a test for one of the bundled cases:
+uv run python scripts/run_one.py NOTE-2 --verbose
+```
+
+The cases live in [`packages/demo-notes-app/test-cases/`](packages/demo-notes-app/test-cases) as
+raw-Xray-shaped JSON, and the app's own [`project_context.md`](packages/demo-notes-app/project_context.md)
++ [`project_map.md`](packages/demo-notes-app/project_map.md) describe it to the agents. See the
+[demo app README](packages/demo-notes-app/README.md) for details.
+
 ## Run in Docker
 
 The pipeline ships as a container (official Playwright base image, non-root user, pinned dependencies).
@@ -65,6 +87,7 @@ All configuration is environment variables, documented section-by-section in [`.
 
 - **Model gateway** — any OpenAI-compatible endpoint; one model each for the Planner, Generator, and Healer.
 - **Jira/Xray** — Cloud (API token) or Server/Data Center (PAT); the source of manual test cases.
+- **Test-case source** — `xray` (live Jira/Xray) or `local` (raw-Xray-shaped JSON files; powers the bundled demo, no tenant needed).
 - **Staging app** — the URL under test plus credentials. A fail-closed guardrail refuses to start unless
   the host looks non-production.
 - **GitLab** — optional merge-request destination.

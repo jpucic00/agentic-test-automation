@@ -38,6 +38,10 @@ _OPTIONAL_VARS = (
     "GITLAB_ENABLED",
     "GITLAB_TARGET_BRANCH",
     "NON_PROD_URL_MARKERS",
+    "TESTCASE_SOURCE",
+    "LOCAL_TESTCASE_DIR",
+    "PROJECT_CONTEXT_PATH",
+    "PROJECT_MAP_PATH",
 )
 
 
@@ -206,3 +210,54 @@ def test_vision_model_defaults_and_override(env):
     assert load_config().vision_model == "mistralai/devstral-small-2-2512"
     env.setenv("VISION_MODEL", "custom/vision-model")
     assert load_config().vision_model == "custom/vision-model"
+
+
+# --- test-case source (xray | local) + path overrides -----------------------
+
+
+@pytest.mark.usefixtures("env")
+def test_defaults_to_xray_source():
+    cfg = load_config()
+    assert cfg.testcase_source == "xray"
+    assert cfg.local_testcase_dir is None
+
+
+def test_invalid_testcase_source_fails_fast(env):
+    env.setenv("TESTCASE_SOURCE", "bogus")
+    with pytest.raises(RuntimeError, match="TESTCASE_SOURCE"):
+        load_config()
+
+
+def test_local_source_makes_jira_optional(env, tmp_path):
+    # In local mode the pipeline needs no Jira/Xray: the three JIRA_* vars become optional.
+    env.setenv("TESTCASE_SOURCE", "local")
+    env.setenv("LOCAL_TESTCASE_DIR", str(tmp_path / "cases"))
+    for var in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_TOKEN"):
+        env.delenv(var, raising=False)
+    cfg = load_config()
+    assert cfg.testcase_source == "local"
+    assert cfg.jira_base_url is None and cfg.jira_email is None and cfg.jira_token is None
+    assert cfg.local_testcase_dir == (tmp_path / "cases").resolve()
+
+
+def test_local_source_requires_local_testcase_dir(env):
+    env.setenv("TESTCASE_SOURCE", "local")
+    env.delenv("LOCAL_TESTCASE_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="LOCAL_TESTCASE_DIR"):
+        load_config()
+
+
+def test_local_testcase_dir_relative_resolves_under_project_root(env, tmp_path):
+    env.setenv("TESTCASE_SOURCE", "local")
+    env.setenv("LOCAL_TESTCASE_DIR", "demo/test-cases")
+    assert load_config().local_testcase_dir == (tmp_path / "demo/test-cases").resolve()
+
+
+def test_context_path_overrides_respected(env, tmp_path):
+    ctx = tmp_path / "custom" / "ctx.md"
+    mp = tmp_path / "custom" / "map.md"
+    env.setenv("PROJECT_CONTEXT_PATH", str(ctx))
+    env.setenv("PROJECT_MAP_PATH", str(mp))
+    cfg = load_config()
+    assert cfg.project_context_path == ctx.resolve()
+    assert cfg.project_map_path == mp.resolve()

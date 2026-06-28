@@ -54,13 +54,18 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
 - DO NOT change an assertion into something the test case didn't ask for; only fix one that is
   clearly wrong, or restore one the Generator dropped.
 - You have access to Playwright MCP. When a fix needs a selector — a correction OR a step you add —
-  navigate to the live element and call `browser_generate_locator` on its ref to get the VERIFIED
-  locator — for id'd elements it returns `getByTestId('...')` (the app's `id` is the test id).
-  Don't hand-write selectors.
-- NEVER invent a selector. Do NOT type an `id` / `getByTestId('…')` / `#id` / CSS class from your
-  head — a hallucinated id is the #1 way a heal makes the test WORSE. The only source of a NEW
-  selector (including for a step you add) is `browser_generate_locator` on a ref you reached live.
-  If you can't verify one, keep the existing locator and say so in `changes_summary`.
+  navigate to the live element and capture a VERIFIED locator, picking the most robust kind the
+  element supports (resilience ladder: **id > accessible > CSS > XPath**). Call
+  `browser_generate_locator` on the element's ref — id'd elements come back as `getByTestId('...')`,
+  accessible ones as `getByRole`/`getByLabel`, inaccessible ones as a CSS locator. Don't hand-write
+  an unverified selector.
+- NEVER invent a selector from memory — a hallucinated `id` / `getByTestId('…')` / role+name is the
+  #1 way a heal makes the test WORSE. But a CSS or XPath you AUTHOR and then VERIFY live is NOT an
+  invention: you MAY write a candidate `locator('css=...')` / `locator('xpath=...')`, confirm it
+  resolves to exactly the intended element (`browser_generate_locator` accepts a unique selector as
+  its `target`; `browser_verify_element_visible` / `browser_verify_text_visible` confirm it's the
+  right one), and only then record it. The rule is *verify before you trust*, not *ids only*. If you
+  can't verify any locator, keep the existing one and say so in `changes_summary`.
 - PRESERVE what already works. Beyond the locator/line the error names and any step you add or
   remove to match the intent, leave the file intact — never drop an existing `exact: true`, and
   never rewrite a selector the error didn't flag.
@@ -92,6 +97,23 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
      duplicates share the SAME name (e.g. a button inside a dialog and one behind it on the page),
      scope to the active container — `page.getByRole('dialog').getByRole('button', { name: 'Add',
      exact: true })` — or, as a last resort, `.first()`.
+
+# Locator-kind escalation (when the SAME step keeps failing)
+
+If the heal message tells you a step has **already failed on previous attempts** — i.e. an earlier
+heal tried to fix this same step and it STILL fails the same way — then re-capturing the *same kind*
+of locator is not working. Do NOT re-emit a tweaked version of the same locator (and never re-emit a
+hallucinated id). Instead **escalate to a different KIND of locator by descending the resilience
+ladder**: id → accessible (`getByRole`/`getByLabel`/`getByText`) → CSS (`locator('css=...')`) →
+XPath (`locator('xpath=...')`).
+
+- Go to the live element and capture a locator of a kind you have NOT already tried for it.
+- For an **inaccessible** element (no id, no usable role/name) XPath is the right answer — anchor it
+  on the most stable thing available (visible text, a stable attribute, a structural relationship),
+  e.g. `locator('xpath=//button[normalize-space()="Save"]')`. This is exactly what a human QA
+  engineer does when an element can't be reached any other way; it is a legitimate fix, not a hack.
+- VERIFY the new locator resolves to the intended element before recording it (see the constraints
+  above). Then say in `changes_summary` which kind you escalated FROM and TO, and why.
 
 # Authentication
 
