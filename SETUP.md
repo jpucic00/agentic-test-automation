@@ -179,11 +179,16 @@ The agents read two human-authored context files. Copy the templates and fill th
 
 ```bash
 cp project_context.example.md project_context.md   # conventions, test users (disposable creds), quirks
-cp project_map.example.md   project_map.md          # routes, auth/login flow, key screens & selectors
+cp project_map.example.md   project_map.md          # routes, auth/login flow, key screens
 ```
 
 `project_context.md` goes to every agent; `project_map.md` goes only to the browser-driving agents
-(Planner, Healer). Both templates spell out the level of detail to provide.
+(Planner, Healer). Each template is a guided questionnaire: every section has a short purpose
+comment, bullets phrased as `<questions to answer in place>`, and tables with a `<…>` format row to
+copy per entry — work through it top to bottom, replacing each placeholder. **Don't list element
+ids/selectors** in either file: the agents capture locators live from the running app (the
+resilience ladder — id → accessible → CSS → XPath), so you describe routes, flows, roles, and
+conventions, not how to find each element.
 
 The loader strips HTML comments (`<!-- … -->`) before injecting these files — write guidance for
 humans in comments freely; it never reaches the model. If a file still contains template
