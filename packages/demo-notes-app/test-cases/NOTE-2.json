@@ -1,0 +1,31 @@
+{
+  "key": "NOTE-2",
+  "fields": {
+    "summary": "Log in as the seeded demo user and create a note",
+    "description": "The pre-seeded demo account can log in and add a note, which then appears in the notes list.",
+    "labels": ["smoke", "auth", "notes"]
+  },
+  "steps": [
+    {
+      "id": 20001,
+      "index": 1,
+      "step": { "raw": "Open the app and go to the login page.", "rendered": "<p>Open the app and go to the login page.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The login form is displayed with email and password fields.", "rendered": "<p>The login form is displayed with email and password fields.</p>" }
+    },
+    {
+      "id": 20002,
+      "index": 2,
+      "step": { "raw": "Enter the demo user's email and password and submit the login form.", "rendered": "<p>Enter the demo user's email and password and submit the login form.</p>" },
+      "data": { "raw": "demo@demo.test / Passw0rd!", "rendered": "<p>demo@demo.test / Passw0rd!</p>" },
+      "result": { "raw": "The notes page is shown and the navbar displays the logged-in user's email.", "rendered": "<p>The notes page is shown and the navbar displays the logged-in user's email.</p>" }
+    },
+    {
+      "id": 20003,
+      "index": 3,
+      "step": { "raw": "Click the New note button, enter a title and body, and save the note.", "rendered": "<p>Click the New note button, enter a title and body, and save the note.</p>" },
+      "data": { "raw": "title: Buy groceries; body: Milk, eggs, bread", "rendered": "<p>title: Buy groceries; body: Milk, eggs, bread</p>" },
+      "result": { "raw": "The new note appears in the notes list, showing its title.", "rendered": "<p>The new note appears in the notes list, showing its title.</p>" }
+    }
+  ]
+}

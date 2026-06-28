@@ -1,0 +1,209 @@
+:root {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --text: #1b1f24;
+  --muted: #6b7280;
+  --border: #d9dde3;
+  --primary: #2563eb;
+  --primary-text: #ffffff;
+  --danger: #dc2626;
+  --error-bg: #fee2e2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.navbar .brand {
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-links a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.user-menu {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.container {
+  max-width: 640px;
+  margin: 2rem auto;
+  padding: 0 1.25rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+input,
+textarea {
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+}
+
+button,
+/* `.btn` is intentionally applied to non-semantic <div> controls (no role/aria/id) so they
+   LOOK like buttons but are inaccessible — see "Accessibility profile" in README.md. */
+.btn {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-text);
+  margin-top: 0.75rem;
+}
+
+.btn {
+  display: inline-block;
+  text-align: center;
+  user-select: none;
+}
+
+button:hover,
+.btn:hover {
+  filter: brightness(0.95);
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions button,
+.actions .btn {
+  margin-top: 0;
+}
+
+.error {
+  background: var(--error-bg);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.note-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.note-item h3 {
+  margin: 0 0 0.25rem;
+}
+
+.note-body {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 1.5rem;
+  max-width: 360px;
+  width: 100%;
+}
+
+.modal h2 {
+  margin-top: 0;
+}

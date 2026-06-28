@@ -1,0 +1,24 @@
+{
+  "key": "NOTE-1",
+  "fields": {
+    "summary": "Register a new account and land on the notes page",
+    "description": "A new visitor can create an account from the registration form and is logged in automatically. Uses a unique email per run because the app rejects duplicates.",
+    "labels": ["smoke", "auth", "registration"]
+  },
+  "steps": [
+    {
+      "id": 10001,
+      "index": 1,
+      "step": { "raw": "Open the app and go to the registration page.", "rendered": "<p>Open the app and go to the registration page.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The registration form is shown with email, password and confirm-password fields.", "rendered": "<p>The registration form is shown with email, password and confirm-password fields.</p>" }
+    },
+    {
+      "id": 10002,
+      "index": 2,
+      "step": { "raw": "Enter a unique new email and a password, repeat the same password in the confirm field, then submit the form.", "rendered": "<p>Enter a unique new email and a password, repeat the same password in the confirm field, then submit the form.</p>" },
+      "data": { "raw": "email: a unique address per run (e.g. qa-<timestamp>@demo.test); password: NewPass123!", "rendered": "<p>email: a unique address per run; password: NewPass123!</p>" },
+      "result": { "raw": "The account is created, the user is logged in automatically, and the notes page is shown with the new email in the navbar.", "rendered": "<p>The account is created, the user is logged in, and the notes page is shown with the new email in the navbar.</p>" }
+    }
+  ]
+}

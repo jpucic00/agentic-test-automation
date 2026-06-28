@@ -1,0 +1,24 @@
+{
+  "key": "NOTE-4",
+  "fields": {
+    "summary": "Login fails with an incorrect password",
+    "description": "Logging in with the demo user's email but a wrong password shows an error and keeps the user on the login page (negative test).",
+    "labels": ["regression", "auth", "negative"]
+  },
+  "steps": [
+    {
+      "id": 40001,
+      "index": 1,
+      "step": { "raw": "Open the app and go to the login page.", "rendered": "<p>Open the app and go to the login page.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The login form is displayed.", "rendered": "<p>The login form is displayed.</p>" }
+    },
+    {
+      "id": 40002,
+      "index": 2,
+      "step": { "raw": "Enter the demo user's email with an incorrect password and submit the login form.", "rendered": "<p>Enter the demo user's email with an incorrect password and submit the login form.</p>" },
+      "data": { "raw": "demo@demo.test / wrong-password", "rendered": "<p>demo@demo.test / wrong-password</p>" },
+      "result": { "raw": "An 'Invalid email or password.' error is shown and the page stays on the login form; the user is not logged in.", "rendered": "<p>An 'Invalid email or password.' error is shown and the page stays on the login form; the user is not logged in.</p>" }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "key": "NOTE-3",
+  "fields": {
+    "summary": "Create, edit, then delete a note",
+    "description": "Full note lifecycle for the demo user: a note is created, edited, then deleted via the confirmation dialog, leaving the list empty. Creates the note first so the edit/delete steps act on a known note (per-note ids are dynamic).",
+    "labels": ["regression", "notes", "crud"]
+  },
+  "steps": [
+    {
+      "id": 30001,
+      "index": 1,
+      "step": { "raw": "Log in as the demo user and open the notes page.", "rendered": "<p>Log in as the demo user and open the notes page.</p>" },
+      "data": { "raw": "demo@demo.test / Passw0rd!", "rendered": "<p>demo@demo.test / Passw0rd!</p>" },
+      "result": { "raw": "The notes page is shown.", "rendered": "<p>The notes page is shown.</p>" }
+    },
+    {
+      "id": 30002,
+      "index": 2,
+      "step": { "raw": "Create a note with a title and body using the New note button.", "rendered": "<p>Create a note with a title and body using the New note button.</p>" },
+      "data": { "raw": "title: Weekend plan; body: Hike and groceries", "rendered": "<p>title: Weekend plan; body: Hike and groceries</p>" },
+      "result": { "raw": "The note appears in the notes list with the title 'Weekend plan'.", "rendered": "<p>The note appears in the notes list with the title 'Weekend plan'.</p>" }
+    },
+    {
+      "id": 30003,
+      "index": 3,
+      "step": { "raw": "Edit that note: open it with its Edit button, change the title, and save.", "rendered": "<p>Edit that note: open it with its Edit button, change the title, and save.</p>" },
+      "data": { "raw": "new title: Weekend plan (updated)", "rendered": "<p>new title: Weekend plan (updated)</p>" },
+      "result": { "raw": "The note's title updates to 'Weekend plan (updated)' in the list.", "rendered": "<p>The note's title updates to 'Weekend plan (updated)' in the list.</p>" }
+    },
+    {
+      "id": 30004,
+      "index": 4,
+      "step": { "raw": "Delete that note: click its Delete button and confirm in the confirmation dialog.", "rendered": "<p>Delete that note: click its Delete button and confirm in the confirmation dialog.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The note is removed and the empty-state message is shown again.", "rendered": "<p>The note is removed and the empty-state message is shown again.</p>" }
+    }
+  ]
+}
