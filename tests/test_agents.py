@@ -137,6 +137,19 @@ def test_prompts_carry_page_context_contract():
     assert "page.getByRole('dialog')" in generator_md
 
 
+def test_prompts_carry_verified_assertion_contract():
+    # Verified-assertion contract: the Planner captures a proof locator (assert_selector)
+    # or a URL for assert steps; the Generator asserts those and NEVER invents visible text.
+    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
+    assert "assert_selector" in planner_md
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    assert "assert_selector" in generator_md
+    assert "waitForURL" in generator_md
+    # The field exists on the data contract with a default so plans without it still validate.
+    step = models.PlanStep(action="verify dashboard")
+    assert step.assert_selector is None
+
+
 def test_heal_message_includes_intent_plan_and_notes():
     # Path A: the heal message must surface the original intent, the plan's verified selectors,
     # and the Planner's notes — not just the failing code + error.
@@ -154,6 +167,7 @@ def test_heal_message_includes_intent_plan_and_notes():
             models.PlanStep(
                 action="click Add org",
                 target_selector="getByTestId('add-org')",
+                assert_selector="getByRole('dialog')",
                 expected="dialog opens",
             )
         ],
@@ -168,6 +182,7 @@ def test_heal_message_includes_intent_plan_and_notes():
     assert "click Add org" in msg  # intent step
     assert "org created" in msg  # expected result, paired with its step
     assert "getByTestId('add-org')" in msg  # verified selector carried from the plan
+    assert "getByRole('dialog')" in msg  # verified assertion target carried from the plan
     assert "animates in" in msg  # Planner note surfaced
     assert "locator timeout" in msg  # failure still present
 

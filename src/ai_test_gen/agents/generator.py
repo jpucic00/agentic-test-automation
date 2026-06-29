@@ -60,7 +60,8 @@ Requirements:
 - File should be a complete, runnable .spec.ts file
 - Use each step's `target_selector` locator AS-IS — prepend `page.` (e.g.
   `page.getByTestId('login-submit')`); never rewrite `getByTestId` to a `#id`/`data-testid`
-- Add `await expect(...)` assertions for each step's expected outcome
+- Assert each state-changing step's outcome via its `assert_selector` (verified) or
+  `page.waitForURL(page_url)` — never invent visible text from the `expected` prose
 - Use `await page.goto()` with the full staging URL from the plan
 """
     if previous_code is not None:

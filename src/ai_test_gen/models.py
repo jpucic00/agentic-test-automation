@@ -76,7 +76,19 @@ class PlanStep(BaseModel):
         ),
     )
     expected: str | None = Field(
-        default=None, description="Expected outcome to assert, if any"
+        default=None, description="Expected outcome to assert, if any (human-readable prose)"
+    )
+    assert_selector: str | None = Field(
+        default=None,
+        description=(
+            "Verified Playwright locator (no 'page.' prefix) for an element that PROVES this "
+            "step's expected outcome — the heading that only renders after login, a success "
+            "toast, the opened dialog. Captured + verified LIVE exactly like target_selector "
+            "(browser_generate_locator), the most robust kind the element supports. The "
+            "Generator asserts this is visible instead of inventing visible text from `expected`. "
+            "None when the outcome is best proven by URL (use page_url) or can't be verified — "
+            "in which case the Generator must NOT guess a text locator."
+        ),
     )
     page_url: str | None = Field(
         default=None,

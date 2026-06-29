@@ -96,9 +96,20 @@ where a same-named element behind a dialog only appears at run time; the Healer 
 context when diagnosing. Both fields are optional extractions, never invented — a plan without
 them behaves exactly as before.
 
+A step that **asserts an outcome** also carries a verified proof, so the blind Generator never has to
+invent one. `target_selector` verifies what the step *does*; **`assert_selector`** verifies what it
+*proves* — a live-captured locator for the element that confirms the outcome (a post-login heading, a
+success toast, the opened dialog), captured the same way as `target_selector`. `expected` stays
+human prose (the `test.step` label), it is **not** a locator. The after-state assertion picks its
+proof in order: `assert_selector` if set, else the recorded `page_url` (a `page.waitForURL(...)`,
+locale-independent) for page loads, else the `container`/next verified target — and **never a
+`getByText` manufactured from `expected` prose**, which was the source of hallucinated page-load
+checks asserting text the app doesn't contain.
+
 The Generator also **guards each step**: it wraps every plan step in `test.step('<action>', …)`, asserts
 the target is visible *before* acting (`await expect(target, '…').toBeVisible()`), and — for a step that
-opens a modal/menu or navigates — asserts the new state *after* (`await expect(page.getByRole('dialog')).toBeVisible()`).
+opens a modal/menu or navigates — asserts the new state *after* using the step's verified proof
+(`assert_selector`, else `page.waitForURL(page_url)`, else the dialog/next target).
 A missing element then fails fast at the expect timeout with a labeled message naming the step, not a 60s
 action timeout; and the step that *fails to open* a modal fails on its own line instead of the next step.
 The Healer reads which guard fired to tell a wrong locator from a prior step whose effect never landed.

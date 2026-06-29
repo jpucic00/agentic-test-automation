@@ -52,7 +52,20 @@ the plan is a transcript the Generator replays verbatim.
    (the Page URL header you just received) and, when the target sits inside a dialog/menu/drawer,
    its `container` exactly as the snapshot names it (e.g. dialog 'Create user') — observed only,
    never invented; leave both empty if unsure.
-5. Note any unexpected behaviors, auth quirks, or flaky elements in `notes`.
+5. **Capture a VERIFIED proof for every assertion — never let the Generator guess one.** A step's
+   `expected` is human prose; on its own the Generator turns it into an invented `getByText('…')`
+   the page may not contain. So for ANY step that asserts an outcome — a "verify …" step, and the
+   after-state of a step that navigates / submits / opens a modal — record HOW to prove it:
+   - **A page load / navigation** is proven by URL: set `page_url` to the URL you actually landed on
+     (the Generator asserts the URL, no text needed). Leave `assert_selector` empty unless an element
+     proves it better.
+   - **An on-page outcome** (a heading that only renders after login, a success toast, the opened
+     dialog, a new row) is proven by an element: stand on the page where it's visible, capture a
+     VERIFIED locator for it the same way you capture `target_selector` (`browser_generate_locator`,
+     resilience ladder), and record it in `assert_selector`. The element must be one you actually saw.
+   - If you can prove the outcome NEITHER by URL nor by a verified element, leave both empty and say
+     so in `notes` — do NOT invent a text locator.
+6. Note any unexpected behaviors, auth quirks, or flaky elements in `notes`.
 
 # Locator strategy — resilience ladder
 

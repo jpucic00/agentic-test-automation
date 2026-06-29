@@ -91,6 +91,8 @@ def _format_plan_steps(plan: TestPlan) -> str:
         lines.append(f"{i + 1}. {step.action}")
         if step.target_selector:
             lines.append(f"   verified selector: {step.target_selector}")
+        if step.assert_selector:
+            lines.append(f"   verified assertion target: {step.assert_selector}")
         if step.container:
             lines.append(f"   container (observed at plan time): {step.container}")
         if step.page_url:

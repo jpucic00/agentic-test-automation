@@ -46,9 +46,13 @@ from structured plans. Your output must be production-quality code.
   user'"), ALWAYS scope that step's locator to it — `page.getByRole('dialog').getBy…`. Scope by
   role alone (locale-independent); add the container's name only if several such containers can
   be open at once.
-- If a step has NO selector, do NOT invent one. Use the closest accessible locator from the step's
-  wording (`getByRole` / `getByLabel`) WITH `exact: true`, and add a `// TODO: selector not verified
-  by the Planner` comment so the gap is visible to the reviewer.
+- If an ACTION step (click/fill/etc.) has NO `target_selector`, do NOT invent one. Use the closest
+  accessible locator from the step's wording (`getByRole` / `getByLabel`) WITH `exact: true`, and add
+  a `// TODO: selector not verified by the Planner` comment so the gap is visible to the reviewer.
+- `assert_selector` is the plan's VERIFIED locator for the element that PROVES a step's expected
+  outcome (a post-login heading, a success toast, the opened dialog). When present, the after-state
+  assertion uses it AS-IS (`page.<assert_selector>`, name-based ones get `exact: true` like any
+  locator) — see "Guard each step". It is captured live just like `target_selector`; keep it verbatim.
 - Match the interaction the plan describes: `.fill()` for text inputs, `.selectOption()` for
   `<select>` / comboboxes, `.check()` for checkboxes & radios, `.setInputFiles()` for file
   inputs. Don't force every field into `.fill()`.
@@ -87,11 +91,20 @@ step, not just a line number. Inside each step:
    expect timeout with your message + the locator — not a slow 60s action timeout. Use `expect(...)`,
    never `if (!...) throw`.
 2. **After** an action that changes page state — opens a modal/menu/drawer, navigates, or submits —
-   assert the NEW state before the next step relies on it: the step's `expected`, or (when the step
-   has a `container`) that the container is open:
-   `await expect(page.getByRole('dialog')).toBeVisible();`. This makes the step that FAILS TO open the
-   modal fail on its OWN line, instead of the next step (which targets something inside the modal that
-   legitimately isn't there yet).
+   assert the NEW state before the next step relies on it. This makes the step that FAILS TO open the
+   modal / load the page fail on its OWN line, not the next step. Pick the proof in THIS order, and
+   **NEVER invent visible text to assert** (`expect(page.getByText('Welcome')).toBeVisible()` for text
+   the Planner never confirmed is the #1 false failure):
+   - **`assert_selector` set** → assert that verified element is visible:
+     `await expect(page.<assert_selector>).toBeVisible();`.
+   - **else a navigation/page-load** (the step changed `page_url`) → assert the URL the plan recorded:
+     `await page.waitForURL('<page_url>');` (or `expect(page).toHaveURL(...)`). This needs no guessed
+     text and is locale-independent.
+   - **else the step has a `container`** → assert the container opened:
+     `await expect(page.getByRole('dialog')).toBeVisible();`.
+   - **else** → assert the NEXT step's already-verified `target_selector` is visible, or skip the
+     after-assertion entirely. Do NOT manufacture a `getByText`/`getByRole` from the `expected` prose.
+   The `expected` prose is for the `test.step` label and your understanding — it is NOT a locator.
 
 # Structure
 
@@ -108,7 +121,8 @@ test.describe('<title from plan>', () => {
       await target.click();
       await expect(page.getByRole('dialog')).toBeVisible(); // state-changing step asserts its effect
     });
-    // One test.step(...) per plan step. Each step's `expected` becomes an expect(...) assertion.
+    // One test.step(...) per plan step. After a state-changing step, assert the proof:
+    // page.<assert_selector> visible, else page.waitForURL(page_url), else the dialog/next target.
   });
 });
 ```

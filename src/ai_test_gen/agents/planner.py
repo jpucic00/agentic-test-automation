@@ -225,6 +225,11 @@ XPath). Author-written id= attributes surface as getByTestId('...') via browser_
 accessible elements come back as getByRole/getByLabel; inaccessible ones need a verified
 locator('css=...') or locator('xpath=...'). Never hand-write an unverified locator — confirm it
 resolves to the intended element first. Record each locator verbatim in target_selector.
+
+For every step that asserts an outcome (a "verify …" step, or the after-state of a navigate/submit/
+open-modal step), also record HOW to prove it: set page_url for page loads (assert the URL), or
+capture a VERIFIED locator for the proof element into assert_selector — never leave the Generator to
+guess assertion text. If you can prove it by neither, leave both empty and note why.
 """
 
     # MCP toolset → the agent must be entered as an async context manager so the
