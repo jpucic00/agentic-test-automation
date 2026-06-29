@@ -29,11 +29,11 @@ HOW TO FILL THIS IN:
 - <Anything else a tester must know up front (multi-tenant? key workflow? important constraints)?>
 
 ## 2. Authentication model
-<!-- The pipeline uses NO saved session — each scenario logs in live as the role it needs.
-     Keep that model; answer the app-specific questions. -->
+<!-- WHAT GOES HERE: the auth MODEL only — kind of login, default role, how credentials are used.
+     The click-by-click login STEPS live in project_map.md ("Auth flow"); don't repeat them here.
+     The pipeline uses NO saved session — each scenario logs in live as the role it needs. -->
 - No saved session is used: every test authenticates from scratch at the start of the run.
-- <How do users sign in? (e.g. an in-app form, or a redirect to Keycloak/OAuth and back)>
-- <Where does login start — a login URL, or a control you click? Describe the entry point in words.>
+- <What KIND of login is it? (e.g. an in-app form, or a redirect to Keycloak/OAuth and back) — one line; the step-by-step lives in project_map.md.>
 - <Which role should a test use when it names no role (the DEFAULT role)?>
 - <How do you switch identity mid-scenario (e.g. log out, then log in as another user)?>
 - Generated tests sign in with the dummy credentials in §3, embedded as literals. Never put
@@ -54,8 +54,11 @@ HOW TO FILL THIS IN:
 | <name> | <type> | <which role owns it> | <what's already in it> |
 
 ## 5. Registration & test-data conventions
-<!-- For scenarios whose first steps CREATE data (register an org, create a user). Delete if none. -->
-- <Which flows create data, and what fields does each require?>
+<!-- WHAT GOES HERE: the RULES for data a test creates (uniqueness, formats, policies) — the
+     Generator needs these and can't browse. The entry point, steps, and field list of each
+     creation flow live in project_map.md ("Registration / data-creation flows"); don't repeat them
+     here. Delete this section if no test creates data. -->
+- <Which kinds of records do tests create (e.g. a new org, a new user)?>
 - Uniqueness (required): every created record must be unique per run. <Give the suffix format to
   append (e.g. a timestamp or short random token) so reruns don't collide on "already exists".>
 - <What email pattern does signup accept (e.g. qa+<unique>@example.com)?>

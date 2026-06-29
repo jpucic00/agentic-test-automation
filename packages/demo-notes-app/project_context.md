@@ -35,9 +35,8 @@ available even though each test run starts with an empty browser.
   collide.
 - Password: the form only requires the password and its confirmation to match; any non-empty
   value works (for example `NewPass123!`).
-- Registration fields: email, password, confirm-password. On success the new user is logged in
-  automatically and lands on the notes page.
 - A note needs a title; the body is optional.
+<!-- The registration flow's entry point, steps, and fields live in project_map.md, not here. -->
 
 ## 5. Selector rules (capture live, never hallucinate)
 - Do NOT list selectors here or in project_map.md. The agents capture every locator LIVE from

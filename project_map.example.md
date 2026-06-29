@@ -32,7 +32,9 @@ HOW TO FILL THIS IN:
 | <e.g. Login> | <where it leads / what it does> | <who sees it: everyone / logged-in / Admin> |
 
 ## Auth flow (login) — step by step
-<!-- Describe the SEQUENCE of actions in order; the agent finds each control live. -->
+<!-- WHAT GOES HERE: the click-by-click login SEQUENCE the agent replays. The auth MODEL (no saved
+     session, default role, credentials) lives in project_context.md §2 — not here. Describe actions
+     in order; the agent finds each control live, so no selectors. -->
 1. <First action (e.g. open the base URL → it redirects to the login page)>
 2. <Next action (e.g. enter email and password, then submit)>
 3. <What confirms success, and where do you land?>
@@ -40,7 +42,9 @@ HOW TO FILL THIS IN:
 5. <How do you log out?>
 
 ## Registration / data-creation flows — step by step
-<!-- For "create X first" scenarios. Add one block per flow; delete the section if none. -->
+<!-- WHAT GOES HERE: the entry point, ordered steps, and FIELD NAMES the agent fills. The data RULES
+     (uniqueness, email/password format) live in project_context.md §5 — not here. One block per
+     flow; delete the section if none. -->
 ### <Flow name, e.g. Organization signup>
 - <Entry point — a route, or which control opens it?>
 - <The ordered steps and the fields to fill?>
