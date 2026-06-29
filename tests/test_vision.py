@@ -220,6 +220,79 @@ def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
     assert "stale" in asyncio.run(tool("is a modal open?")).lower()
 
 
+# --- inspect_screen self-captures the live page -------------------------------
+
+
+def test_inspect_screen_self_captures_current_page(cfg, monkeypatch):
+    # No PNG exists up front: inspect_screen must capture the CURRENT page itself, and vision must
+    # see exactly those freshly-captured bytes — never a stale, previous-page screenshot.
+    vcfg = _vision_cfg(cfg)
+    captured = {"n": 0}
+
+    async def capture():
+        captured["n"] += 1
+        (vcfg.snapshots_dir / "live.png").write_bytes(b"fresh")
+
+    async def fake_ask(config, question, png):
+        assert png == b"fresh"  # vision saw the just-captured page, not an old shot
+        return "VISION_OK"
+
+    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg, capture=capture)
+    assert asyncio.run(tool("what page is this?")) == "VISION_OK"
+    assert captured["n"] == 1  # captured once, before reading the PNG
+
+
+def test_inspect_screen_self_capture_failure_degrades(cfg, monkeypatch, caplog):
+    # If the live screenshot fails, the call degrades to the newest existing PNG (and logs a
+    # warning) instead of aborting the planning run.
+    vcfg = _vision_cfg(cfg)
+    (vcfg.snapshots_dir / "old.png").write_bytes(b"prev")  # fresh-on-disk fallback
+
+    async def capture():
+        raise RuntimeError("browser closed")
+
+    async def fake_ask(config, question, png):
+        return "FELL_BACK"
+
+    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg, capture=capture)
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.agents.planner"):
+        out = asyncio.run(tool("q"))
+    assert out == "FELL_BACK"
+    assert any("self-capture" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_make_screenshot_capture_drives_browser_take_screenshot():
+    calls: list[tuple[str, dict]] = []
+
+    class _Raw:
+        async def direct_call_tool(self, name, args):
+            calls.append((name, args))
+
+    capture = planner_mod._make_screenshot_capture(_Raw())
+    assert capture is not None
+    asyncio.run(capture())
+    assert calls == [("browser_take_screenshot", {})]
+    # A toolset with no direct tool-call path -> None (callers then run passively, no crash).
+    assert planner_mod._make_screenshot_capture(object()) is None
+
+
+def test_underlying_mcp_unwraps_filtered_layers():
+    class _Raw:
+        async def direct_call_tool(self, name, args): ...
+
+    class _Wrap:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+    raw = _Raw()
+    assert planner_mod._underlying_mcp(_Wrap(_Wrap(raw))) is raw  # walks the wrapper chain
+    assert planner_mod._underlying_mcp(object()) is None  # nothing exposes direct_call_tool
+
+
 # --- gating: off by default -> Planner unchanged ------------------------------
 
 
@@ -227,9 +300,9 @@ def test_planner_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = planner_mod._register_inspect_screen
 
-    def spy(agent, config):
+    def spy(agent, config, capture=None):
         seen.append(config.vision_max_calls)
-        return real(agent, config)
+        return real(agent, config, capture)
 
     monkeypatch.setattr(planner_mod, "_register_inspect_screen", spy)
     build_planner(cfg)  # vision off (vision_max_calls == 0)

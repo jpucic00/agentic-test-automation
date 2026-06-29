@@ -72,28 +72,73 @@ def _latest_png(directory: Path) -> Path | None:
     return max(pngs, key=lambda p: p.stat().st_mtime)
 
 
+# The Playwright MCP tool inspect_screen drives itself (via direct_call_tool) to capture the live
+# page before describing it — see _make_screenshot_capture and inspect_screen.
+SCREENSHOT_TOOL = "browser_take_screenshot"
+
+
+def _underlying_mcp(toolset: Any) -> Any | None:
+    """Walk a toolset's wrapper chain to the object exposing ``direct_call_tool``.
+
+    ``build_playwright_mcp`` returns the live ``MCPToolset`` wrapped in a ``.filtered(...)`` layer;
+    only the underlying ``MCPToolset`` exposes ``direct_call_tool``. Follow ``.wrapped`` until we
+    find it (or run out), so inspect_screen can take a screenshot on the SAME live browser the
+    Planner drives. Returns None if no layer can call a tool directly (defensive — callers degrade).
+    """
+    seen = toolset
+    while seen is not None and not hasattr(seen, "direct_call_tool"):
+        seen = getattr(seen, "wrapped", None)
+    return seen
+
+
+def _make_screenshot_capture(
+    toolset: Any,
+) -> Callable[[], Coroutine[Any, Any, None]] | None:
+    """Build the async fn inspect_screen calls to capture the CURRENT page, or None if impossible.
+
+    Drives ``browser_take_screenshot`` directly on the live MCP toolset (not through the model), so
+    the PNG inspect_screen reads always reflects the page as it is NOW — removing the reliance on
+    the model remembering to screenshot first (the cause of stale, previous-page vision answers).
+    """
+    target = _underlying_mcp(toolset)
+    if target is None:
+        return None
+
+    async def capture() -> None:
+        await target.direct_call_tool(SCREENSHOT_TOOL, {})
+
+    return capture
+
+
 def _register_inspect_screen(
-    agent: Agent[None, TestPlan], config: Config
+    agent: Agent[None, TestPlan],
+    config: Config,
+    capture: Callable[[], Coroutine[Any, Any, None]] | None = None,
 ) -> Callable[[str], Coroutine[Any, Any, str]]:
     """Attach the optional Devstral ``inspect_screen`` vision tool to a Planner agent.
 
-    gpt-oss stays the MCP driver; this tool just turns the latest screenshot into a short text
-    answer (via ``ask_vision``) so the text-only Planner can "see". Per-run call budget =
-    ``config.vision_max_calls``. Advisory only — it never returns a selector. Also returns the
+    gpt-oss stays the MCP driver; this tool just turns a fresh screenshot into a short text
+    answer (via ``ask_vision``) so the text-only Planner can "see". When ``capture`` is supplied
+    (the live-browser screenshot fn from ``_make_screenshot_capture``), inspect_screen takes the
+    screenshot ITSELF immediately before describing it, so the image always reflects the current
+    page — not a stale, previous-page shot the model forgot to refresh. ``capture=None`` keeps the
+    old passive behaviour (read whatever PNG is newest on disk) for unit tests. Per-run call budget
+    = ``config.vision_max_calls``. Advisory only — it never returns a selector. Also returns the
     tool function (the registration target), which unit tests call directly.
     """
     max_calls = config.vision_max_calls
     calls_made = 0
 
     async def inspect_screen(question: str) -> str:
-        """Look at the CURRENT page screenshot and answer a question about what is visible.
+        """Look at the CURRENT page and answer a question about what is visible.
 
-        Use when the accessibility snapshot is ambiguous or silent — to confirm a dropdown
-        opened, a modal/overlay is covering the page, a success/error toast appeared, or whether
-        an element is actually visible. FIRST call browser_take_screenshot to capture the current
-        page, THEN call this with a specific question, e.g. "Is a modal dialog covering the page?"
-        or "Did a success toast appear?". Returns a short text description. Ask ONLY about visible
-        state — never ask it for an id, data-testid, selector, or locator (it cannot read those from
+        Captures a fresh screenshot of the live page ITSELF, then shows it to a vision model — you
+        do NOT need to call browser_take_screenshot first; just call this with a specific question,
+        e.g. "Is a modal dialog covering the page?" or "Did a success toast appear?". Use when the
+        accessibility snapshot is ambiguous or silent — to confirm a dropdown opened, a
+        modal/overlay is covering the page, a success/error toast appeared, or whether an element is
+        actually visible. Returns a short text description. Ask ONLY about visible state.
+        NEVER ask it for an id, data-testid, selector, or locator (it cannot read those from
         pixels); capture every selector with browser_generate_locator instead.
         """
         nonlocal calls_made
@@ -103,6 +148,19 @@ def _register_inspect_screen(
                 f"Vision budget reached ({max_calls} calls this run). Proceed using the "
                 "accessibility snapshot."
             )
+        # Capture the page as it is NOW so the description can't be of a page the Planner has
+        # already navigated away from. On failure, degrade to the newest existing PNG (the
+        # staleness guard below still protects against describing an ancient leftover as current).
+        if capture is not None:
+            try:
+                await capture()
+            except Exception as exc:  # noqa: BLE001 — any capture failure must degrade, not abort
+                logger.warning(
+                    "Planner vision: self-capture via %s failed (%s) — falling back to the newest "
+                    "existing screenshot under the staleness guard",
+                    SCREENSHOT_TOOL,
+                    exc,
+                )
         png = _latest_png(config.snapshots_dir)
         if png is None:
             logger.info(
@@ -190,9 +248,10 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
     # Optional Devstral vision sensor (PLANNER_VISION). Registered only when enabled so a
-    # disabled run's toolset — and behaviour — is identical to before.
+    # disabled run's toolset — and behaviour — is identical to before. The capture handle drives
+    # browser_take_screenshot on this same live MCP so inspect_screen always sees the current page.
     if config.vision_max_calls > 0:
-        _register_inspect_screen(agent, config)
+        _register_inspect_screen(agent, config, capture=_make_screenshot_capture(mcp))
     return agent
 
 
