@@ -50,8 +50,13 @@ HOW TO FILL THIS IN:
 - <The ordered steps and the fields to fill?>
 - <What confirms success (redirect / message)?>
 
-## Routes & access by role
-<!-- One row per route your tests touch. Copy the example row, then delete it. -->
+## Directly-addressable routes (optional)
+<!-- ONLY list URLs the app lets you navigate to DIRECTLY (deep-linkable — you could paste them in
+     the address bar and land there). The agent may browser_navigate to these. If a feature is
+     reached by CLICKING through the UI (a menu/tab, no typed URL) — common in SPAs — do NOT invent a
+     route for it here; describe the click path under "Key features" instead. When unsure, leave it
+     out: the agent navigates like a user by default. Delete this section if the app isn't
+     deep-linkable. One row per addressable route. -->
 | Route | Purpose | Auth | Roles |
 |-------|---------|------|-------|
 | <`/route`> | <what it's for> | <public / logged-in> | <which roles can reach it> |

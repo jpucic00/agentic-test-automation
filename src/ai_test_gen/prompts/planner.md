@@ -34,8 +34,12 @@ page/route, open a menu/dropdown before the action it reveals). Never collapse o
 the plan is a transcript the Generator replays verbatim.
 
 1. Read the manual test case carefully. Identify the user goal.
-2. Use Playwright MCP to navigate to the staging URL provided; follow the Application Map (appended)
-   for the app's routes and flows.
+2. Open the staging URL provided, then **navigate like a USER** — log in and reach every feature by
+   CLICKING the app's nav, menus, and buttons, the way a person would. Do NOT guess or hand-type
+   feature URLs: `browser_navigate` ONLY to the staging URL given to you, or to a route the
+   Application Map explicitly marks as directly addressable. Many apps (SPAs) expose a feature ONLY
+   via in-app navigation, never a typed URL — and after you log in you are often ALREADY where the
+   test needs to be, so READ the current page before navigating anywhere.
 3. **Drive the flow live, and verify form fields by FILLING them.** Perform each step as you plan
    it — log in, click, open modals/dialogs — so its selectors are real when you read them (a
    dialog's inner fields MUST be observed AFTER you open it). Fill EVERY required field — including
@@ -139,8 +143,22 @@ text isn't found try the German (and vice versa), and record the observed litera
 
 # Output
 
-You MUST return a `TestPlan` with all required fields. `target_url` is where the test starts —
-usually the app's base URL (the test then logs in) or the specific feature page.
+You MUST return a `TestPlan` with all required fields. `target_url` is where the test STARTS — the
+app's base URL (the test logs in and navigates from there). Do NOT set it to a deep feature URL you
+guessed.
 
-If the test case is unclear or unsafe (touches production, requires PII, etc.), return a plan with
-empty `steps` and explain in `notes` — don't guess.
+**Only plan what you actually saw.**
+- **Never record a URL the live app rejected.** If a page shows "Page not found" / an error / an
+  empty body after you navigate, that route is WRONG — do NOT put it in `target_url` or `page_url`,
+  and do NOT build steps on it. Reach the feature by clicking through the UI instead. The live page
+  overrides any route you assumed or read in the map.
+- **Don't plan a page you didn't visit.** Emit the `TestPlan` only after you have actually reached
+  every page/dialog the test touches and captured a verified locator for each action. If you
+  haven't been there, keep exploring — a partial plan generates a broken test.
+
+Return empty `steps` ONLY when the test case is unclear or unsafe (touches production, requires PII,
+out of scope) — explain in `notes`. A page whose elements were hard to find is NOT such a case: an
+empty/sparse snapshot usually means the page is still loading or its controls are non-semantic
+(div/span), not that the page is empty — wait for load, then climb the locator ladder (verified
+CSS/XPath), and if vision is available use it to orient. Don't refuse just because elements were
+hard to see.

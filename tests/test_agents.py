@@ -104,6 +104,15 @@ def test_prompts_carry_resilience_ladder():
     assert "locator('css=" in generator_md
 
 
+def test_planner_prompt_has_navigation_discipline():
+    # Pins the real-app navigation fixes: navigate like a user (not guessed URLs), never record a
+    # URL the live app rejected, and don't emit a plan for a page that wasn't visited.
+    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
+    assert "navigate like a USER" in planner_md
+    assert "Never record a URL the live app rejected" in planner_md
+    assert "Don't plan a page you didn't visit" in planner_md
+
+
 def test_healer_prompt_has_locator_kind_escalation():
     # On a persistently-failing step the Healer must escalate the locator KIND down the ladder
     # (the behavior the user asked for: roll a stuck id over to a verified XPath).
