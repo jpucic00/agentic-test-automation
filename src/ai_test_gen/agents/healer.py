@@ -13,6 +13,7 @@ against what the test is meant to do, not just the error text.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pydantic_ai import Agent
@@ -31,6 +32,10 @@ from ._context import (
     reasoning_effort,
 )
 from ._history import trim_stale_snapshots
+from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
+from ._vision_aid import _make_screenshot_capture, register_inspect_screen
+
+logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -40,9 +45,26 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
     model = build_openai_model(config, config.healer_model)
 
     base_prompt = (PROMPTS_DIR / "healer.md").read_text()
+    if config.vision_max_calls > 0:
+        # Gated so a disabled run's system prompt is byte-identical to before. Same shared fragment
+        # the Planner uses — the Healer is a full browser agent and reads the page the same way.
+        base_prompt += "\n\n" + (PROMPTS_DIR / "vision_aid.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
-    mcp = build_playwright_mcp(config, storage_state=storage_state)
+    # Optional locator→vision steer, mirroring the Planner: after N consecutive
+    # browser_generate_locator failures it pushes the Healer to screenshot + inspect_screen and
+    # re-orient. Gated on the same flag as inspect_screen — vision off ⇒ hook is None, toolset
+    # unchanged (byte-identical to before).
+    steer: LocatorVisionSteer | None = None
+    if config.vision_max_calls > 0:
+        steer = LocatorVisionSteer(agent_retries())
+        logger.info(
+            "Healer locator-failure vision steer ENABLED: after %d consecutive %s failure(s) → "
+            "browser_take_screenshot + inspect_screen",
+            steer.steer_after,
+            LOCATOR_TOOL,
+        )
+    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=steer)
 
     # Optional reasoning effort (HEALER_REASONING_EFFORT) — sent only when set, and
     # only trustworthy after step0d proved the gateway honors it (see _context helper).
@@ -51,7 +73,7 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
         OpenAIChatModelSettings(openai_reasoning_effort=effort) if effort else None
     )
 
-    return Agent(
+    agent = Agent(
         model=model,
         output_type=HealedTest,
         toolsets=[mcp],
@@ -61,6 +83,13 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
         # Same trimming as the Planner: stale page snapshots out, newest few kept.
         capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
+    # Optional Vision Aid sensor (shared budget with the Planner; per-agent-run counter). Registered
+    # only when enabled so a disabled run's toolset — and behaviour — is identical to before.
+    if config.vision_max_calls > 0:
+        register_inspect_screen(
+            agent, config, capture=_make_screenshot_capture(mcp), agent_label="Healer"
+        )
+    return agent
 
 
 def _format_case_steps(test_case: ManualTestCase) -> str:

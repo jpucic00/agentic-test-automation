@@ -2,20 +2,20 @@
 
 The Planner reads a manual test case and, using the Playwright MCP toolset to
 navigate the live staging app, produces a structured ``TestPlan`` with verified
-selectors. Verifying selectors against the real app before committing them is the
-key advantage over generating tests blind.
+selectors. It does not merely verify selectors — it DRIVES the scenario (happy and
+failure paths) and records what the app actually does, which is the key advantage
+over generating tests blind.
 
 Implements AI_TEST_GENERATION_GUIDE.md §3.8 (+ §3.5b context loading). The Planner
 gets BOTH context files (project_context.md and project_map.md).
+
+The optional Vision Aid sensor (``inspect_screen``) is shared with the Healer and lives in
+``_vision_aid``; the helpers below are re-exported from here for back-compat with existing imports.
 """
 from __future__ import annotations
 
 import logging
-import os
-import time
-from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ProcessHistory
@@ -34,174 +34,41 @@ from ._context import (
 )
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
-from .vision import ask_vision
+
+# Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
+# targets (tests/test_vision.py) keep resolving from this module. noqa: these are deliberate
+# re-exports; _make_screenshot_capture and register_inspect_screen are also used directly below.
+from ._vision_aid import (  # noqa: F401
+    _DEFAULT_STALE_AFTER_S,
+    SCREENSHOT_TOOL,
+    _latest_png,
+    _make_screenshot_capture,
+    _stale_after_s,
+    _underlying_mcp,
+    register_inspect_screen,
+)
 
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-# A screenshot older than this (seconds) is treated as stale by inspect_screen: the model must
-# take a fresh browser_take_screenshot before the vision sensor will describe "the current page".
-# The default is generous on purpose: two gateway round-trips (browser_take_screenshot, then a
-# SEPARATE inspect_screen turn) sit between capture and use, so a tight window made every real call
-# bounce as "stale" — invisibly. Override per-run with PLANNER_VISION_STALE_S.
-_DEFAULT_STALE_AFTER_S = 45.0
+# Module-level alias so build_planner calls the name a test can monkeypatch
+# (test_planner_registers_inspect_screen_only_when_enabled patches this attribute).
+_register_inspect_screen = register_inspect_screen
 
-
-def _stale_after_s() -> float:
-    """Staleness window (seconds) for inspect_screen, from ``PLANNER_VISION_STALE_S`` (default 45).
-
-    Invalid or non-positive values fall back to the default rather than failing the run — this is a
-    latency-tuning knob, not a correctness gate.
-    """
-    raw = os.environ.get("PLANNER_VISION_STALE_S")
-    if raw is None:
-        return _DEFAULT_STALE_AFTER_S
-    try:
-        value = float(raw)
-    except ValueError:
-        return _DEFAULT_STALE_AFTER_S
-    return value if value > 0 else _DEFAULT_STALE_AFTER_S
-
-
-def _latest_png(directory: Path) -> Path | None:
-    """Newest ``*.png`` under ``directory`` by mtime, or None if there are none."""
-    pngs = list(directory.rglob("*.png"))
-    if not pngs:
-        return None
-    return max(pngs, key=lambda p: p.stat().st_mtime)
-
-
-# The Playwright MCP tool inspect_screen drives itself (via direct_call_tool) to capture the live
-# page before describing it — see _make_screenshot_capture and inspect_screen.
-SCREENSHOT_TOOL = "browser_take_screenshot"
-
-
-def _underlying_mcp(toolset: Any) -> Any | None:
-    """Walk a toolset's wrapper chain to the object exposing ``direct_call_tool``.
-
-    ``build_playwright_mcp`` returns the live ``MCPToolset`` wrapped in a ``.filtered(...)`` layer;
-    only the underlying ``MCPToolset`` exposes ``direct_call_tool``. Follow ``.wrapped`` until we
-    find it (or run out), so inspect_screen can take a screenshot on the SAME live browser the
-    Planner drives. Returns None if no layer can call a tool directly (defensive — callers degrade).
-    """
-    seen = toolset
-    while seen is not None and not hasattr(seen, "direct_call_tool"):
-        seen = getattr(seen, "wrapped", None)
-    return seen
-
-
-def _make_screenshot_capture(
-    toolset: Any,
-) -> Callable[[], Coroutine[Any, Any, None]] | None:
-    """Build the async fn inspect_screen calls to capture the CURRENT page, or None if impossible.
-
-    Drives ``browser_take_screenshot`` directly on the live MCP toolset (not through the model), so
-    the PNG inspect_screen reads always reflects the page as it is NOW — removing the reliance on
-    the model remembering to screenshot first (the cause of stale, previous-page vision answers).
-    """
-    target = _underlying_mcp(toolset)
-    if target is None:
-        return None
-
-    async def capture() -> None:
-        await target.direct_call_tool(SCREENSHOT_TOOL, {})
-
-    return capture
-
-
-def _register_inspect_screen(
-    agent: Agent[None, TestPlan],
-    config: Config,
-    capture: Callable[[], Coroutine[Any, Any, None]] | None = None,
-) -> Callable[[str], Coroutine[Any, Any, str]]:
-    """Attach the optional Devstral ``inspect_screen`` vision tool to a Planner agent.
-
-    gpt-oss stays the MCP driver; this tool just turns a fresh screenshot into a short text
-    answer (via ``ask_vision``) so the text-only Planner can "see". When ``capture`` is supplied
-    (the live-browser screenshot fn from ``_make_screenshot_capture``), inspect_screen takes the
-    screenshot ITSELF immediately before describing it, so the image always reflects the current
-    page — not a stale, previous-page shot the model forgot to refresh. ``capture=None`` keeps the
-    old passive behaviour (read whatever PNG is newest on disk) for unit tests. Per-run call budget
-    = ``config.vision_max_calls``. Advisory only — it never returns a selector. Also returns the
-    tool function (the registration target), which unit tests call directly.
-    """
-    max_calls = config.vision_max_calls
-    calls_made = 0
-
-    async def inspect_screen(question: str) -> str:
-        """Look at the CURRENT page and answer a question about what is visible.
-
-        Captures a fresh screenshot of the live page ITSELF, then shows it to a vision model — you
-        do NOT need to call browser_take_screenshot first; just call this with a specific question,
-        e.g. "Is a modal dialog covering the page?" or "Did a success toast appear?". Use when the
-        accessibility snapshot is ambiguous or silent — to confirm a dropdown opened, a
-        modal/overlay is covering the page, a success/error toast appeared, or whether an element is
-        actually visible. Returns a short text description. Ask ONLY about visible state.
-        NEVER ask it for an id, data-testid, selector, or locator (it cannot read those from
-        pixels); capture every selector with browser_generate_locator instead.
-        """
-        nonlocal calls_made
-        if calls_made >= max_calls:
-            logger.info("Planner vision: budget of %d call(s) reached — skipping", max_calls)
-            return (
-                f"Vision budget reached ({max_calls} calls this run). Proceed using the "
-                "accessibility snapshot."
-            )
-        # Capture the page as it is NOW so the description can't be of a page the Planner has
-        # already navigated away from. On failure, degrade to the newest existing PNG (the
-        # staleness guard below still protects against describing an ancient leftover as current).
-        if capture is not None:
-            try:
-                await capture()
-            except Exception as exc:  # noqa: BLE001 — any capture failure must degrade, not abort
-                logger.warning(
-                    "Planner vision: self-capture via %s failed (%s) — falling back to the newest "
-                    "existing screenshot under the staleness guard",
-                    SCREENSHOT_TOOL,
-                    exc,
-                )
-        png = _latest_png(config.snapshots_dir)
-        if png is None:
-            logger.info(
-                "Planner vision: inspect_screen called but no screenshot in %s yet — asked the "
-                "model to browser_take_screenshot first",
-                config.snapshots_dir,
-            )
-            return (
-                "No screenshot is available yet. Call browser_take_screenshot first, then retry "
-                "inspect_screen."
-            )
-        stale_after = _stale_after_s()
-        age = time.time() - png.stat().st_mtime
-        if age > stale_after:
-            logger.info(
-                "Planner vision: inspect_screen called but the latest screenshot is %.0fs old "
-                "(> %.0fs) — asked the model to recapture; raise PLANNER_VISION_STALE_S if the "
-                "gateway round-trip is the cause",
-                age,
-                stale_after,
-            )
-            return (
-                f"The latest screenshot is stale (older than {stale_after:.0f}s). Call "
-                "browser_take_screenshot first, then retry inspect_screen."
-            )
-        calls_made += 1
-        logger.info("Planner vision check %d/%d: %s", calls_made, max_calls, question)
-        answer = await ask_vision(config, question, png.read_bytes())
-        logger.info("Planner vision answer: %s", answer)
-        return answer
-
-    agent.tool_plain(inspect_screen)
-    logger.info(
-        "Planner vision sensor ENABLED: up to %d inspect_screen call(s)/run via %s "
-        "(staleness window %.0fs); reads the newest *.png from %s",
-        max_calls,
-        config.vision_model,
-        _stale_after_s(),
-        config.snapshots_dir,
-    )
-    return inspect_screen
+# Public surface + the Vision Aid helpers re-exported for back-compat (consumed by tests).
+__all__ = [
+    "build_planner",
+    "plan_test_case",
+    "_register_inspect_screen",
+    "register_inspect_screen",
+    "_make_screenshot_capture",
+    "_underlying_mcp",
+    "_latest_png",
+    "_stale_after_s",
+    "_DEFAULT_STALE_AFTER_S",
+    "SCREENSHOT_TOOL",
+]
 
 
 def build_planner(config: Config, storage_state: Path | None = None) -> Agent[None, TestPlan]:
@@ -211,13 +78,13 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     base_prompt = (PROMPTS_DIR / "planner.md").read_text()
     if config.vision_max_calls > 0:
         # Gated so a disabled run's system prompt is byte-identical to before.
-        base_prompt += "\n\n" + (PROMPTS_DIR / "planner_vision.md").read_text()
+        base_prompt += "\n\n" + (PROMPTS_DIR / "vision_aid.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
     # Optional locator→vision steer: after N consecutive browser_generate_locator failures it
     # swaps the bland MCP error for a ModelRetry pushing the Planner to screenshot +
     # inspect_screen and re-orient. Gated on the same flag as inspect_screen — vision off ⇒
-    # hook is None, toolset unchanged. Planner-only; the Healer has no inspect_screen tool.
+    # hook is None, toolset unchanged.
     steer: LocatorVisionSteer | None = None
     if config.vision_max_calls > 0:
         steer = LocatorVisionSteer(agent_retries())
@@ -247,9 +114,9 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         # newest few so the model stays out of its long-context degradation zone.
         capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
-    # Optional Devstral vision sensor (PLANNER_VISION). Registered only when enabled so a
-    # disabled run's toolset — and behaviour — is identical to before. The capture handle drives
-    # browser_take_screenshot on this same live MCP so inspect_screen always sees the current page.
+    # Optional Vision Aid sensor (VISION_MAX_CALLS / PLANNER_VISION). Registered only when enabled
+    # so a disabled run's toolset — and behaviour — is identical to before. The capture handle
+    # drives browser_take_screenshot on this same live MCP so inspect_screen sees the current page.
     if config.vision_max_calls > 0:
         _register_inspect_screen(agent, config, capture=_make_screenshot_capture(mcp))
     return agent
@@ -278,17 +145,22 @@ async def plan_test_case(
 **Steps and Expected Results:**
 {_format_steps(test_case)}
 
-Now build a TestPlan. Navigate the staging app and, for each element you act on, capture a VERIFIED
-locator — the most robust kind that element supports (resilience ladder: id > accessible > CSS >
-XPath). Author-written id= attributes surface as getByTestId('...') via browser_generate_locator;
-accessible elements come back as getByRole/getByLabel; inaccessible ones need a verified
-locator('css=...') or locator('xpath=...'). Never hand-write an unverified locator — confirm it
-resolves to the intended element first. Record each locator verbatim in target_selector.
+Now build a TestPlan. Navigate the staging app and DRIVE the scenario — perform each outcome-bearing
+step, happy AND failure paths (submit forms, create data, trigger validation), and OBSERVE what the
+app actually does. For each element you act on, capture a VERIFIED locator — the most robust kind
+that element supports (resilience ladder: id > accessible > CSS > XPath). Author-written id=
+attributes surface as getByTestId('...') via browser_generate_locator; accessible elements come back
+as getByRole/getByLabel; inaccessible ones need a verified locator('css=...') or
+locator('xpath=...'). Never hand-write an unverified locator — confirm it resolves to the intended
+element first. Record each locator verbatim in target_selector.
 
 For every step that asserts an outcome (a "verify …" step, or the after-state of a navigate/submit/
 open-modal step), also record HOW to prove it: set page_url for page loads (assert the URL), or
 capture a VERIFIED locator for the proof element into assert_selector — never leave the Generator to
-guess assertion text. If you can prove it by neither, leave both empty and note why.
+guess assertion text. Keep each step's `expected` faithful to the manual case; if the live app
+contradicts it, still keep the spec's expected and record the divergence in `notes`. If performing a
+step changes earlier state (a failed login clears the password), make the recovery you had to do its
+own ordered step.
 """
 
     # MCP toolset → the agent must be entered as an async context manager so the

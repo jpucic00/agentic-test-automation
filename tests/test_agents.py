@@ -67,9 +67,9 @@ def test_healer_attaches_playwright_mcp(cfg, monkeypatch):
     calls: list[object] = []
     real = healer_mod.build_playwright_mcp
 
-    def spy(config, storage_state=None):
+    def spy(config, storage_state=None, *, process_tool_call=None):
         calls.append(storage_state)
-        return real(config, storage_state=storage_state)
+        return real(config, storage_state=storage_state, process_tool_call=process_tool_call)
 
     monkeypatch.setattr(healer_mod, "build_playwright_mcp", spy)
     build_healer(cfg)
@@ -119,6 +119,26 @@ def test_healer_prompt_has_locator_kind_escalation():
     healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
     assert "Locator-kind escalation" in healer_md
     assert "escalat" in healer_md.lower()
+
+
+def test_planner_prompt_drives_and_keeps_spec():
+    # The Planner must DRIVE the scenario (not just verify selectors), emit recovery steps for
+    # side-effects, and keep the manual case's expectation even when the live app diverges.
+    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
+    assert "needn't submit" not in planner_md  # retired: it no longer skips submitting
+    assert "PERFORM each step" in planner_md
+    assert "Recovery steps are real steps" in planner_md
+    assert "Keep the spec's expectation" in planner_md
+
+
+def test_healer_prompt_is_full_browser_agent():
+    # The Healer is reframed as a full browser agent that reproduces failures live, MAY trigger
+    # session-invalidating actions, and adds recovery steps — the old blanket prohibition is gone.
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "full browser agent" in healer_md
+    assert "DO NOT trigger these" not in healer_md  # retired prohibition
+    assert "Session-invalidating actions" in healer_md and "ALLOWED" in healer_md
+    assert "Recovery steps" in healer_md
 
 
 def test_heal_message_escalation_block_present_when_recurring():

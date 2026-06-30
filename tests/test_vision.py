@@ -20,9 +20,16 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from ai_test_gen import models
+from ai_test_gen.agents import _vision_aid as vision_aid_mod
+from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents import vision as vision_mod
 from ai_test_gen.agents.planner import _latest_png, _register_inspect_screen, build_planner
+
+# The inspect_screen sensor + its helpers live in agents/_vision_aid (shared by Planner & Healer);
+# planner re-exports the names for back-compat. ask_vision is called from _vision_aid, so patch it
+# there; the sensor logs under the _vision_aid logger.
+_VISION_LOGGER = "ai_test_gen.agents._vision_aid"
 
 
 def _vision_cfg(cfg, max_calls=2):
@@ -96,7 +103,7 @@ def _tool_with_fake_vision(cfg, monkeypatch, *, max_calls=2, answer="VISION_OK")
     async def fake_ask(config, question, png):
         return answer
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     return _vision_cfg(cfg, max_calls), _register_inspect_screen(
         agent, _vision_cfg(cfg, max_calls)
@@ -105,7 +112,7 @@ def _tool_with_fake_vision(cfg, monkeypatch, *, max_calls=2, answer="VISION_OK")
 
 def test_inspect_screen_nudges_when_no_screenshot(cfg, monkeypatch, caplog):
     _, tool = _tool_with_fake_vision(cfg, monkeypatch)
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
         out = asyncio.run(tool("anything visible?"))
     assert "browser_take_screenshot" in out  # tell the model to capture first
     # The bounce logs at INFO (was DEBUG) so a call that never reaches vision is still visible.
@@ -119,7 +126,7 @@ def test_inspect_screen_fresh_png_calls_vision(cfg, monkeypatch):
     async def fake_ask(config, question, png):
         return "VISION_OK"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
     assert asyncio.run(tool("is a modal open?")) == "VISION_OK"
@@ -134,10 +141,10 @@ def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch, caplo
     async def fake_ask(config, question, png):
         raise AssertionError("ask_vision must not run on a stale screenshot")
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
         out = asyncio.run(tool("is a modal open?"))
     assert "stale" in out.lower()
     # The stale bounce logs at INFO (was DEBUG) so it can't hide from a default-level run.
@@ -151,7 +158,7 @@ def test_inspect_screen_enforces_per_run_budget(cfg, monkeypatch):
     async def fake_ask(config, question, png):
         return "VISION_OK"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
     assert asyncio.run(tool("q1")) == "VISION_OK"  # within budget
@@ -166,10 +173,10 @@ def test_inspect_screen_logs_each_trigger(cfg, monkeypatch, caplog):
     async def fake_ask(config, question, png):
         return "a modal dialog is visible"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
         asyncio.run(tool("is a modal open?"))
     messages = [r.getMessage() for r in caplog.records]
     assert any("vision check" in m and "is a modal open?" in m for m in messages)
@@ -180,7 +187,7 @@ def test_register_inspect_screen_logs_enabled(cfg, caplog):
     # enabled?" ambiguity that made "no vision in the logs" undiagnosable).
     vcfg = _vision_cfg(cfg)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.planner"):
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
         _register_inspect_screen(agent, vcfg)
     assert any("vision sensor enabled" in r.getMessage().lower() for r in caplog.records)
 
@@ -209,7 +216,7 @@ def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
     async def fake_ask(config, question, png):
         return "VISION_OK"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg)
 
@@ -237,7 +244,7 @@ def test_inspect_screen_self_captures_current_page(cfg, monkeypatch):
         assert png == b"fresh"  # vision saw the just-captured page, not an old shot
         return "VISION_OK"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg, capture=capture)
     assert asyncio.run(tool("what page is this?")) == "VISION_OK"
@@ -256,10 +263,10 @@ def test_inspect_screen_self_capture_failure_degrades(cfg, monkeypatch, caplog):
     async def fake_ask(config, question, png):
         return "FELL_BACK"
 
-    monkeypatch.setattr(planner_mod, "ask_vision", fake_ask)
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
     tool = _register_inspect_screen(agent, vcfg, capture=capture)
-    with caplog.at_level(logging.WARNING, logger="ai_test_gen.agents.planner"):
+    with caplog.at_level(logging.WARNING, logger=_VISION_LOGGER):
         out = asyncio.run(tool("q"))
     assert out == "FELL_BACK"
     assert any("self-capture" in r.getMessage().lower() for r in caplog.records)
@@ -330,7 +337,7 @@ def test_planner_prompt_has_vision_block_only_when_enabled(cfg, monkeypatch):
 def test_vision_prompt_fragment_forbids_selectors():
     # The gated fragment must keep the "vision never yields a selector" guardrail AND forbid the
     # Planner from ASKING vision for ids/selectors (vision is diagnostic only).
-    fragment = (planner_mod.PROMPTS_DIR / "planner_vision.md").read_text()
+    fragment = (planner_mod.PROMPTS_DIR / "vision_aid.md").read_text()
     assert "browser_generate_locator" in fragment
     assert "NEVER" in fragment or "never" in fragment
     assert "data-testid" in fragment  # names the thing the Planner must not ask vision for
@@ -352,3 +359,54 @@ def test_inspect_screen_docstring_forbids_selector_questions(cfg, monkeypatch):
     doc = (tool.__doc__ or "").lower()
     assert "never ask it" in doc
     assert "browser_generate_locator" in doc
+
+
+# --- gating: the Healer shares the same Vision Aid sensor ----------------------
+
+
+def test_healer_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
+    # The Healer registers inspect_screen like the Planner — only when the shared budget > 0.
+    seen: list[int] = []
+    real = healer_mod.register_inspect_screen
+
+    def spy(agent, config, capture=None, agent_label="Planner"):
+        seen.append(config.vision_max_calls)
+        return real(agent, config, capture, agent_label)
+
+    monkeypatch.setattr(healer_mod, "register_inspect_screen", spy)
+    healer_mod.build_healer(cfg)  # vision off (vision_max_calls == 0)
+    assert seen == []
+    healer_mod.build_healer(dataclasses.replace(cfg, vision_max_calls=2))  # on
+    assert seen == [2]
+
+
+def test_healer_prompt_has_vision_block_only_when_enabled(cfg, monkeypatch):
+    # Vision off ⇒ the Healer's base prompt is byte-identical to before (no vision fragment).
+    captured: dict[str, str] = {}
+    real = healer_mod.assemble_system_prompt
+
+    def spy(config, base_prompt, *, include_map=True):
+        captured["base"] = base_prompt
+        return real(config, base_prompt, include_map=include_map)
+
+    monkeypatch.setattr(healer_mod, "assemble_system_prompt", spy)
+    healer_mod.build_healer(cfg)  # off
+    assert "Seeing the page" not in captured["base"]
+    healer_mod.build_healer(dataclasses.replace(cfg, vision_max_calls=2))  # on
+    assert "Seeing the page" in captured["base"]
+
+
+def test_healer_steer_attached_only_when_vision_on(cfg, monkeypatch):
+    # The locator→vision steer is attached to the Healer's MCP only when vision is enabled.
+    seen: list[object] = []
+    real = healer_mod.build_playwright_mcp
+
+    def spy(config, storage_state=None, process_tool_call=None):
+        seen.append(process_tool_call)
+        return real(config, storage_state=storage_state, process_tool_call=process_tool_call)
+
+    monkeypatch.setattr(healer_mod, "build_playwright_mcp", spy)
+    healer_mod.build_healer(cfg)  # off -> no steer
+    assert seen[-1] is None
+    healer_mod.build_healer(dataclasses.replace(cfg, vision_max_calls=2))  # on -> steer attached
+    assert seen[-1] is not None

@@ -12,6 +12,7 @@ Implements AI_TEST_GENERATION_GUIDE.md §3.4 + §3.5b.
 """
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -106,14 +109,31 @@ def _resolve_under_root(raw: str) -> Path:
 
 
 def _vision_max_calls() -> int:
-    """Max Devstral vision calls per planning run from ``PLANNER_VISION`` (0 = feature off).
+    """Max Vision Aid calls per agent run from ``VISION_MAX_CALLS`` (0 = feature off).
+
+    Single shared knob for BOTH browser agents — the Planner and the Healer each get this many
+    ``inspect_screen`` calls per run (per planning run; per heal attempt). ``VISION_MAX_CALLS`` is
+    canonical; ``PLANNER_VISION`` is still accepted as a back-compat alias (it predates the Healer
+    sharing the sensor). If both are set and differ, ``VISION_MAX_CALLS`` wins and a warning is
+    logged.
 
     Tri-state, mirroring the env-knob style of ``agent_request_limit`` / ``reasoning_effort``:
     unset / ``false`` / ``0`` / ``off`` / ``no`` → 0 (disabled); a positive integer → that cap.
-    Any other value fails fast — a typo'd ``PLANNER_VISION`` that silently disabled the feature
-    would masquerade as "vision isn't helping".
+    Any other value fails fast — a typo that silently disabled the feature would masquerade as
+    "vision isn't helping".
     """
-    raw = os.environ.get("PLANNER_VISION")
+    canonical = os.environ.get("VISION_MAX_CALLS")
+    alias = os.environ.get("PLANNER_VISION")
+    if canonical is not None and alias is not None and canonical.strip() != alias.strip():
+        logger.warning(
+            "Both VISION_MAX_CALLS=%r and PLANNER_VISION=%r are set; using the canonical "
+            "VISION_MAX_CALLS. Drop PLANNER_VISION to silence this.",
+            canonical,
+            alias,
+        )
+    # Canonical first; fall back to the alias. Report whichever was actually set in errors.
+    var_name = "VISION_MAX_CALLS" if canonical is not None else "PLANNER_VISION"
+    raw = canonical if canonical is not None else alias
     if raw is None:
         return 0
     value = raw.strip().lower()
@@ -123,12 +143,12 @@ def _vision_max_calls() -> int:
         n = int(value)
     except ValueError:
         raise RuntimeError(
-            f"PLANNER_VISION={raw!r} is not valid; use 'false' to disable or a positive "
-            "integer (max vision calls per planning run)."
+            f"{var_name}={raw!r} is not valid; use 'false' to disable or a positive "
+            "integer (max vision calls per agent run)."
         ) from None
     if n < 0:
         raise RuntimeError(
-            f"PLANNER_VISION={raw!r} must be a positive integer (or 'false' to disable)."
+            f"{var_name}={raw!r} must be a positive integer (or 'false' to disable)."
         )
     return n
 
@@ -141,8 +161,9 @@ class Config:
     planner_model: str
     generator_model: str
     healer_model: str
-    # Optional Devstral vision sensor for the Planner (agents/vision.py + inspect_screen).
-    # vision_max_calls == 0 means the feature is OFF (PLANNER_VISION unset/false).
+    # Optional Vision Aid sensor shared by the Planner AND Healer (agents/vision.py +
+    # agents/_vision_aid.py inspect_screen). vision_max_calls == 0 means the feature is OFF
+    # (VISION_MAX_CALLS / PLANNER_VISION unset or false); >0 = per-agent-run call cap.
     vision_model: str
     vision_max_calls: int
 

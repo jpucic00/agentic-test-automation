@@ -33,6 +33,7 @@ _OPTIONAL_VARS = (
     "GENERATOR_MODEL",
     "HEALER_MODEL",
     "VISION_MODEL",
+    "VISION_MAX_CALLS",
     "PLANNER_VISION",
     "XRAY_IS_CLOUD",
     "GITLAB_ENABLED",
@@ -203,6 +204,35 @@ def test_planner_vision_positive_int_sets_budget(env):
 def test_planner_vision_invalid_fails_fast(env):
     env.setenv("PLANNER_VISION", "lots")
     with pytest.raises(RuntimeError, match="PLANNER_VISION"):
+        load_config()
+
+
+def test_vision_max_calls_canonical_knob(env):
+    # VISION_MAX_CALLS is the canonical name for the shared (Planner + Healer) vision budget.
+    env.setenv("VISION_MAX_CALLS", "5")
+    assert load_config().vision_max_calls == 5
+    env.setenv("VISION_MAX_CALLS", "off")
+    assert load_config().vision_max_calls == 0
+
+
+def test_vision_max_calls_canonical_wins_over_alias(env):
+    # Both set + differ -> canonical wins (PLANNER_VISION is the back-compat alias).
+    env.setenv("VISION_MAX_CALLS", "3")
+    env.setenv("PLANNER_VISION", "9")
+    assert load_config().vision_max_calls == 3
+
+
+def test_planner_vision_alias_still_works(env):
+    # PLANNER_VISION alone (no canonical) still drives the shared budget, for back-compat.
+    env.delenv("VISION_MAX_CALLS", raising=False)
+    env.setenv("PLANNER_VISION", "2")
+    assert load_config().vision_max_calls == 2
+
+
+def test_vision_max_calls_invalid_names_the_var(env):
+    # The error names whichever var was actually set, so the failing knob is obvious.
+    env.setenv("VISION_MAX_CALLS", "lots")
+    with pytest.raises(RuntimeError, match="VISION_MAX_CALLS"):
         load_config()
 
 

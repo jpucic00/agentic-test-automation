@@ -11,14 +11,20 @@ the live app. Nothing is ever auto-merged, and the pipeline only ever runs again
 Jira/Xray key → fetch → Plan → Generate → Run → (Heal ↺) → open MR → human review
 ```
 
-- **Planner** opens the staging app via Playwright MCP, walks the scenario, and captures *verified*
-  selectors (read-only `browser_generate_locator`) into a typed `TestPlan`.
+- **Planner** opens the staging app via Playwright MCP and *drives* the scenario — happy and failure
+  paths: it logs in, fills, submits, creates data, and triggers validation — so it captures *verified*
+  selectors (read-only `browser_generate_locator`) AND observes what the app actually does, recording
+  it all in a typed `TestPlan`.
 - **Generator** turns the plan into a runnable `.spec.ts` — no browser, because a focused code model
   writes better code from a precise plan.
 - **Test Runner** executes the test against staging and reports pass/fail plus a trace.
-- **Healer** inspects any failure in the live app and makes a *minimal* fix, retrying up to a
-  configurable cap. If the failure is a genuine app bug, it leaves the test alone so the regression
-  surfaces honestly instead of being "fixed" away.
+- **Healer** is a full browser agent like the Planner: it logs in fresh and *reproduces* the failure
+  in the live app (submitting forms, creating data, signing out + re-logging-in as needed) to see
+  what really happens, then makes a *minimal* fix, retrying up to a configurable cap. If the failure
+  is a genuine app bug — including a behavior that diverges from the test case's spec — it leaves the
+  test alone so the regression surfaces honestly instead of being "fixed" away.
+- **Vision Aid** *(optional, off by default)* lets either browser agent screenshot the page and ask a
+  vision model to describe the visual state — enable it with `VISION_MAX_CALLS=N`.
 - **GitLab Client** opens a merge request labeled `ai-generated` + `qa-review-needed` (optional — can be
   skipped for local runs).
 

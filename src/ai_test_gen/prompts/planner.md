@@ -40,15 +40,21 @@ the plan is a transcript the Generator replays verbatim.
    Application Map explicitly marks as directly addressable. Many apps (SPAs) expose a feature ONLY
    via in-app navigation, never a typed URL — and after you log in you are often ALREADY where the
    test needs to be, so READ the current page before navigating anywhere.
-3. **Drive the flow live, and verify form fields by FILLING them.** Perform each step as you plan
-   it — log in, click, open modals/dialogs — so its selectors are real when you read them (a
-   dialog's inner fields MUST be observed AFTER you open it). Fill EVERY required field — including
-   confirm/repeat fields (confirm email, repeat password) — with throwaway demo data and confirm each
-   value took. A field that won't take it is a dropdown/date-picker/custom widget: find the real
-   selector and note the interaction (e.g. "combobox — selectOption"). You needn't submit to verify
-   selectors — note the submit button, then CLOSE the dialog (X / Cancel / Escape) so the page is
-   usable. A modal blocks the whole page: if clicks/navigation stop working, a dialog is open —
-   close it first.
+3. **Drive the flow live — PERFORM each step (happy AND failure paths) and OBSERVE the result.**
+   Don't just verify selectors — actually DO the scenario, the way the test will. Perform each step
+   as you plan it — log in, click, open modals/dialogs, fill fields, and SUBMIT — so its selectors
+   are real when you read them (a dialog's inner fields MUST be observed AFTER you open it) AND so
+   you see what the app actually does. Fill EVERY required field — including confirm/repeat fields
+   (confirm email, repeat password) — with demo data (anything you CREATE must be unique per run,
+   see above) and confirm each value took. A field that won't take it is a dropdown/date-picker/
+   custom widget: find the real selector and note the interaction (e.g. "combobox — selectOption").
+   Then **SUBMIT and read the real outcome**: did it navigate, show a success toast, show a
+   validation error, clear the form, stay put? This is how you capture a TRUE proof for the
+   assertion (step 5) and catch behaviors a static read misses. This app is non-prod (the config
+   guard enforces it), so exercising real submits and negative paths (wrong password, missing
+   required field) is safe and expected when the case calls for them. When you're done observing,
+   CLOSE any leftover dialog (X / Cancel / Escape) so the page is usable for the next step — a modal
+   blocks the whole page, so if clicks/navigation stop working, a dialog is open: close it first.
 4. For each step, on the screen you actually reached: identify the target element and capture a
    VERIFIED locator for it — the most robust kind it supports (see "Locator strategy — resilience
    ladder"); record it in `target_selector`, with the action and what to assert. Also COPY into the
@@ -70,6 +76,20 @@ the plan is a transcript the Generator replays verbatim.
    - If you can prove the outcome NEITHER by URL nor by a verified element, leave both empty and say
      so in `notes` — do NOT invent a text locator.
 6. Note any unexpected behaviors, auth quirks, or flaky elements in `notes`.
+7. **Recovery steps are real steps.** If performing a step changes earlier state — a failed login
+   CLEARS the password (and often the email) field, a wizard resets a tab, a submit empties the form
+   — then the recovery you had to do to proceed (re-fill the cleared fields, re-open the tab) is its
+   OWN ordered plan step, recorded in the exact order you performed it live. The plan is a transcript
+   the Generator replays verbatim: if YOU had to re-type the credentials after a failed attempt to
+   log in, the test must too — so emit those re-fill steps. Skipping them is the #1 reason a
+   negative-then-positive flow (e.g. "wrong password, then right password") fails at run time.
+8. **Keep the spec's expectation; record divergence.** Set each step's `expected` to what the MANUAL
+   test case demands — even when the live app contradicts it. If the case says a button is DISABLED
+   after invalid input but you SEE it stay enabled with a validation message, keep `expected`
+   faithful to the case (the generated test asserts it and will FAIL — surfacing a real bug, the
+   desired outcome) and record the contradiction in `notes`: cite the step, what the case expected,
+   and what you actually observed. Never silently "correct" the assertion to match the app. (Proof
+   selectors in `assert_selector` are still captured from the REAL element you saw — see step 5.)
 
 # Locator strategy — resilience ladder
 
