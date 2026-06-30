@@ -14,6 +14,7 @@ from ai_test_gen.agents._context import (
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
+    build_model_settings,
     reasoning_effort,
 )
 
@@ -135,3 +136,39 @@ def test_reasoning_effort_invalid_value_fails_fast(monkeypatch):
     monkeypatch.setenv("HEALER_REASONING_EFFORT", "max")
     with pytest.raises(ValueError, match="HEALER_REASONING_EFFORT"):
         reasoning_effort("HEALER_REASONING_EFFORT")
+
+
+# --- build_model_settings -----------------------------------------------------
+
+
+def test_build_model_settings_none_when_nothing_applies(monkeypatch):
+    # Vision off and no effort -> None, so a vision-OFF run is byte-identical to before.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    assert build_model_settings("PLANNER_REASONING_EFFORT", vision_on=False) is None
+
+
+def test_build_model_settings_parallel_tool_calls_off_when_vision_on(monkeypatch):
+    # Vision on forces one tool call per turn so a vision question can't be raced by a navigation.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    settings = build_model_settings("PLANNER_REASONING_EFFORT", vision_on=True)
+    assert settings is not None
+    assert settings.get("parallel_tool_calls") is False
+    assert "openai_reasoning_effort" not in settings  # no effort env set
+
+
+def test_build_model_settings_combines_effort_and_vision(monkeypatch):
+    # Both pieces coexist: reasoning effort AND parallel_tool_calls=False.
+    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "high")
+    settings = build_model_settings("PLANNER_REASONING_EFFORT", vision_on=True)
+    assert settings is not None
+    assert settings.get("openai_reasoning_effort") == "high"
+    assert settings.get("parallel_tool_calls") is False
+
+
+def test_build_model_settings_effort_only_when_vision_off(monkeypatch):
+    # Effort set but vision off: effort applies, parallel_tool_calls is left untouched.
+    monkeypatch.setenv("HEALER_REASONING_EFFORT", "low")
+    settings = build_model_settings("HEALER_REASONING_EFFORT", vision_on=False)
+    assert settings is not None
+    assert settings.get("openai_reasoning_effort") == "low"
+    assert "parallel_tool_calls" not in settings

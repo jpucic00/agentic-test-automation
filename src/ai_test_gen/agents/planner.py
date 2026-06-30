@@ -19,7 +19,6 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ProcessHistory
-from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
@@ -30,7 +29,7 @@ from ._context import (
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
-    reasoning_effort,
+    build_model_settings,
 )
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
@@ -96,11 +95,10 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         )
     mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=steer)
 
-    # Optional reasoning effort (PLANNER_REASONING_EFFORT) — sent only when set, and
-    # only trustworthy after step0d proved the gateway honors it (see _context helper).
-    effort = reasoning_effort("PLANNER_REASONING_EFFORT")
-    model_settings = (
-        OpenAIChatModelSettings(openai_reasoning_effort=effort) if effort else None
+    # Reasoning effort (PLANNER_REASONING_EFFORT) + parallel_tool_calls=False when vision is on, so
+    # a vision question can't be batched with a navigation in one turn (see build_model_settings).
+    model_settings = build_model_settings(
+        "PLANNER_REASONING_EFFORT", vision_on=config.vision_max_calls > 0
     )
 
     agent = Agent(

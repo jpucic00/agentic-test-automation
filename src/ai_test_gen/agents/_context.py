@@ -19,7 +19,9 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
+
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from ..config import Config
 
@@ -145,6 +147,31 @@ def reasoning_effort(env_var: str) -> ReasoningEffort | None:
         value,
     )
     return cast(ReasoningEffort, value)
+
+
+def build_model_settings(effort_env: str, *, vision_on: bool) -> OpenAIChatModelSettings | None:
+    """Assemble a browser agent's model settings from optional pieces, or ``None`` if none apply.
+
+    Two independent, opt-in pieces:
+
+    - **Reasoning effort** from ``effort_env`` (see ``reasoning_effort``) when that env var is set.
+    - **``parallel_tool_calls=False`` when ``vision_on``** — forces the model to emit one tool call
+      per turn so it cannot batch a vision question (``inspect_screen``) with a navigation/click in
+      the SAME step. pydantic-ai runs a turn's tool calls concurrently by default, so a sibling
+      action would race ``inspect_screen``'s live screenshot and the Vision Aid answer would
+      describe the page the agent moved TO, not the one it asked about. (The gateway must honor the
+      flag — OpenAI-compatible servers may silently drop it; confirm on a real run.)
+
+    When neither applies (no effort set and ``vision_on`` is False), returns ``None`` so a
+    vision-OFF run stays byte-identical to before. Shared by the Planner and the Healer.
+    """
+    settings_kwargs: dict[str, Any] = {}
+    effort = reasoning_effort(effort_env)
+    if effort:
+        settings_kwargs["openai_reasoning_effort"] = effort
+    if vision_on:
+        settings_kwargs["parallel_tool_calls"] = False
+    return OpenAIChatModelSettings(**settings_kwargs) if settings_kwargs else None
 
 
 def agent_request_limit(default: int = 300) -> int:

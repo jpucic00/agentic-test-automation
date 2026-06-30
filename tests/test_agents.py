@@ -11,6 +11,7 @@ start with "Test" and would otherwise be collected by pytest as test classes.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 
 import pytest
 from pydantic_ai.models.test import TestModel
@@ -228,6 +229,26 @@ def test_planner_invalid_reasoning_effort_fails_at_build(cfg, monkeypatch):
     monkeypatch.setenv("PLANNER_REASONING_EFFORT", "ultra")
     with pytest.raises(ValueError, match="PLANNER_REASONING_EFFORT"):
         build_planner(cfg)
+
+
+@pytest.mark.parametrize("build", [build_planner, build_healer])
+def test_agent_disables_parallel_tool_calls_when_vision_on(cfg, monkeypatch, build):
+    # With vision on, the agent must emit one tool call per turn so a vision question can't be
+    # batched with — and raced by — a navigation in the same step.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("HEALER_REASONING_EFFORT", raising=False)
+    agent = build(dataclasses.replace(cfg, vision_max_calls=2))
+    assert agent.model_settings is not None
+    assert agent.model_settings.get("parallel_tool_calls") is False
+
+
+@pytest.mark.parametrize("build", [build_planner, build_healer])
+def test_agent_leaves_parallel_tool_calls_untouched_when_vision_off(cfg, monkeypatch, build):
+    # Vision off + no effort -> no model settings at all, so the run is byte-identical to before.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("HEALER_REASONING_EFFORT", raising=False)
+    agent = build(dataclasses.replace(cfg, vision_max_calls=0))
+    assert agent.model_settings is None
 
 
 def test_generation_message_plain_has_no_retry_section():
