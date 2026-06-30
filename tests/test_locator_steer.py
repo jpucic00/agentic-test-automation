@@ -1,9 +1,9 @@
-"""Unit tests for the Planner's locator→vision steer (agents/_locator_steer.py) — fully local.
+"""Unit tests for the locator→vision steer (agents/_locator_steer.py) — fully local.
 
 Covers the ``process_tool_call`` hook: pass-through of non-target tools, the consecutive-failure
 count + threshold steer, reset-on-success, the env-driven and clamped threshold, the "never a
 selector" guarantee of the steer message, and the gating that attaches the hook only when
-``PLANNER_VISION`` is on. Coroutines run via ``asyncio.run`` (no pytest-asyncio); no network.
+``AGENT_VISION`` is on. Coroutines run via ``asyncio.run`` (no pytest-asyncio); no network.
 """
 from __future__ import annotations
 

@@ -1,10 +1,11 @@
-"""The vision sensor: hand a screenshot to a vision-capable model, get a short text answer.
+"""The Vision Aid Agent: hand a screenshot to a vision-capable model, get a short text answer.
 
-Used by the Planner's optional ``inspect_screen`` tool (``agents/planner.py``), enabled via the
-``PLANNER_VISION`` env var. The text-only Planner (gpt-oss) cannot ingest images, so this converts
-a screenshot into a one-or-two-sentence text observation it CAN act on — Devstral is the eye, the
-Planner stays the brain and the MCP driver. The sensor only ever *describes what is rendered*; it
-never produces a selector (element targeting stays on ``browser_generate_locator``).
+Backs the optional ``inspect_screen`` tool that BOTH browser agents (Planner and Healer) register
+from ``agents/_vision_aid.py``, enabled via the ``AGENT_VISION`` env var. The text-only agents
+(gpt-oss) cannot ingest images, so this converts a screenshot into a one-or-two-sentence text
+observation they CAN act on — the Vision Aid Agent is the eye, the browser agent stays the brain and
+the MCP driver. It only ever *describes what is rendered*; it never produces a selector (element
+targeting stays on ``browser_generate_locator``).
 
 Deliberately tiny and side-effect free (no filesystem or browser access) so the Planner's tool
 stays the only place that decides WHEN to look, and so this unit-tests with a mocked model (no

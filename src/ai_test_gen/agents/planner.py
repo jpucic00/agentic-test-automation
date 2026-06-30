@@ -114,7 +114,7 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         # newest few so the model stays out of its long-context degradation zone.
         capabilities=[ProcessHistory(trim_stale_snapshots)],
     )
-    # Optional Vision Aid sensor (VISION_MAX_CALLS / PLANNER_VISION). Registered only when enabled
+    # Optional Vision Aid sensor (AGENT_VISION). Registered only when enabled
     # so a disabled run's toolset — and behaviour — is identical to before. The capture handle
     # drives browser_take_screenshot on this same live MCP so inspect_screen sees the current page.
     if config.vision_max_calls > 0:

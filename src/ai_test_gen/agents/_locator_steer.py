@@ -20,9 +20,9 @@ resets its own per-tool retry counter on any step that doesn't fail the tool
 (``ToolManager.for_run_step``), so the screenshot/inspect detour the steer induces also
 refills the budget. A recovered run never trips the ceiling.
 
-Planner-only: the steer points at ``inspect_screen``, registered only on the Planner and only
-when ``PLANNER_VISION`` is on. With vision off no hook is attached and the run is
-byte-identical to before. Stateful (counts consecutive failures) — one instance per run.
+The steer points at ``inspect_screen`` and is wired into BOTH the Planner and the Healer, only
+when ``AGENT_VISION`` is on. With vision off no hook is attached and the run is byte-identical to
+before. Stateful (counts consecutive failures) — one instance per agent run.
 """
 from __future__ import annotations
 

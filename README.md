@@ -24,7 +24,7 @@ Jira/Xray key → fetch → Plan → Generate → Run → (Heal ↺) → open MR
   is a genuine app bug — including a behavior that diverges from the test case's spec — it leaves the
   test alone so the regression surfaces honestly instead of being "fixed" away.
 - **Vision Aid** *(optional, off by default)* lets either browser agent screenshot the page and ask a
-  vision model to describe the visual state — enable it with `VISION_MAX_CALLS=N`.
+  vision model to describe the visual state — enable it with `AGENT_VISION=N`.
 - **GitLab Client** opens a merge request labeled `ai-generated` + `qa-review-needed` (optional — can be
   skipped for local runs).
 

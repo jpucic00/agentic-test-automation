@@ -2,7 +2,7 @@
 
 Covers ``ask_vision`` (mocked via ``FunctionModel``), the planner's ``_latest_png`` helper, the
 ``inspect_screen`` tool's staleness guard / per-run budget / no-screenshot handling, and the
-gating that keeps a disabled run (``PLANNER_VISION`` unset) identical to before. Coroutines are
+gating that keeps a disabled run (``AGENT_VISION`` unset) identical to before. Coroutines are
 driven with ``asyncio.run`` so this needs no ``pytest-asyncio``.
 """
 from __future__ import annotations
