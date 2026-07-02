@@ -1,6 +1,12 @@
 """Unit tests for the run-failure summarizer — offline, synthetic message histories."""
 from __future__ import annotations
 
+import asyncio
+import logging
+from typing import Any, cast
+
+import pytest
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -11,7 +17,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from ai_test_gen.agents._run_failure import summarize_run_failure
+from ai_test_gen.agents._run_failure import (
+    _leaf_exceptions,
+    run_agent_logged,
+    summarize_run_failure,
+)
 
 
 def test_summary_shows_causes_retry_errors_and_keeps_args_tail():
@@ -54,3 +64,40 @@ def test_snapshot_noise_is_skipped_and_empty_history_is_graceful():
     assert "huge a11y tree" not in summary  # ToolReturnPart is replay noise
     assert "stray thinking text in the output turn" in summary  # TextPart is evidence
     assert summarize_run_failure(RuntimeError("boom"), []) == "(no captured messages)"
+
+
+def test_leaf_exceptions_flatten_nested_groups():
+    inner = ValueError("inner")
+    group = BaseExceptionGroup("outer", [BaseExceptionGroup("nested", [inner]), KeyError("k")])
+    leaves = _leaf_exceptions(group)
+    assert inner in leaves
+    assert len(leaves) == 2
+
+
+class _FakeAgent:
+    """Raises a task-group-wrapped retry exhaustion, like the agent/MCP internals can."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def run(self, *args: object, **kwargs: object) -> object:
+        raise BaseExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [UnexpectedModelBehavior("Exceeded maximum retries (5) for output validation")],
+        )
+
+
+def test_taskgroup_wrapped_exhaustion_still_logs_evidence(caplog):
+    # The laptop failure mode: pydantic-ai's exhaustion surfaces inside an ExceptionGroup, so
+    # a plain `except UnexpectedModelBehavior` never fires — the group handler must log the
+    # leaves AND the evidence block, then re-raise the group unchanged.
+    with caplog.at_level(logging.ERROR, logger="ai_test_gen.agents._run_failure"):
+        with pytest.raises(BaseExceptionGroup):
+            asyncio.run(run_agent_logged(cast(Any, _FakeAgent()), "go", agent_label="Planner"))
+
+    assert "task-group failure" in caplog.text
+    assert "Exceeded maximum retries (5) for output validation" in caplog.text
+    assert "retry-exhaustion evidence" in caplog.text

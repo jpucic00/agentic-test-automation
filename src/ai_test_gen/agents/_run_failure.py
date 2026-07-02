@@ -62,6 +62,16 @@ def _part_payload(part: Any) -> str | None:
     return None
 
 
+def _leaf_exceptions(exc: BaseException) -> list[BaseException]:
+    """Flatten (possibly nested) exception groups to their leaf exceptions."""
+    if isinstance(exc, BaseExceptionGroup):
+        leaves: list[BaseException] = []
+        for sub in exc.exceptions:
+            leaves.extend(_leaf_exceptions(sub))
+        return leaves
+    return [exc]
+
+
 def summarize_run_failure(exc: BaseException, messages: Sequence[Any]) -> str:
     """Render the failure evidence: exception cause chain + the last messages' parts."""
     lines: list[str] = []
@@ -108,4 +118,25 @@ async def run_agent_logged[OutputT](
                 exc,
                 summarize_run_failure(exc, messages),
             )
+            raise
+        except BaseExceptionGroup as group:
+            # The agent/MCP internals run in anyio task groups, so a failure can surface
+            # wrapped as "unhandled errors in a TaskGroup" — str(exc) then hides the leaves,
+            # and a plain `except UnexpectedModelBehavior` never fires. Log every leaf, and
+            # the full evidence when retry exhaustion is among them.
+            leaves = _leaf_exceptions(group)
+            logger.error(
+                "%s run aborted by a task-group failure; leaf exception(s): %s",
+                agent_label,
+                "; ".join(repr(leaf) for leaf in leaves),
+            )
+            exhausted = next(
+                (leaf for leaf in leaves if isinstance(leaf, UnexpectedModelBehavior)), None
+            )
+            if exhausted is not None:
+                logger.error(
+                    "%s retry-exhaustion evidence:\n%s",
+                    agent_label,
+                    summarize_run_failure(exhausted, messages),
+                )
             raise
