@@ -105,10 +105,22 @@ def _safe_unlink(path: str) -> None:
 # MODEL-authored JS; the model never sees these tools regardless.
 _BLOCKED_TOOL_MARKERS = ("evaluate", "run_code", "unsafe")
 
+# Exact tool names dropped for gateway compatibility. Strict structured-output backends
+# (e.g. vLLM's xgrammar) compile EVERY advertised tool schema for constrained tool calling,
+# and one incompilable schema fails the whole request ("JSON schema contains features not
+# supported by the xgrammar"). Of the 28 Playwright MCP tools, exactly these two carry such
+# constructs — browser_drop: `propertyNames` (zod z.record); browser_network_request:
+# `minimum`/`maximum` — and neither plays any role in the plan/heal flows, so they are
+# dropped unconditionally. tests/test_playwright_mcp.py scans the live schemas so an
+# @playwright/mcp bump cannot silently reintroduce an unsupported construct. (Flux ugz9kif)
+_GRAMMAR_UNSAFE_TOOLS = frozenset({"browser_drop", "browser_network_request"})
+
 
 def _agent_safe_tool(ctx: RunContext[Any], tool: ToolDefinition) -> bool:
-    """Keep a tool unless its name marks it as code-execution (evaluate / run_code / unsafe)."""
+    """Keep a tool unless it is code-execution (evaluate / run_code / unsafe) or grammar-unsafe."""
     del ctx
+    if tool.name in _GRAMMAR_UNSAFE_TOOLS:
+        return False
     return not any(marker in tool.name for marker in _BLOCKED_TOOL_MARKERS)
 
 

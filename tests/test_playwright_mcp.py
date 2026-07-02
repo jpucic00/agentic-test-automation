@@ -1,6 +1,12 @@
-"""Unit tests for build_playwright_mcp — offline (no MCP subprocess is started)."""
+"""Unit tests for build_playwright_mcp.
+
+Offline (no network). One exception to "no subprocess": the live schema-scan test starts
+the LOCAL node MCP server to list its tool schemas; it skips when output/node_modules is
+not installed.
+"""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -9,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from ai_test_gen import models
 from ai_test_gen import playwright_mcp as pm
 from ai_test_gen.config import Config
 
@@ -125,3 +132,98 @@ def test_testid_attribute_coupling_holds():
     match = re.search(r"testIdAttribute:\s*'([^']+)'", runner_src)
     assert match is not None, "runner config is missing testIdAttribute"
     assert match.group(1) == mcp_testid
+
+
+def test_grammar_unsafe_tools_are_filtered_out():
+    # Exact-name drops for strict structured-output gateways (vLLM+xgrammar): browser_drop
+    # (propertyNames) and browser_network_request (minimum/maximum). Near-names must survive —
+    # the ban is exact, not a substring like the code-exec markers.
+    def keep(name: str) -> bool:
+        return pm._agent_safe_tool(cast(Any, None), cast(Any, SimpleNamespace(name=name)))
+
+    assert keep("browser_drop") is False
+    assert keep("browser_network_request") is False
+    assert keep("browser_drag") is True
+    assert keep("browser_network_requests") is True
+    assert keep("browser_click") is True
+
+
+# JSON-Schema constructs vLLM's xgrammar backend cannot compile (curated from its supported
+# subset; matches the constructs that broke the corporate gateway and, earlier, llama.cpp).
+XGRAMMAR_UNSUPPORTED_KEYS = frozenset({
+    "propertyNames", "patternProperties", "unevaluatedProperties",
+    "if", "then", "else", "not", "allOf", "oneOf",
+    "uniqueItems", "contains", "multipleOf",
+    "dependentRequired", "dependentSchemas",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+})
+
+
+def _unsupported_paths(
+    schema: object, path: str = "", *, keys_are_names: bool = False
+) -> list[str]:
+    """Paths of xgrammar-unsupported constructs in a JSON schema (empty = grammar-clean).
+
+    ``keys_are_names`` suppresses matching one level under ``properties``/``$defs``, where dict
+    keys are user-chosen names (a property literally called "minimum" is not a constraint).
+    """
+    hits: list[str] = []
+    if isinstance(schema, dict):
+        for key, value in schema.items():
+            sub = f"{path}.{key}" if path else str(key)
+            if not keys_are_names and key in XGRAMMAR_UNSUPPORTED_KEYS:
+                hits.append(sub)
+            hits += _unsupported_paths(
+                value, sub, keys_are_names=key in {"properties", "$defs", "definitions"}
+            )
+    elif isinstance(schema, list):
+        for i, value in enumerate(schema):
+            hits += _unsupported_paths(value, f"{path}[{i}]")
+    return hits
+
+
+def test_testplan_output_schema_is_grammar_clean():
+    # The Planner's structured-output tool (TestPlan) is advertised to the gateway alongside the
+    # MCP tools — it must stay compilable by strict backends too.
+    assert _unsupported_paths(models.TestPlan.model_json_schema()) == []
+
+
+@pytest.mark.skipif(
+    not pm.MCP_CLI_PATH.exists(), reason="MCP server not installed (cd output && npm install)"
+)
+def test_advertised_mcp_tool_schemas_are_grammar_clean():
+    # Regression net for @playwright/mcp bumps: list the LIVE tool schemas, apply the agent
+    # filter, and require every schema the model would actually be offered to be free of
+    # xgrammar-unsupported constructs. Also require the known offenders to still exist upstream —
+    # if a bump renames/removes them, _GRAMMAR_UNSAFE_TOOLS needs updating, not silence.
+    async def live_tools():
+        toolset = pm.MCPToolset(
+            pm.StdioTransport(
+                command="node",
+                args=[str(pm.MCP_CLI_PATH), "--config", str(pm.MCP_CONFIG_PATH)],
+                keep_alive=False,
+            ),
+            init_timeout=pm.MCP_INIT_TIMEOUT_S,
+        )
+        async with toolset:
+            for attr in ("direct_list_tools", "list_tools"):
+                lister = getattr(toolset, attr, None)
+                if lister is not None:
+                    return await lister()
+            raise AssertionError("no tool-listing method on MCPToolset")
+
+    tools = asyncio.run(live_tools())
+    names = {tool.name for tool in tools}
+    assert pm._GRAMMAR_UNSAFE_TOOLS <= names, (
+        f"filter list out of date: {sorted(pm._GRAMMAR_UNSAFE_TOOLS - names)} no longer "
+        "advertised by @playwright/mcp"
+    )
+    kept = [
+        tool
+        for tool in tools
+        if pm._agent_safe_tool(cast(Any, None), cast(Any, SimpleNamespace(name=tool.name)))
+    ]
+    offending = {
+        tool.name: paths for tool in kept if (paths := _unsupported_paths(tool.inputSchema))
+    }
+    assert offending == {}, f"grammar-unsafe schemas advertised to the model: {offending}"

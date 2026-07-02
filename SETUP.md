@@ -145,6 +145,13 @@ uv run python scripts/step0b_verify_embeddings.py
 uv run python scripts/step0c_xray_flavor.py --issue-key <one-real-QA-key>
 ```
 
+> **Gateways with strict structured-output backends** (e.g. vLLM's `xgrammar`) compile every
+> advertised tool schema and fail the whole request on a single unsupported JSON-Schema construct
+> (`… features not supported by the xgrammar`). The pipeline advertises only grammar-clean
+> schemas: two Playwright MCP tools whose generated schemas use such constructs (`browser_drop`,
+> `browser_network_request`) are excluded from the agents' toolset, and a schema-scan test in
+> `tests/test_playwright_mcp.py` guards the rest — re-run it after bumping `@playwright/mcp`.
+
 Plus two manual smokes:
 
 ```bash
