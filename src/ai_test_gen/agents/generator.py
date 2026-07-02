@@ -18,6 +18,7 @@ from ..config import Config
 from ..llm import build_openai_model
 from ..models import GeneratedTest, TestPlan
 from ._context import assemble_system_prompt
+from ._run_failure import run_agent_logged
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -98,6 +99,7 @@ async def generate_test(
     """
     agent = build_generator(config)
     user_message = _build_generation_message(plan, previous_code, error_text)
-    # No toolset → no async context manager needed; run the agent directly.
-    result = await agent.run(user_message)
-    return result.output
+    # run_agent_logged captures the run's messages so retry exhaustion (e.g. the model
+    # answering in prose instead of emitting GeneratedTest) logs its evidence like the
+    # browser agents do; entering the toolset-less agent is a no-op context.
+    return await run_agent_logged(agent, user_message, agent_label="Generator")
