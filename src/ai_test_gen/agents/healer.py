@@ -18,14 +18,12 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ProcessHistory
-from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
 from ..llm import build_openai_model
 from ..models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
 from ..playwright_mcp import build_playwright_mcp
 from ._context import (
-    agent_request_limit,
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
@@ -33,6 +31,7 @@ from ._context import (
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
+from ._run_failure import run_agent_logged
 from ._vision_aid import _make_screenshot_capture, register_inspect_screen
 
 logger = logging.getLogger(__name__)
@@ -278,9 +277,6 @@ async def heal_test(
     user_message = _build_heal_message(
         test, failure, plan, test_case, heal_history, locator_escalation
     )
-    # MCP toolset → enter the agent as an async context manager around the run.
-    async with agent:
-        result = await agent.run(
-            user_message, usage_limits=UsageLimits(request_limit=agent_request_limit())
-        )
-        return result.output
+    # run_agent_logged enters the agent (MCP subprocess start/stop around the run) and logs
+    # the captured failure evidence on retry exhaustion before re-raising.
+    return await run_agent_logged(agent, user_message, agent_label="Healer")

@@ -19,14 +19,12 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ProcessHistory
-from pydantic_ai.usage import UsageLimits
 
 from ..config import Config
 from ..llm import build_openai_model
 from ..models import ManualTestCase, TestPlan
 from ..playwright_mcp import build_playwright_mcp
 from ._context import (
-    agent_request_limit,
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
@@ -34,6 +32,7 @@ from ._context import (
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
+from ._run_failure import run_agent_logged
 
 # Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
 # targets (tests/test_vision.py) keep resolving from this module. noqa: these are deliberate
@@ -172,13 +171,9 @@ step changes earlier state (a failed login clears the password), make the recove
 own ordered step.
 """
 
-    # MCP toolset → the agent must be entered as an async context manager so the
-    # Playwright MCP subprocess is started (and cleanly stopped) around the run.
-    async with agent:
-        result = await agent.run(
-            user_message, usage_limits=UsageLimits(request_limit=agent_request_limit())
-        )
-        return result.output
+    # run_agent_logged enters the agent (Playwright MCP subprocess start/stop around the
+    # run) and logs the captured failure evidence on retry exhaustion before re-raising.
+    return await run_agent_logged(agent, user_message, agent_label="Planner")
 
 
 def _format_steps(tc: ManualTestCase) -> str:
