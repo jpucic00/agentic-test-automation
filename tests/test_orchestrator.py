@@ -115,20 +115,48 @@ def test_snapshots_dir_wiped_at_start_but_gitkeep_survives(cfg, monkeypatch):
 
 
 def test_heal_exception_still_opens_mr(cfg, monkeypatch):
-    # A Healer crash (e.g. browser_click exceeded max retries) must not discard the run.
+    # A Healer that crashes EVERY attempt: each crash consumes an attempt, and after
+    # MAX_CONSECUTIVE_ABORTED_HEALS (2) back-to-back crashes healing stops early — but the
+    # run is never discarded: the MR still opens with the best test so far.
     gl = _wire(monkeypatch, cfg, [_result("failed")])
-    monkeypatch.setattr(
-        orchestrator,
-        "heal_test",
-        AsyncMock(side_effect=RuntimeError("browser_click exceeded max retries")),
-    )
-    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    heal = AsyncMock(side_effect=RuntimeError("browser_click exceeded max retries"))
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=15))
     assert out["status"] == "failed"
-    assert out["heal_attempts"] == 1
+    assert out["heal_attempts"] == orchestrator.MAX_CONSECUTIVE_ABORTED_HEALS == 2
+    assert heal.call_count == 2  # stopped by the consecutive-abort cap, not the budget
     assert out["mr_url"] == "https://gitlab/mr/1"
     gl.open_mr.assert_called_once()
     summaries = gl.open_mr.call_args.kwargs["heal_summaries"]
-    assert any("aborted" in s for s in summaries)
+    assert sum("aborted" in s for s in summaries) == 2
+
+
+def test_heal_crash_consumes_attempt_and_continues(cfg, monkeypatch):
+    # THE 5-of-15 bug: one crashed heal attempt must not abandon the remaining budget.
+    # Attempt 1 crashes -> attempt 2 runs with a fresh Healer and heals the test green.
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("passed")])
+    heal = AsyncMock(side_effect=[RuntimeError("gateway 502"), _healed()])
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=15))
+    assert out["status"] == "passed"
+    assert out["heal_attempts"] == 2  # the crash consumed attempt 1
+    summaries = gl.open_mr.call_args.kwargs["heal_summaries"]
+    assert "aborted" in summaries[0]
+    assert summaries[1] == "fixed selector"
+
+
+def test_nonconsecutive_heal_crashes_do_not_stop_healing(cfg, monkeypatch):
+    # crash, heal, crash, heal: the abort counter resets on every completed attempt, so
+    # scattered crashes never trip the consecutive-abort cap.
+    _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("passed")])
+    heal = AsyncMock(
+        side_effect=[RuntimeError("boom 1"), _healed(), RuntimeError("boom 2"), _healed()]
+    )
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=6))
+    assert out["status"] == "passed"
+    assert out["heal_attempts"] == 4
+    assert heal.call_count == 4
 
 
 def test_open_mr_failure_returns_error_without_crashing(cfg, monkeypatch):

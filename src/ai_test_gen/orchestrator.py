@@ -14,6 +14,9 @@ Improvements over the guide's template:
   regenerated every run) is emptied at the start of each run so it doesn't accumulate.
 - **Heal transparency.** Every Healer ``changes_summary`` is collected and rendered into
   the MR; an MR is opened even when healing is exhausted, so a human always reviews.
+- **Heal resilience.** A heal attempt that crashes (agent/gateway/MCP exception) consumes
+  its attempt and healing continues with a fresh Healer; only
+  ``MAX_CONSECUTIVE_ABORTED_HEALS`` back-to-back crashes end the loop early.
 - **Per-iteration artifacts + per-attempt MR commits.** The first generated spec keeps its
   filename; the compile retry and each heal attempt are written to their own sibling files
   (``<name>.healer-attempt-N.spec.ts``) so no iteration overwrites another and the full
@@ -52,6 +55,13 @@ logger = logging.getLogger(__name__)
 # persistently-failing step needs one attempt to confirm the failure recurs and another to
 # escalate to a different locator kind (e.g. roll a hallucinated id over to a verified XPath).
 MAX_HEAL_ATTEMPTS = 3
+
+# A heal attempt that CRASHES (agent/gateway/MCP exception) consumes its attempt but does NOT
+# end healing — each attempt builds a fresh Healer + browser, so the next one starts clean.
+# Only this many CONSECUTIVE crashed attempts stop the loop early: back-to-back crashes mean
+# something environmental (gateway down, browser broken) that more attempts won't heal. Without
+# this, one crashed attempt used to abandon the entire remaining MAX_HEAL_ATTEMPTS budget.
+MAX_CONSECUTIVE_ABORTED_HEALS = 2
 
 
 def _load_test_case(config: Config, issue_key: str) -> ManualTestCase:
@@ -178,6 +188,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     heal_summaries: list[str] = []
     failure_signatures: list[str] = []
     heal_attempts = 0
+    consecutive_aborts = 0
     while result.status != "passed" and heal_attempts < max_heal_attempts:
         heal_attempts += 1
         # How many times in a row this exact failure has already recurred. When the SAME
@@ -207,12 +218,27 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 locator_escalation=escalation,
             )
         except Exception as exc:
-            # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not
-            # discard the run — stop healing and fall through to open the MR with the best
-            # test so far, so a human still gets something to review.
-            logger.warning("[%s] Heal attempt %d aborted: %s", issue_key, heal_attempts, exc)
+            # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not discard
+            # the run — NOR the remaining heal budget: the attempt is consumed and healing
+            # CONTINUES with a fresh Healer (each attempt already builds its own agent+browser).
+            # Only MAX_CONSECUTIVE_ABORTED_HEALS back-to-back crashes stop the loop early (that
+            # pattern is environmental, not healable); either way the MR below still opens with
+            # the best test so far, so a human always gets something to review.
+            consecutive_aborts += 1
             heal_summaries.append(f"(attempt {heal_attempts} aborted before completing: {exc})")
-            break
+            if consecutive_aborts >= MAX_CONSECUTIVE_ABORTED_HEALS:
+                logger.warning(
+                    "[%s] Heal attempt %d aborted (%d in a row) — stopping healing: %s",
+                    issue_key, heal_attempts, consecutive_aborts, exc,
+                )
+                break
+            logger.warning(
+                "[%s] Heal attempt %d aborted (continuing, %d/%d consecutive): %s",
+                issue_key, heal_attempts, consecutive_aborts,
+                MAX_CONSECUTIVE_ABORTED_HEALS, exc,
+            )
+            continue
+        consecutive_aborts = 0
         heal_summaries.append(healed.changes_summary)
         # Each heal lands in its OWN file (<name>.healer-attempt-N.spec.ts). The Healer's
         # returned file_name is deliberately ignored so an attempt can never overwrite an
