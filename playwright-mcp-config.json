@@ -6,7 +6,7 @@
       "headless": true
     },
     "contextOptions": {
-      "viewport": { "width": 1280, "height": 800 },
+      "viewport": { "width": 1920, "height": 1080 },
       "ignoreHTTPSErrors": true
     }
   },

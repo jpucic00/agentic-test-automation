@@ -17,6 +17,9 @@ export default defineConfig({
     // "testIdAttribute": "id" in playwright-mcp-config.json (the read side).
     testIdAttribute: 'id',
     headless: true,
+    // Full desktop resolution so the app renders at its full layout, not a cramped default.
+    // Keep in sync with the "viewport" in playwright-mcp-config.json (what the agents drive).
+    viewport: { width: 1920, height: 1080 },
     ignoreHTTPSErrors: true,
     // retain-on-failure, NOT on-first-retry: retries stay 0 (the Healer owns retries),
     // so an on-first-retry trace would never be produced. Failed runs leave a
