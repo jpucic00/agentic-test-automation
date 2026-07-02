@@ -34,6 +34,7 @@ _OPTIONAL_VARS = (
     "HEALER_MODEL",
     "VISION_MODEL",
     "AGENT_VISION",
+    "AGENT_DOM_PROBE",
     "XRAY_IS_CLOUD",
     "GITLAB_ENABLED",
     "GITLAB_TARGET_BRANCH",
@@ -211,6 +212,25 @@ def test_vision_model_defaults_and_override(env):
     assert load_config().vision_model == "mistralai/devstral-small-2-2512"
     env.setenv("VISION_MODEL", "custom/vision-model")
     assert load_config().vision_model == "custom/vision-model"
+
+
+def test_agent_dom_probe_disabled_by_default_false_and_zero(env):
+    assert load_config().dom_probe_max_calls == 0  # unset -> off
+    for off in ("false", "0", "off", "no"):
+        env.setenv("AGENT_DOM_PROBE", off)
+        assert load_config().dom_probe_max_calls == 0, off
+
+
+def test_agent_dom_probe_positive_int_sets_budget(env):
+    # AGENT_DOM_PROBE is the single shared knob for both the Planner and the Healer.
+    env.setenv("AGENT_DOM_PROBE", "10")
+    assert load_config().dom_probe_max_calls == 10
+
+
+def test_agent_dom_probe_invalid_fails_fast(env):
+    env.setenv("AGENT_DOM_PROBE", "plenty")
+    with pytest.raises(RuntimeError, match="AGENT_DOM_PROBE"):
+        load_config()
 
 
 # --- test-case source (xray | local) + path overrides -----------------------

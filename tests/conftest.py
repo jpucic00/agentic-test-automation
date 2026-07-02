@@ -27,6 +27,7 @@ def cfg(tmp_path: Path) -> Config:
         healer_model="healer-model",
         vision_model="vision-model",
         vision_max_calls=0,
+        dom_probe_max_calls=0,
         testcase_source="xray",
         local_testcase_dir=None,
         jira_base_url="https://jira.internal",

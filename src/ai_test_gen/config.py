@@ -105,18 +105,15 @@ def _resolve_under_root(raw: str) -> Path:
     return path.resolve()
 
 
-def _vision_max_calls() -> int:
-    """Max Vision Aid calls per agent run from ``AGENT_VISION`` (0 = feature off).
+def _call_budget(env_var: str, what: str) -> int:
+    """Tri-state per-agent-run call budget from ``env_var`` (0 = feature off).
 
-    Single shared knob for BOTH browser agents — the Planner and the Healer each get this many
-    ``inspect_screen`` calls per run (per planning run; per heal attempt).
-
-    Tri-state, mirroring the env-knob style of ``agent_request_limit`` / ``reasoning_effort``:
+    Mirrors the env-knob style of ``agent_request_limit`` / ``reasoning_effort``:
     unset / ``false`` / ``0`` / ``off`` / ``no`` → 0 (disabled); a positive integer → that cap.
     Any other value fails fast — a typo that silently disabled the feature would masquerade as
-    "vision isn't helping".
+    "the feature isn't helping". ``what`` names the capped thing in the error message.
     """
-    raw = os.environ.get("AGENT_VISION")
+    raw = os.environ.get(env_var)
     if raw is None:
         return 0
     value = raw.strip().lower()
@@ -126,14 +123,34 @@ def _vision_max_calls() -> int:
         n = int(value)
     except ValueError:
         raise RuntimeError(
-            f"AGENT_VISION={raw!r} is not valid; use 'false' to disable or a positive "
-            "integer (max vision calls per agent run)."
+            f"{env_var}={raw!r} is not valid; use 'false' to disable or a positive "
+            f"integer (max {what} per agent run)."
         ) from None
     if n < 0:
         raise RuntimeError(
-            f"AGENT_VISION={raw!r} must be a positive integer (or 'false' to disable)."
+            f"{env_var}={raw!r} must be a positive integer (or 'false' to disable)."
         )
     return n
+
+
+def _vision_max_calls() -> int:
+    """Max Vision Aid calls per agent run from ``AGENT_VISION`` (0 = feature off).
+
+    Single shared knob for BOTH browser agents — the Planner and the Healer each get this many
+    ``inspect_screen`` calls per run (per planning run; per heal attempt).
+    """
+    return _call_budget("AGENT_VISION", "vision calls")
+
+
+def _dom_probe_max_calls() -> int:
+    """Max DOM-probe calls per agent run from ``AGENT_DOM_PROBE`` (0 = feature off).
+
+    Single shared knob for BOTH browser agents — the Planner and the Healer each get this many
+    ``probe_dom`` calls per run (per planning run; per heal attempt). Unlike the Vision Aid it
+    needs no extra model (the probe never calls an LLM), but it ships OFF by default like every
+    optional sensor so a default run's prompts and toolset stay byte-identical.
+    """
+    return _call_budget("AGENT_DOM_PROBE", "DOM-probe calls")
 
 
 @dataclass(frozen=True)
@@ -149,6 +166,10 @@ class Config:
     # (AGENT_VISION unset or false); >0 = per-agent-run call cap.
     vision_model: str
     vision_max_calls: int
+    # Optional DOM Probe shared by the Planner AND Healer (agents/_dom_probe.py probe_dom):
+    # read-only recon of elements the a11y snapshot can't name. 0 = OFF (AGENT_DOM_PROBE unset
+    # or false); >0 = per-agent-run call cap. No LLM involved — fixed JS via the MCP server.
+    dom_probe_max_calls: int
 
     # Test-case source: "xray" (live Jira/Xray) or "local" (raw-Xray-shaped JSON on disk)
     testcase_source: Literal["xray", "local"]
@@ -242,6 +263,7 @@ def load_config() -> Config:
         healer_model=os.environ.get("HEALER_MODEL", "openai/gpt-oss-120b"),
         vision_model=os.environ.get("VISION_MODEL", "mistralai/devstral-small-2-2512"),
         vision_max_calls=_vision_max_calls(),
+        dom_probe_max_calls=_dom_probe_max_calls(),
         jira_base_url=_required_if("JIRA_BASE_URL", required=testcase_source == "xray"),
         jira_email=_required_if("JIRA_EMAIL", required=testcase_source == "xray"),
         jira_token=_required_if("JIRA_TOKEN", required=testcase_source == "xray"),
