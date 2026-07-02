@@ -25,6 +25,10 @@ Jira/Xray key → fetch → Plan → Generate → Run → (Heal ↺) → open MR
   test alone so the regression surfaces honestly instead of being "fixed" away.
 - **Vision Aid** *(optional, off by default)* lets either browser agent screenshot the page and ask a
   vision model to describe the visual state — enable it with `AGENT_VISION=N`.
+- **DOM Probe** *(optional, off by default)* helps on barely-accessible apps whose controls are
+  unnamed `div`/`span` elements: `probe_dom` searches the live DOM (read-only, one fixed function —
+  the model never writes code) and reports an element's real attributes plus candidate CSS/XPath
+  selectors, which the agent then verifies before use — enable it with `AGENT_DOM_PROBE=N`.
 - **GitLab Client** opens a merge request labeled `ai-generated` + `qa-review-needed` (optional — can be
   skipped for local runs).
 
