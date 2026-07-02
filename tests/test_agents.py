@@ -114,6 +114,27 @@ def test_planner_prompt_has_navigation_discipline():
     assert "Don't plan a page you didn't visit" in planner_md
 
 
+def test_planner_prompt_has_declared_followup_flows():
+    # Activation-flow contract: a declared follow-up flow (canonically: email verification before
+    # a new account's first login) yields REAL plan steps right after the creation step, and the
+    # navigation rule admits map-declared auxiliary tool UIs (mail-catcher) — without this the
+    # canonical failure is create-user → login attempts against a never-activated account.
+    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
+    assert "Declared follow-up (activation) flows" in planner_md
+    assert "REAL PLAN STEPS" in planner_md
+    assert "mail-catcher" in planner_md
+    assert "NEVER log in with (or" in planner_md  # never use a record before activation
+
+
+def test_healer_prompt_has_activation_gap_diagnosis():
+    # A fresh account failing its first login is an activation-gap suspect BEFORE it is a
+    # selector suspect; the fix is ADDING the missing activation steps, live-verified.
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "A freshly-created account can't log in" in healer_md
+    assert "activation flow" in healer_md
+    assert "ADD the missing activation steps" in healer_md
+
+
 def test_healer_prompt_has_locator_kind_escalation():
     # On a persistently-failing step the Healer must escalate the locator KIND down the ladder
     # (the behavior the user asked for: roll a stuck id over to a verified XPath).

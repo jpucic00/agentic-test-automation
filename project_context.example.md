@@ -61,8 +61,14 @@ HOW TO FILL THIS IN:
 - <Which kinds of records do tests create (e.g. a new org, a new user)?>
 - Uniqueness (required): every created record must be unique per run. <Give the suffix format to
   append (e.g. a timestamp or short random token) so reruns don't collide on "already exists".>
-- <What email pattern does signup accept (e.g. qa+<unique>@example.com)?>
+- <What email pattern does signup accept (e.g. qa+<unique>@example.com)? If activation emails must
+  actually arrive somewhere the agents can read, the domain must be one your mail-catcher receives.>
 - <What password policy must a generated value satisfy (length, character classes)?>
+- <Does a created account/record need ACTIVATION before first use — e.g. an email-verification
+  link that must be clicked before the login works? State the RULE here (and the exact error
+  shown when it's skipped, so a failed login can be told apart from a wrong password); the
+  step-by-step flow belongs in project_map.md ("Post-creation activation flow"). Delete this
+  bullet if nothing needs activation.>
 
 ## 6. Selector rules (standard — keep as written)
 - Do NOT list selectors here or in project_map.md. The agents capture every locator LIVE and pick

@@ -41,3 +41,22 @@ def test_context_template_documents_live_login_and_session_killers():
     # The healer prompt points agents at these two pieces of the Project Context.
     assert "No saved session" in text
     assert "Session-invalidating actions" in text
+
+
+def test_map_template_has_activation_flow_block():
+    # The planner/healer prompts reference declared "Post-creation activation flow"s (email
+    # verification before first login) — the map template must ask adopters for them, and its
+    # routes table must invite auxiliary tool URLs (mail-catcher), or the agents are forbidden
+    # from navigating there.
+    text = (REPO_ROOT / "project_map.example.md").read_text()
+    assert "Post-creation activation flow" in text
+    assert "mail-catcher" in text
+    assert "Directly-addressable routes" in text
+
+
+def test_context_template_asks_about_activation():
+    # §5 must ask whether created records need activation before first use — the rule (and the
+    # exact skipped-activation error) lives in context; the step-by-step flow lives in the map.
+    text = (REPO_ROOT / "project_context.example.md").read_text()
+    assert "ACTIVATION" in text
+    assert "email-verification" in text

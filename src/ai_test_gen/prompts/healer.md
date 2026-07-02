@@ -113,6 +113,16 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
      scope to the active container — `page.getByRole('dialog').getByRole('button', { name: 'Add',
      exact: true })` — or, as a last resort, `.first()`.
 
+5. **A freshly-created account can't log in**
+   → Before blaming the locator: check the Project Context / Application Map for a **declared
+     activation flow** (the canonical example: a new account must be activated via an
+     email-verification link on the mail-catcher UI the map lists — its login fails until then,
+     often indistinguishably from a wrong password). If the test creates the account and never
+     activates it, the fix is to ADD the missing activation steps between creation and first
+     login — reproduce it live: create an account, complete the declared flow on the declared
+     tool, confirm the login then succeeds, and capture each added step's selector like any
+     other (the map's directly-addressable tool UIs are legitimate navigation targets).
+
 # Locator-kind escalation (when the SAME step keeps failing)
 
 If the heal message tells you a step has **already failed on previous attempts** — i.e. an earlier

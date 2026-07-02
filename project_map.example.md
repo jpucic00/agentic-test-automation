@@ -50,16 +50,33 @@ HOW TO FILL THIS IN:
 - <The ordered steps and the fields to fill?>
 - <What confirms success (redirect / message)?>
 
+### Post-creation activation flow (delete if no created record needs one)
+<!-- MANDATORY follow-up steps a created record needs before first use — the canonical example is
+     email verification: a new account's login fails until the activation link is clicked. The
+     agents perform these as REAL plan steps right after the creation step, so describe them like
+     any flow. If the flow happens on a separate tool (e.g. a mail-catcher web UI), ALSO list that
+     tool's FULL URL under "Directly-addressable routes" below — otherwise the agent is not allowed
+     to navigate to it. -->
+- <Which creation flow needs this, and is it MANDATORY before first use (e.g. login)?>
+- <Where does the verification arrive — e.g. the mail-catcher UI (full URL in the routes table)?>
+- <How to find the right item there (e.g. the newest message addressed to the just-created email —
+  it can take a few seconds to arrive; refresh)?>
+- <What to click / do, and what confirms the activation succeeded?>
+
 ## Directly-addressable routes (optional)
 <!-- ONLY list URLs the app lets you navigate to DIRECTLY (deep-linkable — you could paste them in
      the address bar and land there). The agent may browser_navigate to these. If a feature is
      reached by CLICKING through the UI (a menu/tab, no typed URL) — common in SPAs — do NOT invent a
      route for it here; describe the click path under "Key features" instead. When unsure, leave it
      out: the agent navigates like a user by default. Delete this section if the app isn't
-     deep-linkable. One row per addressable route. -->
+     deep-linkable. One row per addressable route.
+     AUXILIARY TOOL UIs count too: if a flow needs a separate tool on ANOTHER host — e.g. a
+     mail-catcher web UI for email verification — list its FULL URL (scheme + host + port) here;
+     the agent may only navigate to URLs this table declares. -->
 | Route | Purpose | Auth | Roles |
 |-------|---------|------|-------|
 | <`/route`> | <what it's for> | <public / logged-in> | <which roles can reach it> |
+| <full URL of an auxiliary tool, e.g. the mail-catcher UI> | <e.g. email verification for new accounts> | <public / logged-in> | <everyone> |
 
 ## Key features (the flows your test cases exercise)
 <!-- One block per page/feature your tests touch. Describe controls by name/purpose. -->

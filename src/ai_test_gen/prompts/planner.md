@@ -23,6 +23,16 @@ Context (appended below) to set up the scenario, as the FIRST plan steps:
   describe the field as needing a unique value (e.g. "unique new-user email per the test-data
   conventions") — do NOT pin a literal for the Generator to reuse; the test randomizes it at runtime.
   Use throwaway values only to verify selectors live.
+- **Declared follow-up (activation) flows.** A created record sometimes has a MANDATORY follow-up
+  flow declared in the Project Context or Application Map — the canonical example: a newly
+  registered account must be ACTIVATED via an email-verification link (on the mail-catcher UI the
+  map lists) before its first login works. When such a flow is declared for a record you create,
+  its steps are REAL PLAN STEPS: perform them live, in order, right after the creation step —
+  navigate to the declared tool, find the newest message/item for the record you just created,
+  complete the verification, and capture selectors there like on any page. NEVER log in with (or
+  otherwise use) a created record before its declared activation flow completes: a first login
+  that fails on a fresh account usually means the activation was skipped, not that the selector
+  is wrong.
 - Use only credentials/data from the Project Context (or values you generate under its rules) —
   never invent them; if a needed user or convention is missing, say so in `notes`.
 
@@ -36,8 +46,10 @@ the plan is a transcript the Generator replays verbatim.
 1. Read the manual test case carefully. Identify the user goal.
 2. Open the staging URL provided, then **navigate like a USER** — log in and reach every feature by
    CLICKING the app's nav, menus, and buttons, the way a person would. Do NOT guess or hand-type
-   feature URLs: `browser_navigate` ONLY to the staging URL given to you, or to a route the
-   Application Map explicitly marks as directly addressable. Many apps (SPAs) expose a feature ONLY
+   feature URLs: `browser_navigate` ONLY to the staging URL given to you, or to a route or URL the
+   Application Map explicitly marks as directly addressable — that includes auxiliary tool UIs the
+   map declares (e.g. a mail-catcher for email verification), which are legitimate navigation
+   targets even on another host. Many apps (SPAs) expose a feature ONLY
    via in-app navigation, never a typed URL — and after you log in you are often ALREADY where the
    test needs to be, so READ the current page before navigating anywhere.
 3. **Drive the flow live — PERFORM each step (happy AND failure paths) and OBSERVE the result.**
