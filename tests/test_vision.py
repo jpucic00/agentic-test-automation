@@ -396,8 +396,9 @@ def test_healer_prompt_has_vision_block_only_when_enabled(cfg, monkeypatch):
     assert "Seeing the page" in captured["base"]
 
 
-def test_healer_steer_attached_only_when_vision_on(cfg, monkeypatch):
-    # The locator→vision steer is attached to the Healer's MCP only when vision is enabled.
+def test_healer_guard_attached_always(cfg, monkeypatch):
+    # The locator-failure guard is attached to the Healer's MCP unconditionally — the exhaustion
+    # soft-landing must protect vision-off runs too (its steer stage is vision-gated internally).
     seen: list[object] = []
     real = healer_mod.build_playwright_mcp
 
@@ -406,7 +407,7 @@ def test_healer_steer_attached_only_when_vision_on(cfg, monkeypatch):
         return real(config, storage_state=storage_state, process_tool_call=process_tool_call)
 
     monkeypatch.setattr(healer_mod, "build_playwright_mcp", spy)
-    healer_mod.build_healer(cfg)  # off -> no steer
-    assert seen[-1] is None
-    healer_mod.build_healer(dataclasses.replace(cfg, vision_max_calls=2))  # on -> steer attached
-    assert seen[-1] is not None
+    healer_mod.build_healer(cfg)  # vision off -> guard still attached
+    assert isinstance(seen[-1], healer_mod.LocatorFailureGuard)
+    healer_mod.build_healer(dataclasses.replace(cfg, vision_max_calls=2))  # vision on
+    assert isinstance(seen[-1], healer_mod.LocatorFailureGuard)

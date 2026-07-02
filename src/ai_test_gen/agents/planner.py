@@ -31,8 +31,9 @@ from ._context import (
     assemble_system_prompt,
     build_model_settings,
 )
+from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
-from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
+from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
 
 # Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
 # targets (tests/test_vision.py) keep resolving from this module. noqa: these are deliberate
@@ -51,9 +52,10 @@ logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-# Module-level alias so build_planner calls the name a test can monkeypatch
-# (test_planner_registers_inspect_screen_only_when_enabled patches this attribute).
+# Module-level aliases so build_planner calls names a test can monkeypatch
+# (test_planner_registers_inspect_screen_only_when_enabled patches these attributes).
 _register_inspect_screen = register_inspect_screen
+_register_probe_dom = register_probe_dom
 
 # Public surface + the Vision Aid helpers re-exported for back-compat (consumed by tests).
 __all__ = [
@@ -61,6 +63,8 @@ __all__ = [
     "plan_test_case",
     "_register_inspect_screen",
     "register_inspect_screen",
+    "_register_probe_dom",
+    "register_probe_dom",
     "_make_screenshot_capture",
     "_underlying_mcp",
     "_latest_png",
@@ -78,28 +82,31 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     if config.vision_max_calls > 0:
         # Gated so a disabled run's system prompt is byte-identical to before.
         base_prompt += "\n\n" + (PROMPTS_DIR / "vision_aid.md").read_text()
+    if config.dom_probe_max_calls > 0:
+        # Same gating for the DOM probe fragment: probe off ⇒ prompt byte-identical.
+        base_prompt += "\n\n" + (PROMPTS_DIR / "dom_probe.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
-    # Optional locator→vision steer: after N consecutive browser_generate_locator failures it
-    # swaps the bland MCP error for a ModelRetry pushing the Planner to screenshot +
-    # inspect_screen and re-orient. Gated on the same flag as inspect_screen — vision off ⇒
-    # hook is None, toolset unchanged.
-    steer: LocatorVisionSteer | None = None
-    if config.vision_max_calls > 0:
-        steer = LocatorVisionSteer(agent_retries())
-        logger.info(
-            "Planner locator-failure vision steer ENABLED: after %d consecutive %s failure(s) → "
-            "browser_take_screenshot + inspect_screen",
-            steer.steer_after,
-            LOCATOR_TOOL,
-        )
-    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=steer)
-
-    # Reasoning effort (PLANNER_REASONING_EFFORT) + parallel_tool_calls=False when vision is on, so
-    # a vision question can't be batched with a navigation in one turn (see build_model_settings).
-    model_settings = build_model_settings(
-        "PLANNER_REASONING_EFFORT", vision_on=config.vision_max_calls > 0
+    # Locator-failure guard — ALWAYS attached: at the retry ceiling it returns give-up-this-
+    # element guidance instead of letting "browser_generate_locator exceeded max retries" abort
+    # the whole planning run. Its mid-streak steer to vision stays gated on AGENT_VISION, and
+    # its guidance mentions probe_dom only when the probe is registered.
+    guard = LocatorFailureGuard(
+        agent_retries(),
+        vision_on=config.vision_max_calls > 0,
+        probe_on=config.dom_probe_max_calls > 0,
     )
+    logger.info(
+        "Planner locator guard ENABLED: give-up guidance after %d consecutive %s failure(s)%s",
+        guard.exhaust_after,
+        LOCATOR_TOOL,
+        f"; vision steer at {guard.steer_after}" if config.vision_max_calls > 0 else "",
+    )
+    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=guard)
+
+    # Reasoning effort (PLANNER_REASONING_EFFORT) + parallel_tool_calls=False ALWAYS — browser
+    # tool calls mutate one shared page and must run strictly in order (see build_model_settings).
+    model_settings = build_model_settings("PLANNER_REASONING_EFFORT")
 
     agent = Agent(
         model=model,
@@ -117,6 +124,10 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     # drives browser_take_screenshot on this same live MCP so inspect_screen sees the current page.
     if config.vision_max_calls > 0:
         _register_inspect_screen(agent, config, capture=_make_screenshot_capture(mcp))
+    # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
+    # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
+    if config.dom_probe_max_calls > 0:
+        _register_probe_dom(agent, config, mcp)
     return agent
 
 

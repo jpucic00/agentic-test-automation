@@ -30,8 +30,9 @@ from ._context import (
     assemble_system_prompt,
     build_model_settings,
 )
+from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
-from ._locator_steer import LOCATOR_TOOL, LocatorVisionSteer
+from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
 from ._vision_aid import _make_screenshot_capture, register_inspect_screen
 
 logger = logging.getLogger(__name__)
@@ -48,28 +49,31 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
         # Gated so a disabled run's system prompt is byte-identical to before. Same shared fragment
         # the Planner uses — the Healer is a full browser agent and reads the page the same way.
         base_prompt += "\n\n" + (PROMPTS_DIR / "vision_aid.md").read_text()
+    if config.dom_probe_max_calls > 0:
+        # Same gating for the DOM probe fragment: probe off ⇒ prompt byte-identical.
+        base_prompt += "\n\n" + (PROMPTS_DIR / "dom_probe.md").read_text()
     system_prompt = assemble_system_prompt(config, base_prompt, include_map=True)
 
-    # Optional locator→vision steer, mirroring the Planner: after N consecutive
-    # browser_generate_locator failures it pushes the Healer to screenshot + inspect_screen and
-    # re-orient. Gated on the same flag as inspect_screen — vision off ⇒ hook is None, toolset
-    # unchanged (byte-identical to before).
-    steer: LocatorVisionSteer | None = None
-    if config.vision_max_calls > 0:
-        steer = LocatorVisionSteer(agent_retries())
-        logger.info(
-            "Healer locator-failure vision steer ENABLED: after %d consecutive %s failure(s) → "
-            "browser_take_screenshot + inspect_screen",
-            steer.steer_after,
-            LOCATOR_TOOL,
-        )
-    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=steer)
-
-    # Reasoning effort (HEALER_REASONING_EFFORT) + parallel_tool_calls=False when vision is on, so
-    # a vision question can't be batched with a navigation in one turn (see build_model_settings).
-    model_settings = build_model_settings(
-        "HEALER_REASONING_EFFORT", vision_on=config.vision_max_calls > 0
+    # Locator-failure guard — ALWAYS attached, mirroring the Planner: at the retry ceiling it
+    # returns give-up-this-element guidance instead of letting "browser_generate_locator
+    # exceeded max retries" abort the heal attempt (which used to end the whole heal loop). Its
+    # mid-streak steer to vision stays gated on AGENT_VISION.
+    guard = LocatorFailureGuard(
+        agent_retries(),
+        vision_on=config.vision_max_calls > 0,
+        probe_on=config.dom_probe_max_calls > 0,
     )
+    logger.info(
+        "Healer locator guard ENABLED: give-up guidance after %d consecutive %s failure(s)%s",
+        guard.exhaust_after,
+        LOCATOR_TOOL,
+        f"; vision steer at {guard.steer_after}" if config.vision_max_calls > 0 else "",
+    )
+    mcp = build_playwright_mcp(config, storage_state=storage_state, process_tool_call=guard)
+
+    # Reasoning effort (HEALER_REASONING_EFFORT) + parallel_tool_calls=False ALWAYS — browser
+    # tool calls mutate one shared page and must run strictly in order (see build_model_settings).
+    model_settings = build_model_settings("HEALER_REASONING_EFFORT")
 
     agent = Agent(
         model=model,
@@ -87,6 +91,10 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
         register_inspect_screen(
             agent, config, capture=_make_screenshot_capture(mcp), agent_label="Healer"
         )
+    # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
+    # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
+    if config.dom_probe_max_calls > 0:
+        register_probe_dom(agent, config, mcp, agent_label="Healer")
     return agent
 
 

@@ -149,29 +149,25 @@ def reasoning_effort(env_var: str) -> ReasoningEffort | None:
     return cast(ReasoningEffort, value)
 
 
-def build_model_settings(effort_env: str, *, vision_on: bool) -> OpenAIChatModelSettings | None:
-    """Assemble a browser agent's model settings from optional pieces, or ``None`` if none apply.
+def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
+    """Model settings for a browser agent: always-sequential tool calls + optional effort.
 
-    Two independent, opt-in pieces:
-
+    - **``parallel_tool_calls=False`` — always.** Browser tools mutate ONE shared page, and
+      pydantic-ai executes a turn's tool calls CONCURRENTLY — so a model that batches two actions
+      in one turn can click/navigate out of order (and, when vision is on, race an
+      ``inspect_screen`` screenshot with the navigation it should observe). One tool call per turn
+      makes every browser agent's actions strictly sequential, which is the only correct order for
+      UI automation. (The gateway must honor the flag — OpenAI-compatible servers may silently
+      drop it; confirm on a real run.)
     - **Reasoning effort** from ``effort_env`` (see ``reasoning_effort``) when that env var is set.
-    - **``parallel_tool_calls=False`` when ``vision_on``** — forces the model to emit one tool call
-      per turn so it cannot batch a vision question (``inspect_screen``) with a navigation/click in
-      the SAME step. pydantic-ai runs a turn's tool calls concurrently by default, so a sibling
-      action would race ``inspect_screen``'s live screenshot and the Vision Aid answer would
-      describe the page the agent moved TO, not the one it asked about. (The gateway must honor the
-      flag — OpenAI-compatible servers may silently drop it; confirm on a real run.)
 
-    When neither applies (no effort set and ``vision_on`` is False), returns ``None`` so a
-    vision-OFF run stays byte-identical to before. Shared by the Planner and the Healer.
+    Shared by the Planner and the Healer; the Generator (no browser) never uses this.
     """
-    settings_kwargs: dict[str, Any] = {}
+    settings_kwargs: dict[str, Any] = {"parallel_tool_calls": False}
     effort = reasoning_effort(effort_env)
     if effort:
         settings_kwargs["openai_reasoning_effort"] = effort
-    if vision_on:
-        settings_kwargs["parallel_tool_calls"] = False
-    return OpenAIChatModelSettings(**settings_kwargs) if settings_kwargs else None
+    return OpenAIChatModelSettings(**settings_kwargs)
 
 
 def agent_request_limit(default: int = 300) -> int:

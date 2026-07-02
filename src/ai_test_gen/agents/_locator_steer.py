@@ -1,28 +1,34 @@
-"""Steer the Planner to vision when ``browser_generate_locator`` keeps failing.
+"""Guard ``browser_generate_locator`` failures: steer to vision, never let them kill a run.
 
-The Planner drives the live staging app over Playwright MCP and captures every selector with
-``browser_generate_locator``. When that tool errors, pydantic-ai retries it (ceiling =
-``AGENT_MCP_RETRIES``, default 5) and, after enough *consecutive* failing run-steps, aborts
-the whole planning run with "browser_generate_locator exceeded max retries". The repeated
-failures are almost never a missing-id problem — they are page-STATE problems the a11y
-snapshot hides: a stale ``ref``, the wrong page (a login that didn't land, a redirect, an
-error screen), a modal or overlay over the target, an element not rendered yet, or one that
-simply isn't on this page. A screenshot reveals every one of those.
+The browser agents (Planner, Healer) capture every selector with ``browser_generate_locator``.
+When that tool errors, pydantic-ai retries it and — after ``AGENT_MCP_RETRIES`` *consecutive*
+failing run-steps — aborts the WHOLE agent run with "browser_generate_locator exceeded max
+retries". On an inaccessible app that abort is routine, not exceptional: the element exists but
+carries nothing the accessibility snapshot can name, so the hunt fails repeatedly and one stuck
+element used to cost the entire planning run or heal attempt.
 
-This installs an ``MCPToolset.process_tool_call`` hook that counts CONSECUTIVE
-``browser_generate_locator`` failures and, at a threshold (default 3, kept below the retry
-ceiling), replaces the bland MCP error with a ``ModelRetry`` that STEERS the (text-only)
-Planner to ``browser_take_screenshot`` + ``inspect_screen`` and re-orient before retrying. It
-diagnoses WHERE the Planner is stuck; ``browser_generate_locator`` stays the sole selector
-source — the steer never yields a selector (the vision sensor is forbidden from producing
-one; see ``vision.py``). A single successful locator resets the count — and pydantic-ai
-resets its own per-tool retry counter on any step that doesn't fail the tool
-(``ToolManager.for_run_step``), so the screenshot/inspect detour the steer induces also
-refills the budget. A recovered run never trips the ceiling.
+This module installs an ``MCPToolset.process_tool_call`` hook on BOTH browser agents, ALWAYS
+(``LocatorFailureGuard``). It counts CONSECUTIVE ``browser_generate_locator`` failures (any clean
+return resets the streak) and reacts in two stages:
 
-The steer points at ``inspect_screen`` and is wired into BOTH the Planner and the Healer, only
-when ``AGENT_VISION`` is on. With vision off no hook is attached and the run is byte-identical to
-before. Stateful (counts consecutive failures) — one instance per agent run.
+- **Steer to vision** (only when ``AGENT_VISION`` is on): at ``steer_after`` consecutive failures
+  (default 3, ``PLANNER_LOCATOR_STEER_AFTER``, clamped below the retry ceiling) the bland MCP
+  error is replaced with a ``ModelRetry`` that pushes the agent to ``browser_take_screenshot`` +
+  ``inspect_screen`` and re-orient. Repeated locator failures are usually a page-STATE problem
+  the a11y snapshot hides — a stale ``ref``, the wrong page, an overlay — and a screenshot
+  reveals every one of those. The steer never yields a selector.
+- **Soft-land exhaustion** (always, vision on or off): at ``exhaust_after`` consecutive failures
+  (= the retry ceiling) the hook stops re-raising and RETURNS an informative tool result telling
+  the agent to stop hunting this element by this method — descend the resilience ladder (author
+  + verify a CSS/XPath; use ``probe_dom`` when available to see the element's real attributes),
+  or record the gap in notes and move on. Returning a result instead of raising means
+  pydantic-ai never sees the fatal Nth retry, so a locator hunt can never abort the run;
+  ``AGENT_REQUEST_LIMIT`` remains the overall backstop.
+
+pydantic-ai resets its own per-tool retry counter on any run-step that doesn't fail the tool
+(``ToolManager.for_run_step``), so the screenshot/inspect detour the steer induces also refills
+the budget; a recovered run never even reaches the exhaustion stage. Stateful (counts
+consecutive failures) — one instance per agent run.
 """
 from __future__ import annotations
 
@@ -36,14 +42,14 @@ from pydantic_ai.mcp import CallToolFunc, ToolResult
 
 logger = logging.getLogger(__name__)
 
-# The one MCP tool whose repeated failure triggers the steer — the Planner's sole selector source.
+# The one MCP tool whose repeated failure triggers the guard — the agents' sole selector source.
 LOCATOR_TOOL = "browser_generate_locator"
 
 _STEER_AFTER_ENV = "PLANNER_LOCATOR_STEER_AFTER"
 _DEFAULT_STEER_AFTER = 3
 
-# Delivered IN PLACE OF the bland MCP error once the threshold is hit — the ModelRetry prompt
-# the Planner sees. It names the exact tools to call, and forbids vision as a selector source.
+# Delivered IN PLACE OF the bland MCP error once the steer threshold is hit — the ModelRetry
+# prompt the agent sees. It names the exact tools to call, and forbids vision as a selector source.
 _STEER_MESSAGE = (
     "browser_generate_locator has now failed {n} times in a row on this target. STOP "
     "retrying the same locator — the page is almost certainly not in the state you assume. "
@@ -62,7 +68,7 @@ def _steer_after(ceiling: int) -> int:
     """Consecutive-failure threshold for the steer (``PLANNER_LOCATOR_STEER_AFTER``, default 3).
 
     Clamped to ``[1, ceiling - 1]`` so at least one retry remains AFTER the steer fires for the
-    Planner to act on — a steer that can only fire on the final allowed attempt is useless.
+    agent to act on — a steer that can only fire on the final allowed attempt is useless.
     ``ceiling`` is the per-tool retry budget (``agent_retries()``). Invalid values fall back to
     the default; this is a tuning knob, not a correctness gate.
     """
@@ -77,18 +83,57 @@ def _steer_after(ceiling: int) -> int:
     return min(max(1, value), upper)
 
 
-class LocatorVisionSteer:
-    """``process_tool_call`` hook: steer the Planner to vision on repeated locator failure.
+class LocatorFailureGuard:
+    """``process_tool_call`` hook: steer mid-streak (vision), soft-land at the retry ceiling.
 
     Counts CONSECUTIVE ``browser_generate_locator`` failures (any clean return resets the
-    count). At ``steer_after`` consecutive failures it raises a ``ModelRetry`` carrying the
-    steer message in place of the raw MCP error; below the threshold it re-raises the original
-    error unchanged. Every other tool passes straight through, untouched and uncounted.
+    count). At ``exhaust_after`` (= the retry ceiling) it RETURNS a give-up-this-element tool
+    result instead of raising, so the run can never die of locator-retry exhaustion. Between
+    ``steer_after`` and the ceiling — and only when vision is on — it raises a ``ModelRetry``
+    carrying the steer message in place of the raw MCP error. Below the threshold the original
+    error passes through unchanged. Every other tool passes straight through, untouched and
+    uncounted.
+
+    ``vision_on`` / ``probe_on`` shape the guidance: the steer stage exists only with vision,
+    and the exhaustion message mentions ``inspect_screen`` / ``probe_dom`` only when the
+    corresponding tool is actually registered on the agent.
     """
 
-    def __init__(self, ceiling: int) -> None:
+    def __init__(self, ceiling: int, *, vision_on: bool = False, probe_on: bool = False) -> None:
+        self.exhaust_after = max(1, ceiling)
         self.steer_after = _steer_after(ceiling)
+        self._vision_on = vision_on
+        self._probe_on = probe_on
         self._consecutive = 0
+
+    def _exhaust_message(self, n: int) -> str:
+        """The give-up-this-element guidance returned (not raised) at the retry ceiling."""
+        hints: list[str] = []
+        if self._probe_on:
+            hints.append(
+                "call probe_dom with the element's visible text (scope it to the open "
+                "dialog/container if any) to see its real tag and attributes plus candidate "
+                "CSS/XPath selectors, then VERIFY the best candidate"
+            )
+        hints.append(
+            "descend the resilience ladder: AUTHOR a candidate CSS or XPath anchored on the "
+            "element's stable text/attributes and VERIFY it before recording it "
+            "(browser_generate_locator accepts a unique selector as its `target`; "
+            "browser_verify_element_visible confirms it is the right element)"
+        )
+        if self._vision_on:
+            hints.append(
+                "if you may be on the wrong page or something is covering it, use "
+                "inspect_screen to re-orient first"
+            )
+        numbered = "; ".join(f"({i + 1}) {hint}" for i, hint in enumerate(hints))
+        return (
+            f"{LOCATOR_TOOL} has failed {n} times in a row on this target — STOP calling it for "
+            "this element; that retry budget is exhausted. This does NOT abort your task: "
+            f"{numbered}. If NO locator can be verified at all, leave this element's selector "
+            "empty, record exactly what you observed in notes (or changes_summary), and MOVE ON "
+            "with the rest of the task. Do not repeat the call that just failed."
+        )
 
     async def __call__(
         self,
@@ -97,16 +142,27 @@ class LocatorVisionSteer:
         name: str,
         tool_args: dict[str, Any],
     ) -> ToolResult:
-        del ctx  # the steer keys on tool name + consecutive failures, not run context
+        del ctx  # the guard keys on tool name + consecutive failures, not run context
         if name != LOCATOR_TOOL:
             return await call_tool(name, tool_args)
         try:
             result = await call_tool(name, tool_args)
         except ModelRetry as exc:
             self._consecutive += 1
-            if self._consecutive >= self.steer_after:
+            if self._consecutive >= self.exhaust_after:
+                # Return (don't raise): pydantic-ai treats this as a clean tool result, so the
+                # fatal "exceeded max retries" can never fire for the locator tool.
                 logger.info(
-                    "Planner locator steer: %s failed %d×in a row (>=%d) — steering to "
+                    "Locator guard: %s failed %d× in a row (>= ceiling %d) — returning "
+                    "give-up-this-element guidance instead of aborting the run",
+                    LOCATOR_TOOL,
+                    self._consecutive,
+                    self.exhaust_after,
+                )
+                return self._exhaust_message(self._consecutive)
+            if self._vision_on and self._consecutive >= self.steer_after:
+                logger.info(
+                    "Locator guard: %s failed %d× in a row (>=%d) — steering to "
                     "browser_take_screenshot + inspect_screen",
                     LOCATOR_TOOL,
                     self._consecutive,
@@ -114,10 +170,10 @@ class LocatorVisionSteer:
                 )
                 raise ModelRetry(_STEER_MESSAGE.format(n=self._consecutive)) from exc
             logger.info(
-                "Planner locator steer: %s failure %d/%d before steering to vision",
+                "Locator guard: %s failure %d/%d before intervening",
                 LOCATOR_TOOL,
                 self._consecutive,
-                self.steer_after,
+                self.steer_after if self._vision_on else self.exhaust_after,
             )
             raise
         self._consecutive = 0

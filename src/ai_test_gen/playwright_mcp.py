@@ -100,6 +100,9 @@ def _safe_unlink(path: str) -> None:
 # MCP tool-name substrings the agents must NOT receive: raw JS / arbitrary code execution.
 # They invite hallucinated selectors (jQuery `:contains()` in querySelector -> SyntaxError)
 # and are a code-exec risk; agents must use the snapshot -> click/type flow. (Flux 11iwg3r)
+# NOTE: the optional DOM Probe (agents/_dom_probe.py) still reaches browser_evaluate via
+# direct_call_tool — with a FIXED, read-only, pipeline-authored function. The ban here is on
+# MODEL-authored JS; the model never sees these tools regardless.
 _BLOCKED_TOOL_MARKERS = ("evaluate", "run_code", "unsafe")
 
 
@@ -125,10 +128,11 @@ def build_playwright_mcp(
             login (agents log in live from ``project_context.md`` creds), so this is
             ``None`` in normal runs; kept for manual/debug session reuse.
         process_tool_call: optional pydantic-ai hook wrapping every MCP tool call
-            (``MCPToolset.process_tool_call``). The Planner passes a
-            ``LocatorVisionSteer`` here to steer itself to vision after repeated
-            ``browser_generate_locator`` failures; the Healer and other callers leave
-            it ``None`` (no interception, behaviour unchanged).
+            (``MCPToolset.process_tool_call``). The Planner and the Healer both pass a
+            ``LocatorFailureGuard`` here (always): it soft-lands
+            ``browser_generate_locator`` retry exhaustion so a locator hunt can never
+            abort the run, and — when vision is on — steers the agent to
+            ``inspect_screen`` mid-streak. Other callers leave it ``None``.
 
     Returns an ``MCPToolset`` to attach via ``Agent(model, toolsets=[...])``.
 
