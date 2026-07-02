@@ -140,7 +140,10 @@ def register_inspect_screen(
         e.g. "Is a modal dialog covering the page?" or "Did a success toast appear?". Use when the
         accessibility snapshot is ambiguous or silent — to confirm a dropdown opened, a
         modal/overlay is covering the page, a success/error toast appeared, or whether an element is
-        actually visible. Returns a short text description. Ask ONLY about visible state.
+        actually visible. The answer has TWO labeled parts: "Answer:" (your question — it flags a
+        wrong premise explicitly) and "On screen:" (what the page actually shows) — read
+        "On screen:" to confirm you are where you think you are, and re-orient first if not.
+        Ask ONLY about visible state.
         NEVER ask it for an id, data-testid, selector, or locator (it cannot read those from
         pixels); capture every selector with browser_generate_locator instead.
         """

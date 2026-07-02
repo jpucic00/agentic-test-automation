@@ -23,6 +23,13 @@ next move. Never combine `inspect_screen` with a click, a navigation, or any oth
 turn — if you act while you ask, the screenshot it takes can be of the page you are moving TO, not the
 one you meant to ask about, and the answer is then useless.
 
+Every answer comes in two labeled parts: `Answer:` (your question — it will explicitly flag when the
+question's premise doesn't match the page) and `On screen:` (what is actually rendered: the visible
+heading/title, the main content, any dialog/overlay/banner/toast/error). ALWAYS read the `On screen:`
+part: if it contradicts where you think you are or what you think is open, your mental model is wrong
+— RE-ORIENT first (close the overlay, navigate back, log in again) before acting on anything else.
+You never need to spend a separate call asking "what page am I on?" — every answer already tells you.
+
 `inspect_screen` is for UNDERSTANDING the page only — is it open/closed, did it submit, is something
 covering it, are you stuck, did the validation/disabled state actually appear. It NEVER returns a
 selector, and you must NEVER ask it for one: do not ask for an `id`, a `data-testid`, a CSS/HTML

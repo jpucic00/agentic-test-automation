@@ -73,7 +73,9 @@ def test_ask_vision_truncates_long_answer(cfg, monkeypatch):
 
     monkeypatch.setattr(vision_mod, "build_openai_model", lambda config, model: FunctionModel(fn))
     out = asyncio.run(vision_mod.ask_vision(cfg, "q", b"png-bytes"))
-    assert len(out) <= 600
+    assert len(out) <= vision_mod._MAX_CHARS
+    # The cap must fit the two-part contract (Answer: + On screen:) — don't shrink it back.
+    assert vision_mod._MAX_CHARS >= 900
 
 
 # --- _latest_png --------------------------------------------------------------
@@ -350,6 +352,32 @@ def test_vision_system_prompt_redirects_selector_requests():
     system_prompt = vision_mod._SYSTEM_PROMPT
     assert "browser_generate_locator" in system_prompt
     assert "data-testid" in system_prompt
+
+
+def test_vision_system_prompt_demands_two_part_answer():
+    # The Planner is least qualified to ask the right question exactly when it's disoriented, so
+    # every answer must carry both the direct answer (flagging a wrong premise explicitly) AND an
+    # unprompted description of what is actually on screen — that's what re-orients a lost agent.
+    system_prompt = vision_mod._SYSTEM_PROMPT
+    assert "Answer:" in system_prompt
+    assert "On screen:" in system_prompt
+    assert "premise" in system_prompt  # wrong-premise questions get called out, not just answered
+
+
+def test_vision_fragment_tells_agent_to_read_on_screen_part():
+    # The agent-side half of the contract: always read `On screen:`, re-orient on contradiction,
+    # and don't burn budget on separate "what page am I on?" calls.
+    fragment = (planner_mod.PROMPTS_DIR / "vision_aid.md").read_text()
+    assert "On screen:" in fragment
+    assert "RE-ORIENT" in fragment
+    assert "what page am I on?" in fragment
+
+
+def test_inspect_screen_docstring_mentions_two_part_answer(cfg, monkeypatch):
+    _, tool = _tool_with_fake_vision(cfg, monkeypatch)
+    doc = tool.__doc__ or ""
+    assert "Answer:" in doc
+    assert "On screen:" in doc
 
 
 def test_inspect_screen_docstring_forbids_selector_questions(cfg, monkeypatch):

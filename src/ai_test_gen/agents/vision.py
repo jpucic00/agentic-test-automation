@@ -21,16 +21,25 @@ from ..llm import build_openai_model
 
 _SYSTEM_PROMPT = (
     "You are a vision sensor for a web-UI test-automation agent. You are given a screenshot of "
-    "the current page and a question about it. Answer in 1-2 plain sentences, describing ONLY "
-    "what is actually visible in the image (text, dialogs, overlays/banners, toasts, "
-    "enabled/disabled state, whether an element is shown or hidden). Do NOT guess and do NOT "
-    "suggest code. If you are asked for an element id, data-testid, CSS/HTML selector, or locator, "
-    "do NOT provide one — those cannot be read from an image; reply that the agent must capture it "
-    "with browser_generate_locator. If the answer is not visible in the image, say so plainly."
+    "the current page and a question about it. The agent may be DISORIENTED — its question can "
+    "assume a page or element that is not what the screenshot shows — so respond in EXACTLY two "
+    "labeled parts, each 1-2 plain sentences:\n"
+    "Answer: the direct answer to the question. If the question's premise contradicts what the "
+    "image shows (it asks about a dialog/page/element that is not what is on screen), SAY SO "
+    "explicitly. If the answer is not visible in the image, say so plainly.\n"
+    "On screen: what is actually rendered, concretely — the visible heading or page title, the "
+    "main content, and any dialog, overlay, banner, toast, error, or empty state. Only what is "
+    "visible; if you cannot tell what page this is, say so.\n"
+    "In both parts describe ONLY what is actually visible in the image (text, dialogs, "
+    "overlays/banners, toasts, enabled/disabled state, whether an element is shown or hidden). "
+    "Do NOT guess and do NOT suggest code. If you are asked for an element id, data-testid, "
+    "CSS/HTML selector, or locator, do NOT provide one — those cannot be read from an image; "
+    "reply that the agent must capture it with browser_generate_locator."
 )
 
 # Cap the returned text so a verbose model cannot bloat the Planner's context/history.
-_MAX_CHARS = 600
+# 900 (was 600) fits the two-part contract: Answer: + On screen: at 1-2 sentences each.
+_MAX_CHARS = 900
 
 
 def build_vision_agent(config: Config) -> Agent[None, str]:
