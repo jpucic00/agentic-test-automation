@@ -34,6 +34,11 @@ flowchart TB
         HE[Healer Agent<br/>gpt-oss-120b]
         GL[GitLab Client]
         VA[[Vision Aid Agent<br/>devstral-small-2 · vision<br/>optional, off by default]]
+
+        subgraph ragm[" planned — retrieval memory "]
+            KB[("Test-case KB<br/>embedded vector DB")]
+            RR[Reranker<br/>bge-reranker-v2-m3]
+        end
     end
 
     XRAY --> XC --> ORCH
@@ -50,10 +55,19 @@ flowchart TB
 
     PL -. optional vision<br/>inspect_screen .-> VA
     HE -. optional vision<br/>inspect_screen .-> VA
+
+    ORCH -. embed + search new case .-> KB
+    KB -. top-N similar solved .-> RR
+    RR -. plans + selector hints .-> PL
+    RR -. code examples .-> GE
+    ORCH -. write back after green run .-> KB
 ```
 
 > Each agent's model is shown on its node. All of them — and the Vision Aid Agent — run on the same
 > OpenAI-compatible gateway (optional mTLS); see "One gateway" under cross-cutting choices below.
+> **The "planned — retrieval memory" group is not yet built:** the Test-case KB + Reranker (dotted
+> connections) are the designed-but-unbuilt next extension — their embedding and rerank calls go to
+> the *same* gateway (`/embeddings`, `/rerank`); see "Planned: retrieval memory" below.
 
 ## Components & responsibilities
 
@@ -174,13 +188,87 @@ Possible extensions, not yet built:
   network; read-only rootfs; PII redaction before model calls; per-call audit logging; tracing and metrics.
 - **A Translator agent** — a 4th agent that migrates an existing Selenium suite to Playwright (same pipeline
   shape, different front door).
-- **RAG-assisted generation** — retrieve 2–3 similar existing tests (vector search + rerank) and inject them
-  as examples for the Generator.
+- **Retrieval memory** — an embedded database of solved test cases + a reranker, feeding the agents
+  similar past work as examples. Designed in full in **"Planned: retrieval memory"** just below.
 - **Reviewer conveniences** — visual-regression checks, MR notifications, a coverage dashboard, and
   auto-proposed `project_map.md` updates.
 
 > The two human-authored context files (`project_context.md`, `project_map.md`) ship as **templates** — fill
 > them in for your app before the first run.
+
+## Planned: retrieval memory — an embedded test-case knowledge base + a reranker
+
+> **Status: designed, not yet built.** Nothing in this section runs today. The groundwork *does*
+> ship already: [`scripts/step0b_verify_embeddings.py`](../scripts/step0b_verify_embeddings.py)
+> smoke-tests a gateway's `/embeddings` and `/rerank` endpoints (accepting the common response
+> shapes), `.env.example` carries the `EMBEDDING_MODEL` / `RERANKER_MODEL` / `RERANK_ENDPOINT`
+> settings, and the local vector-store directory is already gitignored.
+
+**The idea in one paragraph.** Today every test case is planned from scratch, as if it were the
+first — yet the pipeline *produces* the best possible reference material as it works: verified
+plans, live-captured selectors, finished green specs. The retrieval memory keeps that output in an
+**embedded vector database of solved test cases** and feeds the most similar past cases back to the
+agents as examples. A new case then starts from "we've automated three cases just like this"
+instead of from zero: less live exploration for the Planner, stronger few-shot examples for the
+Generator, more consistent code across the suite, fewer heal loops. The memory compounds — **every
+solved case makes the next one faster and cheaper.**
+
+```mermaid
+flowchart LR
+    MTC["new ManualTestCase"] --> EMB["embed<br/>gateway /embeddings"]
+    EMB --> KB[("Test-case KB<br/>embedded vector DB")]
+    KB -->|"top-N candidates<br/>vector search · recall"| RR["Reranker · bge-reranker-v2-m3<br/>scores each pair · precision"]
+    RR -->|top 2–3 truly similar| INJ["injected into agent context"]
+    INJ -->|plans + verified-selector hints| PL2["Planner"]
+    INJ -->|green specs as few-shot examples| GE2["Generator"]
+    GRN["green run"] -. write back case + plan + spec .-> KB
+```
+
+**The two new components.**
+
+| Component | Reads | Produces | Runs on |
+|---|---|---|---|
+| **Test-case knowledge base** | every solved case: the manual case's text (embedded), its verified `TestPlan`, the final green spec, outcome metadata | the top-N nearest solved cases for a new case | an **embedded** vector DB — an in-process library persisting to a local directory, no extra service to operate (reference choice: Qdrant in local mode, whose `qdrant_storage/` dir is already gitignored; LanceDB/Chroma fit the same slot). The same client API points at a standalone server later if the index outgrows one machine. |
+| **Reranker** | the new case + each candidate, as text *pairs* | the candidates re-scored for genuine relevance; only the top 2–3 survive | **`bge-reranker-v2-m3`** — a cross-encoder rerank model on the gateway's `/rerank` endpoint (the `.env.example` default; the endpoint is what `scripts/step0b_verify_embeddings.py` smoke-tests). |
+
+**Why two stages (embed → rerank).** Embedding search is *recall*: fast and cheap, but coarse —
+"create a user" and "delete a user" sit close together in vector space. The reranker is
+*precision*: it reads the new case and one candidate **together** and scores actual relevance.
+That second stage is what protects the prompt budget — mid-tier models degrade as context bloats
+(the same reason context injection is asymmetric today), so the pipeline injects the 2–3 *right*
+examples, never the 10 nearest ones. The reranker is the quality gate that keeps agent prompts lean.
+
+**Who consumes what — asymmetric, like all context injection here.**
+
+- **Planner** — similar cases' plans and their **verified selectors as hints** ("the last case on
+  this screen used these locators"). Hints shrink live exploration — fewer browser turns, faster and
+  cheaper planning — but are never trusted blindly: every selector in the new plan is still
+  captured and verified live on the current app build (the never-invent rule and the resilience
+  ladder are unchanged; the app may have changed since the hint was recorded).
+- **Generator** — 2–3 similar finished specs as few-shot examples: "write something that looks like
+  these." Consistent style across the suite and fewer compile-retry round-trips.
+- **Healer** *(a later increment)* — past heal outcomes for similar failure fingerprints ("this
+  failure was fixed by escalating the locator kind").
+
+**The learning loop.** After a run goes green, the Orchestrator writes the solved case back — case
+text, plan (verified selectors included), final spec, outcome. No manual curation. And the KB does
+not start cold: an indexer CLI bulk-loads the existing corpus (manual test cases already automated
+by hand, plus any pre-existing Playwright suite) before the first assisted run.
+
+**Guardrails carry over unchanged.**
+
+- **Off by default, fail-open.** A `RAG_ENABLED` flag ships `false`, like every optional capability
+  here (vision, DOM probe, trimming). When it is on but the KB or the rerank endpoint is
+  unreachable, the run proceeds exactly as today — retrieval is an accelerator, never a dependency.
+- **Retrieved ≠ trusted.** Examples and selector hints are advisory context. Nothing from the KB
+  reaches a test file without the normal live verify-before-record path.
+- **Measured before enabled.** A retrieval-quality eval (does the top-3 actually contain a relevant
+  case?) gates turning the flag on — the same evidence-first bar as the reasoning-effort and
+  endpoint verifications.
+
+Planned code layout: `src/ai_test_gen/rag/` — `embeddings.py` (gateway `/embeddings` + `/rerank`
+calls), `indexer.py` (bulk load + write-back), `retriever.py` (search → rerank → top-k) — behind
+the `RAG_ENABLED` config flag.
 
 ## Where to read more
 

@@ -126,4 +126,11 @@ flowchart LR
 ## How this grows (planned)
 
 - **Translator (4th agent).** For migrating the existing Selenium suite: `Selenium test → Translator (+MCP) → Playwright test → Runner → (Healer) → MR`. Same pipeline shape, different front door.
-- **RAG-assisted Generator.** Once enough Playwright tests exist in the repo, the Generator first retrieves 2–3 similar existing tests (Qdrant vector search → cross-encoder rerank) and injects them as examples — "write something that looks like these" markedly improves output. This is the only change to the core loop; everything else stays the same.
+- **Retrieval memory — an embedded test-case knowledge base + a reranker.** The pipeline keeps every case it solves — the manual case's text, the verified `TestPlan` (selectors included), the final green spec — in an **embedded vector database** (an in-process library persisting to a local directory; no extra service to run). A run gains one read step and one write step around the otherwise-unchanged core loop: right after **Fetch**, the new case is embedded (gateway `/embeddings`) and the KB returns the top-N most similar solved cases; a **reranker** (`bge-reranker-v2-m3`, a cross-encoder on the gateway's `/rerank`) narrows them to the 2–3 genuinely relevant ones, which are injected as context: plans + verified-selector *hints* for the Planner, finished specs as few-shot examples for the Generator ("write something that looks like these" markedly improves mid-tier output). After a green run the solved case is written back, so the memory compounds — every solved case makes the next one faster and cheaper. Off by default (`RAG_ENABLED`), fail-open (KB or reranker unreachable → the run proceeds exactly as today), and hints are never trusted blindly — live selector verification is unchanged. Full design: the "Planned: retrieval memory" section in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+```mermaid
+flowchart LR
+    FETCH[Fetch] --> RET["Retrieve + rerank<br/>top 2–3 similar solved cases"] --> PLAN[Plan] --> GEN[Generate] --> RUN[Run] --> MR[MR]
+    KB[("Test-case KB<br/>embedded vector DB")] -. top-N candidates .-> RET
+    RUN -. write back after green .-> KB
+```
