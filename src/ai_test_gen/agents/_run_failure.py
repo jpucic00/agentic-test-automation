@@ -104,6 +104,9 @@ async def run_agent_logged[OutputT](
     model actually emitted and why it was rejected. The exception re-raises unchanged, so
     orchestrator flow (heal accounting, clean-failure wrapping) is untouched.
     """
+    # Version marker: this line in a run log PROVES the evidence-capture code is running —
+    # its absence means the run used an older checkout, not that nothing failed.
+    logger.info("%s run started (failure-evidence capture armed)", agent_label)
     with capture_run_messages() as messages:
         try:
             async with agent:
@@ -139,4 +142,14 @@ async def run_agent_logged[OutputT](
                     agent_label,
                     summarize_run_failure(exhausted, messages),
                 )
+            raise
+        except BaseException as exc:
+            # Catch-all backstop (logged and RE-RAISED — flow unchanged, cancellation
+            # included): nothing may leave an agent run without its evidence in the log.
+            logger.error(
+                "%s run aborted: %r\n%s",
+                agent_label,
+                exc,
+                summarize_run_failure(exc, messages),
+            )
             raise

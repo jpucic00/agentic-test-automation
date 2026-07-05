@@ -101,3 +101,29 @@ def test_taskgroup_wrapped_exhaustion_still_logs_evidence(caplog):
     assert "task-group failure" in caplog.text
     assert "Exceeded maximum retries (5) for output validation" in caplog.text
     assert "retry-exhaustion evidence" in caplog.text
+
+
+class _FakePlainCrashAgent:
+    """Raises an exception that is neither UnexpectedModelBehavior nor a group."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def run(self, *args: object, **kwargs: object) -> object:
+        raise RuntimeError("connection dropped mid-turn")
+
+
+def test_any_exception_logs_marker_and_evidence_backstop(caplog):
+    # Nothing may leave the frame silently: the catch-all logs any exception shape, and the
+    # INFO start marker proves in the run log that the evidence-capture code is running.
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents._run_failure"):
+        with pytest.raises(RuntimeError):
+            asyncio.run(
+                run_agent_logged(cast(Any, _FakePlainCrashAgent()), "go", agent_label="Planner")
+            )
+
+    assert "failure-evidence capture armed" in caplog.text
+    assert "RuntimeError('connection dropped mid-turn')" in caplog.text
