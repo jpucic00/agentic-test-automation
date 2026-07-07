@@ -76,7 +76,18 @@ class KBRecord(BaseModel):
     )
     steps: list[str] = Field(
         default_factory=list,
-        description="Ordered one-action step descriptions, plan-style granularity",
+        description="Ordered one-action steps of what the test ACTUALLY does — "
+        "reverse-engineered from the code (helper bodies expanded), plan-style granularity",
+    )
+    manual_steps: list[str] = Field(
+        default_factory=list,
+        description="VERBATIM steps of the linked manual test case as they read at "
+        "distillation/write-back time — the diff base for detecting later ticket edits; "
+        "empty when no case was available",
+    )
+    manual_expected: list[str] = Field(
+        default_factory=list,
+        description="Verbatim expected results of the linked manual test case (same snapshot)",
     )
     selectors: list[KBSelector] = Field(
         default_factory=list,

@@ -15,13 +15,9 @@ public class CreateNoteTest {
     @Xray(testCase = "NOTE-2")
     @Test
     public void seededUserCreatesANote() {
-        LoginPage login = new LoginPage(driver);
-        login.open(baseUrl);
-        login.loginAs("demo@demo.test", "Passw0rd!");
-
-        NotesPage notes = new NotesPage(driver);
+        NotesPage notes =
+                new LoginPage(driver).open(baseUrl).loginAs("demo@demo.test", "Passw0rd!");
         notes.createNote("Groceries", "Milk, eggs, coffee");
-
         assertEquals("Groceries", notes.firstNoteTitle());
     }
 }

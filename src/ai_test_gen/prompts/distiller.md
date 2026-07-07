@@ -31,6 +31,10 @@ message.
   add a short `description` of what each points at and the `route` where it is
   used when the code makes that clear. NEVER invent a locator, never rewrite
   one, never add one the extraction does not contain. Skip duplicates.
+  If EXTRACTED LOCATORS is absent or lacks an element, emit NO selector for it:
+  a constant or variable NAME from the code (e.g. `LOGIN_BTN`) is never a
+  selector value, and locators listed as having unknown values are context
+  only — never output them.
 - `routes` — pages/paths the flow touches, only as evidenced by the code
   (navigation calls, URL fragments) or the manual case.
 

@@ -81,6 +81,12 @@ def build_distill_message(bundle: TestBundle, case: ManualTestCase | None) -> st
             for loc in bundle.locators
         )
         parts.append(f"## EXTRACTED LOCATORS (ground truth — copy, never invent)\n{lines}")
+    if bundle.unresolved_locators:
+        parts.append(
+            "## Locators in the code whose VALUE is unknown (dynamic/unresolvable — "
+            "NEVER emit a selector for these, and never use a constant name as a value)\n"
+            + "\n".join(f"- {entry}" for entry in bundle.unresolved_locators)
+        )
     if bundle.urls:
         parts.append("## URLs/routes seen in the code\n" + "\n".join(f"- {u}" for u in bundle.urls))
     if bundle.helper_refs:

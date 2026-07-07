@@ -2,17 +2,22 @@
 
 Runs the actual demo legacy suite through run_seeding() end-to-end offline:
 dry-run review files, live upserts into Qdrant local mode (tmp dir), skip-on-
-re-run resumability, --force re-distilling, --limit, and the xray-map fallback.
+re-run resumability, --force re-distilling, --limit, the xray-map fallback,
+manual-case auto-fetch (local + live, per-key tolerant) and the deterministic
+selector ground-truth enforcement.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from ai_test_gen.config import PROJECT_ROOT
+from ai_test_gen.models import ManualTestCase
 from ai_test_gen.rag import seeding
 from ai_test_gen.rag.distiller import DistilledCase
 from ai_test_gen.rag.extract import TestBundle
@@ -25,7 +30,12 @@ CASES = PROJECT_ROOT / "packages" / "demo-notes-app" / "test-cases"
 
 
 class FakeDistillerAgent:
-    """Deterministic stand-in: distills every bundle without a model call."""
+    """Deterministic stand-in: distills every bundle without a model call.
+
+    Emits one selector as a BARE inner value (the drift the live dry-run showed)
+    and one INVENTED selector — enforcement must canonicalize the first and
+    drop the second.
+    """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -39,7 +49,8 @@ class FakeDistillerAgent:
                 intent_text=f"{title}\nSteps: do the flow\nExpected: it works",
                 steps=["Open the app", "Do the flow", "Assert the outcome"],
                 selectors=[
-                    KBSelector(kind="testid", value="getByTestId('login-submit')")
+                    KBSelector(kind="testid", value="login-submit", description="submit"),
+                    KBSelector(kind="role", value="getByRole('button')", description="invented"),
                 ],
                 routes=["/login"],
             )
@@ -66,7 +77,7 @@ def fake_embed(monkeypatch):
 
 
 def _run(cfg, **overrides):
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         project="NOTE",
         selenium_root=LEGACY,
         playwright_dir=LEGACY / "playwright",
@@ -142,6 +153,88 @@ class TestLiveRunAndResume:
         playwright = by_source["playwright-import"][0]
         assert playwright.spec  # spec present → Generator-example eligible
         assert playwright.xray_key == "NOTE-3"
+
+
+class TestManualCaseAutoFetch:
+    """Without --cases, the keys named by the @Xray annotations load themselves."""
+
+    def test_local_source_auto_loads_linked_cases(self, cfg, fake_agent, fake_embed) -> None:
+        local_cfg = dataclasses.replace(
+            cfg, testcase_source="local", local_testcase_dir=CASES
+        )
+        stats = _run(local_cfg, cases=[], dry_run=True)
+
+        assert stats.cases_loaded >= 2  # NOTE-2, NOTE-4 (+ NOTE-3 for the spec)
+        assert stats.case_misses == {}
+        assert any("Linked manual test case NOTE-4" in m for m in fake_agent.calls)
+
+    def test_live_fetch_is_per_key_tolerant(self, cfg, fake_agent, fake_embed, monkeypatch) -> None:
+        import ai_test_gen.xray_client as xray_client_module
+
+        class StubClient:
+            def __init__(self, config) -> None:
+                pass
+
+            def fetch(self, key: str) -> ManualTestCase:
+                if key == "NOTE-4":
+                    raise RuntimeError("410 gone")
+                return ManualTestCase(
+                    key=key, title=f"Case {key}", steps=["s1"], expected_results=["e1"]
+                )
+
+        monkeypatch.setattr(xray_client_module, "XrayClient", StubClient)
+        stats = _run(cfg, cases=[], dry_run=True)  # cfg: xray source, Jira configured
+
+        assert stats.cases_loaded >= 1  # the healthy keys still loaded
+        assert "NOTE-4" in stats.case_misses
+        assert "410 gone" in stats.case_misses["NOTE-4"]
+
+    def test_no_source_reports_every_linked_key(self, cfg, fake_agent, fake_embed) -> None:
+        no_jira = dataclasses.replace(cfg, jira_base_url=None)
+        stats = _run(no_jira, cases=[], dry_run=True)
+
+        assert stats.cases_loaded == 0
+        assert {"NOTE-2", "NOTE-4"} <= set(stats.case_misses)
+        review = next(p for p in stats.review_dir.glob("*.md") if "NOTE-4" in p.name)
+        assert "NOT LOADED" in review.read_text()  # visible per record, never silent
+
+    def test_no_fetch_skips_case_loading(self, cfg, fake_agent, fake_embed) -> None:
+        stats = _run(cfg, cases=[], dry_run=True, no_fetch=True)
+        assert stats.cases_loaded == 0
+        assert stats.case_misses == {}
+
+    def test_manual_steps_stored_verbatim_on_the_record(self, cfg, fake_agent, fake_embed) -> None:
+        _run(cfg)  # --cases <dir> mode, live upsert
+        with KBStore(cfg.kb_path) as store:
+            results = store.search("NOTE", [1.0, 1.0, 0.5], top_n=10)
+        linked = [r for r, _ in results if r.xray_key == "NOTE-2" and r.source_lang == "java"]
+        assert linked and linked[0].manual_steps  # the ticket's own steps, verbatim
+        review = next(
+            p
+            for p in (cfg.output_dir / "kb_review" / "NOTE").glob("*.md")
+            if "NOTE-2" in p.name and "seeded" in p.name
+        )
+        assert "Steps (verbatim):" in review.read_text()
+
+
+class TestGroundTruthEnforcement:
+    def test_bare_values_canonicalize_inventions_drop(self, cfg, fake_agent, fake_embed) -> None:
+        _run(cfg)
+        with KBStore(cfg.kb_path) as store:
+            results = store.search("NOTE", [1.0, 1.0, 0.5], top_n=10)
+        java_record = next(
+            r for r, _ in results if r.xray_key == "NOTE-4" and r.source_lang == "java"
+        )
+        values = {s.value for s in java_record.selectors}
+        assert 'By.id("login-submit")' in values  # bare "login-submit" canonicalized
+        assert "getByRole('button')" not in values  # invention dropped
+        assert 'By.id("login-email")' in values  # extraction appended even if model omits
+
+    def test_dropped_inventions_are_reported(self, cfg, fake_agent, fake_embed) -> None:
+        stats = _run(cfg, dry_run=True)
+        assert stats.dropped_selectors >= 1
+        review = next(p for p in stats.review_dir.glob("*.md") if "NOTE-4" in p.name)
+        assert "Model selectors DROPPED" in review.read_text()
 
 
 class TestXrayMapFallback:

@@ -262,9 +262,21 @@ root context files. See [`packages/demo-notes-app/README.md`](packages/demo-note
 
 The optional retrieval memory (`RAG_ENABLED`, off by default) learns from tests you already have.
 `scripts/seed_kb.py` mines an existing Selenium repo (tests found via their `@Xray(testCase = "…")`
-annotations, page-object/helper locators resolved automatically), hand-written Playwright specs, and
-manual test cases into a per-project **embedded** vector store under `KB_PATH` (a local directory —
-no database service). Always start with the dry-run review loop:
+annotations), hand-written Playwright specs, and manual test cases into a per-project **embedded**
+vector store under `KB_PATH` (a local directory — no database service).
+
+Static extraction does the heavy lifting before any model call: page-object/helper code is
+resolved across class fields, `extends` chains, fluent call chains and static imports; selector
+values held in `String` constants (or `@FindBy` annotations) are folded to their literals; and
+anything unresolvable — a call the walker can't place, a locator whose value is built at runtime —
+is flagged in the output rather than silently skipped. The manual cases named by the `@Xray`
+annotations are fetched automatically (from Jira/Xray, or from `LOCAL_TESTCASE_DIR` when
+`TESTCASE_SOURCE=local`); pass `--cases DIR|KEYS` to override the source or `--no-fetch` to
+distill from code alone. After each model call the CLI re-enforces selector ground truth in code:
+model output that has no basis in the extracted locators is dropped (and reported), extracted
+locators the model missed are added back.
+
+Always start with the dry-run review loop:
 
 ```bash
 # 1. Dry run: distill a sample and READ the review files — no embeddings, no KB writes.
@@ -274,14 +286,20 @@ uv run python scripts/seed_kb.py --project NOTE \
     --playwright packages/demo-notes-app/legacy-suite/playwright \
     --cases packages/demo-notes-app/test-cases \
     --dry-run --limit 5
-# 2. Review output/kb_review/<project>/ — intent text, steps, selectors, unresolved helper calls.
+# 2. Review output/kb_review/<project>/ — per record: the linked manual case VERBATIM as it
+#    read at distillation time (or WHY it is missing), the steps reverse-engineered from the
+#    code (what the test actually does), intent text, selectors incl. dropped model
+#    inventions, unresolved helper calls/locator values, and the full assembled source
+#    bundle. summary.md totals them.
 #    Tune DISTILLER_MODEL in .env if step expansion looks shallow, and re-run the dry run.
 # 3. Seed for real (needs /embeddings on your gateway): drop --dry-run.
 ```
 
 Re-running is idempotent (already-stored records are skipped without model calls; `--force`
-re-distills). Requires a chat model for the Distiller (`DISTILLER_MODEL`) and — for the real run —
-an embedding model (`EMBEDDING_MODEL`) on your gateway.
+re-distills). `--helper-depth N` (default 2) sets how many call hops the helper walker follows;
+`--helper-cap N` (default 24000 chars) bounds the helper snippets handed to the model — locator
+extraction always runs unbounded. Requires a chat model for the Distiller (`DISTILLER_MODEL`) and —
+for the real run — an embedding model (`EMBEDDING_MODEL`) on your gateway.
 
 ---
 
