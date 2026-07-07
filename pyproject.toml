@@ -15,6 +15,7 @@ dependencies = [
     "python-gitlab==8.4.0",
     "atlassian-python-api==4.0.7",
     "playwright==1.60.0",    # drives headed staging login in scripts/save_auth_state.py (Phase 1.B)
+    "qdrant-client==1.18.0", # embedded (local-mode) test-case KB — rag/store.py; user-approved 2026-07-07
 ]
 
 [build-system]

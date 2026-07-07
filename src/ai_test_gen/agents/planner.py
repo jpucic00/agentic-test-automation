@@ -76,7 +76,14 @@ __all__ = [
 
 def build_planner(config: Config, storage_state: Path | None = None) -> Agent[None, TestPlan]:
     """Build the Planner agent (Playwright MCP toolset attached, output_type=TestPlan)."""
-    model = build_openai_model(config, config.planner_model)
+    # Planner may run on a separate endpoint (config.planner_base_url/api_key); when the
+    # PLANNER_LLM_* overrides are unset these equal the shared gateway, so nothing changes.
+    model = build_openai_model(
+        config,
+        config.planner_model,
+        base_url=config.planner_base_url,
+        api_key=config.planner_api_key,
+    )
 
     base_prompt = (PROMPTS_DIR / "planner.md").read_text()
     if config.vision_max_calls > 0:

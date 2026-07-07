@@ -37,7 +37,7 @@ flowchart TB
 
         subgraph ragm[" planned — retrieval memory "]
             KB[("Test-case KB<br/>embedded vector DB")]
-            RR[Reranker<br/>bge-reranker-v2-m3]
+            RR[Reranker<br/>zerank-1-small]
         end
     end
 
@@ -150,7 +150,7 @@ The Healer reads which guard fired to tell a wrong locator from a prior step who
 
 ## Cross-cutting design choices (why the moving parts exist)
 
-- **One gateway, not a public API.** Every agent — Planner, Generator, Healer, and the optional Vision Aid Agent — reaches one OpenAI-compatible gateway via `llm.py`. The `mtls.py` policy connects *directly* (ignoring env proxies, which can silently drop the connection), optionally trusts a private CA, and attaches an optional mTLS client cert. The browser agents accept an optional per-agent **reasoning-effort** setting (`PLANNER_REASONING_EFFORT` / `HEALER_REASONING_EFFORT`) — sent only when set, never to the Generator, and only to be trusted after `scripts/step0d_verify_reasoning_effort.py` proves the gateway honors the param (gateways commonly drop unknown params silently; the check compares low- vs high-effort token usage).
+- **One gateway, not a public API.** Every agent — Planner, Generator, Healer, and the optional Vision Aid Agent — reaches one OpenAI-compatible gateway via `llm.py`. The `mtls.py` policy connects *directly* (ignoring env proxies, which can silently drop the connection), optionally trusts a private CA, and attaches an optional mTLS client cert. The browser agents accept an optional per-agent **reasoning-effort** setting (`PLANNER_REASONING_EFFORT` / `HEALER_REASONING_EFFORT`) — sent only when set, never to the Generator, and only to be trusted after `scripts/step0d_verify_reasoning_effort.py` proves the gateway honors the param (gateways commonly drop unknown params silently; the check compares low- vs high-effort token usage). A single agent can also be pointed at a *different* OpenAI-compatible endpoint: the Planner honors optional `PLANNER_LLM_BASE_URL` / `PLANNER_LLM_API_KEY` (keyless endpoints allowed) to run against a separately-hosted model while every other agent stays on the shared gateway.
 - **Playwright MCP for browsing.** The agents see the page as an **accessibility tree** (roles/labels), not pixels — far smaller and more reliable for an LLM than raw DOM or screenshots. Launched as a pinned `node` subprocess over stdio (not `npx`, which breaks the init handshake on some machines). The toolset is **filtered** before the agents see it: code-execution tools (`browser_evaluate` and kin) are hidden — the model supplies data, never JS — and two tools whose generated schemas use JSON-Schema constructs strict structured-output backends cannot compile (`browser_drop`: `propertyNames`; `browser_network_request`: `minimum`/`maximum`) are dropped, so gateways that grammar-compile every advertised tool schema (e.g. vLLM's `xgrammar`) accept the request. Neither dropped tool plays a role in the planned flows, and a schema-scan test keeps future `@playwright/mcp` bumps grammar-clean.
 - **Context injection is asymmetric.** Every agent gets `project_context.md` (conventions/quirks). Only the browser-driving agents (Planner, Healer) also get `project_map.md` (routes/flows). The Generator is kept lean on purpose — mid-tier models degrade past ~30K tokens, so fewer tokens = more reliable structured output. The loader strips the context files' HTML comments before injection and warns when template placeholders are still present.
 - **History trimming exists but is OFF by default (experimental).** Every MCP browser tool result embeds a full accessibility snapshot, so a long exploration replays a heavy history — a real cost. A history processor on the Planner/Healer can trim it: setting `SNAPSHOT_HISTORY_KEEP=N` keeps the newest N snapshots plus **anchors** — the latest snapshot of every page where a `browser_generate_locator` capture happened, deduped per (page URL, dialog-open) so modal and page states coexist (`ANCHOR_SNAPSHOTS=off` for a pure chronological window); everything else is stubbed down to its action confirmation, and `browser_generate_locator` results are never trimmed, so captured locators are unlosable. **It ships disabled** because live runs showed mid-tier reasoning models losing coherence with trimming enabled — exploring less, giving up early, fabricating steps; the full untrimmed history is the proven-safe default until a controlled A/B shows a net win.
@@ -198,11 +198,16 @@ Possible extensions, not yet built:
 
 ## Planned: retrieval memory — an embedded test-case knowledge base + a reranker
 
-> **Status: designed, not yet built.** Nothing in this section runs today. The groundwork *does*
-> ship already: [`scripts/step0b_verify_embeddings.py`](../scripts/step0b_verify_embeddings.py)
-> smoke-tests a gateway's `/embeddings` and `/rerank` endpoints (accepting the common response
-> shapes), `.env.example` carries the `EMBEDDING_MODEL` / `RERANKER_MODEL` / `RERANK_ENDPOINT`
-> settings, and the local vector-store directory is already gitignored.
+> **Status: built except the run-loop wiring.** Implemented and unit-tested: the embedded KB
+> store (`rag/store.py` — Qdrant local mode, one collection per project), the gateway
+> embedding/rerank client (`rag/embeddings.py`), the **Distiller + seeding CLI**
+> (`rag/distiller.py`, `rag/extract.py`, `scripts/seed_kb.py` — annotation-driven discovery,
+> helper resolution, per-record review files, `--dry-run`), and the **retriever**
+> (`rag/retriever.py` — search → rerank → capped context blocks, fail-open). Still to come: the
+> orchestrator injection + green-run write-back and the retrieval-quality eval — so nothing here
+> affects a run yet: `RAG_ENABLED` ships off and the default pipeline never imports `rag/`. A
+> committed demo corpus ([`packages/demo-notes-app/legacy-suite/`](../packages/demo-notes-app/legacy-suite/))
+> makes the whole seeding loop try-out-able against the demo app.
 
 **The idea in one paragraph.** Today every test case is planned from scratch, as if it were the
 first — yet the pipeline *produces* the best possible reference material as it works: verified
@@ -217,19 +222,20 @@ solved case makes the next one faster and cheaper.**
 flowchart LR
     MTC["new ManualTestCase"] --> EMB["embed<br/>gateway /embeddings"]
     EMB --> KB[("Test-case KB<br/>embedded vector DB")]
-    KB -->|"top-N candidates<br/>vector search · recall"| RR["Reranker · bge-reranker-v2-m3<br/>scores each pair · precision"]
+    KB -->|"top-N candidates<br/>vector search · recall"| RR["Reranker · zerank-1-small<br/>scores each pair · precision"]
     RR -->|top 2–3 truly similar| INJ["injected into agent context"]
     INJ -->|plans + verified-selector hints| PL2["Planner"]
     INJ -->|green specs as few-shot examples| GE2["Generator"]
     GRN["green run"] -. write back case + plan + spec .-> KB
 ```
 
-**The two new components.**
+**The new components.**
 
 | Component | Reads | Produces | Runs on |
 |---|---|---|---|
-| **Test-case knowledge base** | every solved case: the manual case's text (embedded), its verified `TestPlan`, the final green spec, outcome metadata | the top-N nearest solved cases for a new case | an **embedded** vector DB — an in-process library persisting to a local directory, no extra service to operate (reference choice: Qdrant in local mode, whose `qdrant_storage/` dir is already gitignored; LanceDB/Chroma fit the same slot). The same client API points at a standalone server later if the index outgrows one machine. |
-| **Reranker** | the new case + each candidate, as text *pairs* | the candidates re-scored for genuine relevance; only the top 2–3 survive | **`bge-reranker-v2-m3`** — a cross-encoder rerank model on the gateway's `/rerank` endpoint (the `.env.example` default; the endpoint is what `scripts/step0b_verify_embeddings.py` smoke-tests). |
+| **Test-case knowledge base** | every solved case: the manual case's text (embedded), its verified `TestPlan`, the final green spec, outcome + provenance metadata | the top-N nearest solved cases for a new case | an **embedded** vector DB — an in-process library persisting to a local directory, no extra service to operate (reference choice: Qdrant in local mode, whose `qdrant_storage/` dir is already gitignored). **One collection per target project** — selectors and flows never cross applications. The same client API points at a standalone server later if the index outgrows one machine. |
+| **Reranker** | the new case + each candidate, as text *pairs* | the candidates re-scored for genuine relevance; only the top 2–3 survive | **`zerank-1-small`** — a cross-encoder rerank model on the gateway's `/rerank` endpoint (the `.env.example` default; the endpoint is what `scripts/step0b_verify_embeddings.py` smoke-tests). `bge-reranker-v2-m3` is the A/B alternative — the retrieval eval measures both before either is trusted. |
+| **Distiller Agent** *(offline)* | the existing corpus: Selenium tests + the Xray cases they automate, hand-written Playwright specs, bare manual cases | normalized KB records — intent text, plan-granularity steps, selectors with their ladder kind, provenance tag (`selenium-import`, `playwright-import`, …), plus the original source retained for reference | a gateway chat model, invoked by a `seed_kb` CLI **at seeding time only — never in the per-run loop**. Helper/page-object code is statically resolved so locators living outside the test file are captured; the agent normalizes, it never invents. A dry-run mode writes per-record review files so distillation quality is human-checkable before anything is embedded. |
 
 **Why two stages (embed → rerank).** Embedding search is *recall*: fast and cheap, but coarse —
 "create a user" and "delete a user" sit close together in vector space. The reranker is
@@ -245,15 +251,21 @@ examples, never the 10 nearest ones. The reranker is the quality gate that keeps
   cheaper planning — but are never trusted blindly: every selector in the new plan is still
   captured and verified live on the current app build (the never-invent rule and the resilience
   ladder are unchanged; the app may have changed since the hint was recorded).
-- **Generator** — 2–3 similar finished specs as few-shot examples: "write something that looks like
-  these." Consistent style across the suite and fewer compile-retry round-trips.
+- **Generator** — 1–2 similar finished specs as few-shot examples: "write something that looks like
+  these." Consistent style across the suite and fewer compile-retry round-trips. Examples are only
+  ever Playwright-sourced (pipeline output or imported specs) — mined Selenium is *knowledge*, never
+  *style*, so it can't bleed foreign idioms into generated code.
 - **Healer** *(a later increment)* — past heal outcomes for similar failure fingerprints ("this
   failure was fixed by escalating the locator kind").
 
 **The learning loop.** After a run goes green, the Orchestrator writes the solved case back — case
-text, plan (verified selectors included), final spec, outcome. No manual curation. And the KB does
-not start cold: an indexer CLI bulk-loads the existing corpus (manual test cases already automated
-by hand, plus any pre-existing Playwright suite) before the first assisted run.
+text, plan (verified selectors included), final spec, outcome — tagged `source: pipeline`. No
+manual curation, and no LLM involved in the write-back. And the KB does not start cold: the
+**Distiller Agent** (via the `seed_kb` CLI) mines the corpus a team already owns — its Selenium
+suite, hand-written Playwright specs, and the manual test cases they automate — into the same
+record shape, provenance-tagged. That reuses years of paid-for selector and flow knowledge from
+day one, even though none of the Selenium *code* carries over; a pipeline-solved case later
+supersedes its imported twin.
 
 **Guardrails carry over unchanged.**
 
@@ -266,9 +278,10 @@ by hand, plus any pre-existing Playwright suite) before the first assisted run.
   case?) gates turning the flag on — the same evidence-first bar as the reasoning-effort and
   endpoint verifications.
 
-Planned code layout: `src/ai_test_gen/rag/` — `embeddings.py` (gateway `/embeddings` + `/rerank`
-calls), `indexer.py` (bulk load + write-back), `retriever.py` (search → rerank → top-k) — behind
-the `RAG_ENABLED` config flag.
+Planned code layout: `src/ai_test_gen/rag/` — `store.py` (embedded per-project KB) ·
+`embeddings.py` (gateway `/embeddings` + `/rerank`) · `distiller.py` + `prompts/distiller.md` +
+`scripts/seed_kb.py` (offline seeding) · `retriever.py` (search → rerank → top-k) — all behind the
+`RAG_ENABLED` config flag, off by default.
 
 ## Where to read more
 

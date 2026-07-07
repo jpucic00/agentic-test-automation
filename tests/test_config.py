@@ -30,6 +30,8 @@ _REQUIRED_VARS = [k for k in _BASE_ENV if k not in _LEGACY_OPTIONAL_VARS]
 
 _OPTIONAL_VARS = (
     "PLANNER_MODEL",
+    "PLANNER_LLM_BASE_URL",
+    "PLANNER_LLM_API_KEY",
     "GENERATOR_MODEL",
     "HEALER_MODEL",
     "VISION_MODEL",
@@ -43,6 +45,12 @@ _OPTIONAL_VARS = (
     "LOCAL_TESTCASE_DIR",
     "PROJECT_CONTEXT_PATH",
     "PROJECT_MAP_PATH",
+    "RAG_ENABLED",
+    "KB_PATH",
+    "EMBEDDING_MODEL",
+    "RERANKER_MODEL",
+    "RERANK_ENDPOINT",
+    "DISTILLER_MODEL",
 )
 
 
@@ -282,3 +290,68 @@ def test_context_path_overrides_respected(env, tmp_path):
     cfg = load_config()
     assert cfg.project_context_path == ctx.resolve()
     assert cfg.project_map_path == mp.resolve()
+
+
+@pytest.mark.usefixtures("env")
+def test_rag_defaults_off_with_sane_models(tmp_path):
+    cfg = load_config()
+    assert cfg.rag_enabled is False
+    assert cfg.kb_path == (tmp_path / "qdrant_storage").resolve()
+    assert cfg.embedding_model == "mxbai-embed-large"
+    assert cfg.reranker_model == "zeroentropy/zerank-1-small"
+    assert cfg.rerank_endpoint is None
+    assert cfg.distiller_model == cfg.generator_model  # unset → follows the generator
+
+
+def test_rag_knobs_override(env, tmp_path):
+    env.setenv("RAG_ENABLED", "true")
+    env.setenv("KB_PATH", "kb-alt")
+    env.setenv("EMBEDDING_MODEL", "custom-embed")
+    env.setenv("RERANKER_MODEL", "custom-rerank")
+    env.setenv("RERANK_ENDPOINT", "https://gateway.internal/api/rerank")
+    env.setenv("DISTILLER_MODEL", "custom-distiller")
+    cfg = load_config()
+    assert cfg.rag_enabled is True
+    assert cfg.kb_path == (tmp_path / "kb-alt").resolve()  # relative → under PROJECT_ROOT
+    assert cfg.embedding_model == "custom-embed"
+    assert cfg.reranker_model == "custom-rerank"
+    assert cfg.rerank_endpoint == "https://gateway.internal/api/rerank"
+    assert cfg.distiller_model == "custom-distiller"
+
+
+# --- Planner-only LLM endpoint override --------------------------------------
+
+
+@pytest.mark.usefixtures("env")
+def test_planner_endpoint_defaults_to_shared_gateway():
+    """Unset PLANNER_LLM_* → the Planner uses the shared gateway, unchanged."""
+    cfg = load_config()
+    assert cfg.planner_base_url == cfg.llm_base_url == "https://gateway.internal/v1"
+    assert cfg.planner_api_key == cfg.llm_api_key == "fake-llm-key"
+
+
+def test_planner_base_override_without_key_uses_keyless_placeholder(env):
+    """Base override with no key → override base + placeholder key; the shared gateway
+    key is NEVER reused for the override endpoint, and other agents stay on the gateway."""
+    env.setenv("PLANNER_LLM_BASE_URL", "https://ollama.internal/v1")
+    cfg = load_config()
+    assert cfg.planner_base_url == "https://ollama.internal/v1"
+    assert cfg.planner_api_key == config._KEYLESS_API_KEY_PLACEHOLDER
+    assert cfg.planner_api_key != cfg.llm_api_key
+    assert cfg.llm_base_url == "https://gateway.internal/v1"  # others untouched
+
+
+def test_planner_base_and_key_override_both_respected(env):
+    env.setenv("PLANNER_LLM_BASE_URL", "https://second-gateway/v1")
+    env.setenv("PLANNER_LLM_API_KEY", "planner-key")
+    cfg = load_config()
+    assert cfg.planner_base_url == "https://second-gateway/v1"
+    assert cfg.planner_api_key == "planner-key"
+
+
+def test_planner_key_override_without_base_stays_on_shared_url(env):
+    """Only the key overridden → same shared base URL, the given key."""
+    env.setenv("PLANNER_LLM_API_KEY", "planner-key")
+    cfg = load_config()
+    assert cfg.planner_base_url == cfg.llm_base_url == "https://gateway.internal/v1"
+    assert cfg.planner_api_key == "planner-key"

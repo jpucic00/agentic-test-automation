@@ -49,11 +49,23 @@ def judge_reasoning_effort_support(
     return "honored" if high_tokens >= low_tokens * min_ratio else "not-honored"
 
 
-def build_openai_model(config: Config, model_name: str) -> OpenAIChatModel:
+def build_openai_model(
+    config: Config,
+    model_name: str,
+    *,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> OpenAIChatModel:
     """Return an ``OpenAIChatModel`` for ``model_name`` on the corp gateway.
 
     Applies the proven gateway httpx policy (direct-by-default, corp CA, optional
     mTLS) from ``ai_test_gen.mtls`` so every agent shares one connection config.
+
+    ``base_url`` / ``api_key`` override the shared gateway for a single agent — the
+    Planner passes ``config.planner_base_url`` / ``config.planner_api_key`` so it can
+    target a separately-hosted (optionally keyless) OpenAI-compatible model. When both
+    are omitted the shared ``config.llm_base_url`` / ``config.llm_api_key`` are used, so
+    every other caller is unchanged.
     """
     http_client = DefaultAsyncHttpxClient(
         trust_env=mtls.get_trust_env(),
@@ -61,8 +73,8 @@ def build_openai_model(config: Config, model_name: str) -> OpenAIChatModel:
         cert=mtls.get_cert_arg(),  # None when no mTLS is configured
     )
     provider = OpenAIProvider(
-        base_url=config.llm_base_url,
-        api_key=config.llm_api_key,
+        base_url=base_url or config.llm_base_url,
+        api_key=api_key or config.llm_api_key,
         http_client=http_client,
     )
     return OpenAIChatModel(model_name, provider=provider)

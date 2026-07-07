@@ -90,3 +90,13 @@ uv run python scripts/run_one.py NOTE-2 --verbose
 
 The test cases live in [`test-cases/`](test-cases/) as raw-Xray-shaped JSON — see
 [`project_context.md`](project_context.md) for conventions.
+
+## Legacy suite (KB-seeding demo corpus)
+
+[`legacy-suite/`](legacy-suite/) is a miniature "existing test repository" for trying the
+knowledge-base seeding workflow (`scripts/seed_kb.py`) without a real corpus: two Selenium/Java
+tests annotated `@Xray(testCase = "NOTE-…")` in a realistic suite layout (`main` page-object
+packages holding the `By.*` locators, a shared `core` package, one deliberately unresolvable
+call), plus one hand-written Playwright spec. The Java files are static fixtures — they are never
+compiled or executed (IDE import errors there are expected), and `tsconfig.json` excludes the
+directory from the demo app's build. See SETUP.md §7.2 for the dry-run seeding walkthrough.

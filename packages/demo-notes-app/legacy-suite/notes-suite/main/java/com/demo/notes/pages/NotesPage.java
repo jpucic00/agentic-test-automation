@@ -1,0 +1,39 @@
+package com.demo.notes.pages;
+
+import com.demo.core.util.Waits;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+
+/**
+ * Page object for the notes list. The editor controls are NON-SEMANTIC divs in
+ * the app (no ids, no roles), so this page object descends the locator ladder:
+ * name attributes where they exist, css/xpath where nothing better is offered.
+ */
+public class NotesPage {
+    public static final By NEW_NOTE =
+            By.xpath("//div[contains(@class,'btn') and normalize-space()='New note']");
+    public static final By TITLE = By.name("title");
+    public static final By BODY = By.name("body");
+    public static final By SAVE =
+            By.xpath("//div[contains(@class,'btn') and normalize-space()='Save note']");
+    public static final By NOTE_TITLES = By.cssSelector(".notes-list .note-item h3");
+
+    private final WebDriver driver;
+
+    public NotesPage(WebDriver driver) {
+        this.driver = driver;
+    }
+
+    public void createNote(String title, String body) {
+        driver.findElement(NEW_NOTE).click();
+        Waits.visible(driver, TITLE);
+        driver.findElement(TITLE).sendKeys(title);
+        driver.findElement(BODY).sendKeys(body);
+        driver.findElement(SAVE).click();
+    }
+
+    public String firstNoteTitle() {
+        Waits.visible(driver, NOTE_TITLES);
+        return driver.findElement(NOTE_TITLES).getText();
+    }
+}

@@ -102,6 +102,8 @@ Confirm you have, or have filed access requests for, every item below. Access of
 - [ ] **Model names available on the gateway** — one each for the Planner, Generator, and Healer
   (defaults: `openai/gpt-oss-120b`, `mistralai/devstral-small-2-2512`, `openai/gpt-oss-120b`)
 - [ ] **Embedding + reranker model names** on the gateway (defaults: `mxbai-embed-large`, `bge-reranker-v2-m3`)
+  — only needed for the optional retrieval memory (`RAG_ENABLED`, off by default; its embedded
+  vector store is a local directory, `KB_PATH`, no extra service)
 - [ ] **Jira/Xray credentials with read access** to your test project:
   - Cloud → Atlassian email + API token (from <https://id.atlassian.com/manage-profile/security/api-tokens>)
   - Server/DC → username + PAT (or password)
@@ -124,6 +126,9 @@ Each section in [`.env.example`](.env.example) names the script that consumes it
 section at a time. Watch out for:
 
 - `LLM_BASE_URL` — include the trailing `/v1` if your gateway uses it.
+- `PLANNER_LLM_BASE_URL` / `PLANNER_LLM_API_KEY` — optional; run only the Planner against a
+  separate OpenAI-compatible endpoint (leave the key blank for a keyless one). Unset = the
+  Planner uses `LLM_BASE_URL` like the other agents.
 - `XRAY_IS_CLOUD` — `true` for `*.atlassian.net`, `false` for self-hosted.
 - `JIRA_TOKEN` — for Cloud this is an **API token**, not your Jira password.
 - `GITLAB_PROJECT_ID` — `group/subgroup/project` path or the numeric ID. URL-encoded path is also accepted
@@ -252,6 +257,31 @@ uv run python scripts/run_one.py NOTE-2 --verbose
 the same shape the live Xray client produces, just read from disk), and the `PROJECT_*_PATH` overrides point
 the agents at the demo's own committed `project_context.md` / `project_map.md` without touching your app's
 root context files. See [`packages/demo-notes-app/README.md`](packages/demo-notes-app/README.md).
+
+### 7.2 Optional: seed the test-case knowledge base from an existing suite
+
+The optional retrieval memory (`RAG_ENABLED`, off by default) learns from tests you already have.
+`scripts/seed_kb.py` mines an existing Selenium repo (tests found via their `@Xray(testCase = "…")`
+annotations, page-object/helper locators resolved automatically), hand-written Playwright specs, and
+manual test cases into a per-project **embedded** vector store under `KB_PATH` (a local directory —
+no database service). Always start with the dry-run review loop:
+
+```bash
+# 1. Dry run: distill a sample and READ the review files — no embeddings, no KB writes.
+#    (Works against the bundled demo corpus; swap in your own repo paths for real seeding.)
+uv run python scripts/seed_kb.py --project NOTE \
+    --selenium packages/demo-notes-app/legacy-suite \
+    --playwright packages/demo-notes-app/legacy-suite/playwright \
+    --cases packages/demo-notes-app/test-cases \
+    --dry-run --limit 5
+# 2. Review output/kb_review/<project>/ — intent text, steps, selectors, unresolved helper calls.
+#    Tune DISTILLER_MODEL in .env if step expansion looks shallow, and re-run the dry run.
+# 3. Seed for real (needs /embeddings on your gateway): drop --dry-run.
+```
+
+Re-running is idempotent (already-stored records are skipped without model calls; `--force`
+re-distills). Requires a chat model for the Distiller (`DISTILLER_MODEL`) and — for the real run —
+an embedding model (`EMBEDDING_MODEL`) on your gateway.
 
 ---
 

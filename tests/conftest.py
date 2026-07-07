@@ -22,6 +22,8 @@ def cfg(tmp_path: Path) -> Config:
     return Config(
         llm_base_url="https://gateway.internal/v1",
         llm_api_key="fake-key",
+        planner_base_url="https://gateway.internal/v1",
+        planner_api_key="fake-key",
         planner_model="planner-model",
         generator_model="generator-model",
         healer_model="healer-model",
@@ -48,4 +50,10 @@ def cfg(tmp_path: Path) -> Config:
         snapshots_dir=tmp_path / "snapshots",
         project_context_path=tmp_path / "project_context.md",
         project_map_path=tmp_path / "project_map.md",
+        rag_enabled=False,
+        kb_path=tmp_path / "kb",
+        embedding_model="embed-model",
+        reranker_model="rerank-model",
+        rerank_endpoint=None,
+        distiller_model="distiller-model",
     )

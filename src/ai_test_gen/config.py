@@ -153,11 +153,48 @@ def _dom_probe_max_calls() -> int:
     return _call_budget("AGENT_DOM_PROBE", "DOM-probe calls")
 
 
+# API-key placeholder for a keyless overridden Planner endpoint (e.g. a local
+# Ollama-style server that ignores the key). Used only when PLANNER_LLM_BASE_URL is
+# set without PLANNER_LLM_API_KEY — the shared gateway key is NEVER sent to a
+# different host. OpenAIProvider requires a non-empty api_key, hence a placeholder.
+_KEYLESS_API_KEY_PLACEHOLDER = "not-needed"
+
+
+def _planner_endpoint(shared_base_url: str, shared_api_key: str) -> tuple[str, str]:
+    """Resolve the Planner's ``(base_url, api_key)``, defaulting to the shared gateway.
+
+    ``PLANNER_LLM_BASE_URL`` / ``PLANNER_LLM_API_KEY`` point ONLY the Planner at a
+    separately-hosted OpenAI-compatible model (every other agent stays on the shared
+    gateway). Resolution:
+
+    - Neither set → the shared gateway ``(base_url, api_key)`` (unchanged behavior).
+    - ``PLANNER_LLM_API_KEY`` set → that key (with the override base URL if given, else
+      the shared one).
+    - Base overridden without a key → the override base + a keyless placeholder, so a
+      keyless endpoint (e.g. a local Ollama server) works and the shared gateway key is
+      never sent to another host.
+    """
+    override_base = os.environ.get("PLANNER_LLM_BASE_URL", "").strip()
+    override_key = os.environ.get("PLANNER_LLM_API_KEY", "").strip()
+    if not override_base and not override_key:
+        return shared_base_url, shared_api_key
+    base_url = override_base or shared_base_url
+    if override_key:
+        return base_url, override_key
+    return base_url, _KEYLESS_API_KEY_PLACEHOLDER
+
+
 @dataclass(frozen=True)
 class Config:
     # LLM gateway
     llm_base_url: str
     llm_api_key: str
+    # Optional Planner-only endpoint override (PLANNER_LLM_BASE_URL / PLANNER_LLM_API_KEY):
+    # point JUST the Planner at a separately-hosted OpenAI-compatible model while every
+    # other agent stays on {llm_base_url}. Both resolve to the shared gateway when unset;
+    # a base override with no key yields a keyless placeholder (see _planner_endpoint).
+    planner_base_url: str
+    planner_api_key: str
     planner_model: str
     generator_model: str
     healer_model: str
@@ -202,6 +239,25 @@ class Config:
     snapshots_dir: Path
     project_context_path: Path
     project_map_path: Path
+
+    # Retrieval memory (optional, OFF by default — RETRIEVAL_MEMORY_PLAN.md). When
+    # rag_enabled is False nothing below is consulted and no rag/ module (or qdrant)
+    # is imported — the pipeline stays byte-identical. kb_path hosts the EMBEDDED
+    # (local-mode) vector DB: a directory, not a server. The embedding + rerank
+    # models resolve on the same gateway (rag/embeddings.py); the reranker default
+    # is the cross-encoder zerank-1-small (bge-reranker-v2-m3 is the measured A/B
+    # alternative via RERANKER_MODEL), rerank_endpoint overrides where /rerank
+    # lives outside {llm_base_url}.
+    rag_enabled: bool = False
+    kb_path: Path = PROJECT_ROOT / "qdrant_storage"
+    embedding_model: str = "mxbai-embed-large"
+    reranker_model: str = "zeroentropy/zerank-1-small"
+    rerank_endpoint: str | None = None
+    # Offline seeding only (scripts/seed_kb.py) — never part of the run loop. A
+    # code-reading chat model normalizing one pre-assembled test bundle per call.
+    # Defaults to GENERATOR_MODEL (the Devstral class on the active gateway);
+    # escalate to a reasoning model only if dry-run review shows shallow steps.
+    distiller_model: str = "mistralai/devstral-small-2-2512"
 
 
 def load_config() -> Config:
@@ -252,12 +308,19 @@ def load_config() -> Config:
         _resolve_under_root(map_override) if map_override else PROJECT_ROOT / "project_map.md"
     )
 
+    llm_base_url = _required("LLM_BASE_URL")
+    llm_api_key = _required("LLM_API_KEY")
+    # Planner-only endpoint override (see Config.planner_base_url). Unset → shared gateway.
+    planner_base_url, planner_api_key = _planner_endpoint(llm_base_url, llm_api_key)
+
     return Config(
         gitlab_enabled=gitlab_enabled,
         testcase_source=testcase_source,
         local_testcase_dir=local_testcase_dir,
-        llm_base_url=_required("LLM_BASE_URL"),
-        llm_api_key=_required("LLM_API_KEY"),
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        planner_base_url=planner_base_url,
+        planner_api_key=planner_api_key,
         planner_model=os.environ.get("PLANNER_MODEL", "openai/gpt-oss-120b"),
         generator_model=os.environ.get("GENERATOR_MODEL", "mistralai/devstral-small-2-2512"),
         healer_model=os.environ.get("HEALER_MODEL", "openai/gpt-oss-120b"),
@@ -283,4 +346,15 @@ def load_config() -> Config:
         snapshots_dir=snapshots_dir,
         project_context_path=project_context_path,
         project_map_path=project_map_path,
+        # Retrieval memory — same truthy set as GITLAB_ENABLED, but defaults OFF.
+        rag_enabled=os.environ.get("RAG_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
+        kb_path=_resolve_under_root(os.environ.get("KB_PATH", "qdrant_storage")),
+        embedding_model=os.environ.get("EMBEDDING_MODEL", "mxbai-embed-large"),
+        reranker_model=os.environ.get("RERANKER_MODEL", "zeroentropy/zerank-1-small"),
+        rerank_endpoint=os.environ.get("RERANK_ENDPOINT") or None,
+        # Unset → follow the generator model: same code-reading class, and the id is
+        # always valid on whichever gateway this .env targets.
+        distiller_model=os.environ.get("DISTILLER_MODEL")
+        or os.environ.get("GENERATOR_MODEL", "mistralai/devstral-small-2-2512"),
     )
