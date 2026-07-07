@@ -160,6 +160,10 @@ def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
       UI automation. (The gateway must honor the flag — OpenAI-compatible servers may silently
       drop it; confirm on a real run.)
     - **Reasoning effort** from ``effort_env`` (see ``reasoning_effort``) when that env var is set.
+    - **``max_tokens``** from ``AGENT_MAX_OUTPUT_TOKENS`` when set: an explicit per-request
+      completion budget. Overrides a gateway's small default, which can truncate a THINKING
+      model's turn into a thinking-only response that pydantic-ai rejects and retries to
+      exhaustion (see ``agent_max_output_tokens``).
 
     Shared by the Planner and the Healer; the Generator (no browser) never uses this.
     """
@@ -167,7 +171,30 @@ def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
     effort = reasoning_effort(effort_env)
     if effort:
         settings_kwargs["openai_reasoning_effort"] = effort
+    max_tokens = agent_max_output_tokens()
+    if max_tokens is not None:
+        settings_kwargs["max_tokens"] = max_tokens
     return OpenAIChatModelSettings(**settings_kwargs)
+
+
+def agent_max_output_tokens() -> int | None:
+    """Per-request completion budget from ``AGENT_MAX_OUTPUT_TOKENS`` (unset = provider default).
+
+    Some gateways apply a SMALL default ``max_tokens`` when the request carries none. A
+    thinking model then spends the whole budget on its reasoning and the turn arrives
+    thinking-only or cut mid-emission — rejected, retried (with a longer context that thinks
+    even longer), and exhausted within a few turns. An explicit request-level budget overrides
+    such defaults wherever the gateway honors the param. Unset, invalid, or non-positive
+    values leave the request untouched.
+    """
+    raw = os.environ.get("AGENT_MAX_OUTPUT_TOKENS")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def agent_request_limit(default: int = 300) -> int:

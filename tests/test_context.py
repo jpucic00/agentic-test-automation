@@ -11,6 +11,7 @@ import pytest
 
 from ai_test_gen.agents._context import (
     _load_context_file,
+    agent_max_output_tokens,
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
@@ -157,3 +158,26 @@ def test_build_model_settings_combines_effort_and_sequential(monkeypatch):
     settings = build_model_settings("PLANNER_REASONING_EFFORT")
     assert settings.get("openai_reasoning_effort") == "high"
     assert settings.get("parallel_tool_calls") is False
+
+
+def test_build_model_settings_includes_output_budget_when_set(monkeypatch):
+    # A gateway's small default max_tokens can truncate a thinking model's turn into a
+    # thinking-only response that retries to exhaustion; the knob overrides it per request.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "8000")
+    settings = build_model_settings("PLANNER_REASONING_EFFORT")
+    assert settings.get("max_tokens") == 8000
+    monkeypatch.delenv("AGENT_MAX_OUTPUT_TOKENS")
+    settings = build_model_settings("PLANNER_REASONING_EFFORT")
+    assert "max_tokens" not in settings
+
+
+def test_agent_max_output_tokens_parsing(monkeypatch):
+    monkeypatch.delenv("AGENT_MAX_OUTPUT_TOKENS", raising=False)
+    assert agent_max_output_tokens() is None
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "8000")
+    assert agent_max_output_tokens() == 8000
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "bogus")
+    assert agent_max_output_tokens() is None
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "0")
+    assert agent_max_output_tokens() is None
