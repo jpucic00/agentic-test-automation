@@ -12,12 +12,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, AgentRetries
 
 from ..config import Config
 from ..llm import build_openai_model
 from ..models import GeneratedTest, TestPlan
-from ._context import assemble_system_prompt
+from ._context import agent_output_retries, assemble_system_prompt
 from ._run_failure import run_agent_logged
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -34,7 +34,7 @@ def build_generator(config: Config) -> Agent[None, GeneratedTest]:
         model=model,
         output_type=GeneratedTest,
         system_prompt=system_prompt,
-        retries=2,
+        retries=AgentRetries(tools=2, output=agent_output_retries()),  # output: serving husks
     )
 
 

@@ -12,6 +12,7 @@ import pytest
 from ai_test_gen.agents._context import (
     _load_context_file,
     agent_max_output_tokens,
+    agent_output_retries,
     agent_request_limit,
     agent_retries,
     assemble_system_prompt,
@@ -181,3 +182,14 @@ def test_agent_max_output_tokens_parsing(monkeypatch):
     assert agent_max_output_tokens() is None
     monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "0")
     assert agent_max_output_tokens() is None
+
+
+def test_agent_output_retries_default_env_and_invalid(monkeypatch):
+    # A separate budget from AGENT_MCP_RETRIES: output retries accumulate ACROSS a run, so
+    # intermittent flaky-serving husk turns need more headroom than per-tool errors do.
+    monkeypatch.delenv("AGENT_OUTPUT_RETRIES", raising=False)
+    assert agent_output_retries() == 15
+    monkeypatch.setenv("AGENT_OUTPUT_RETRIES", "25")
+    assert agent_output_retries() == 25
+    monkeypatch.setenv("AGENT_OUTPUT_RETRIES", "bogus")
+    assert agent_output_retries() == 15

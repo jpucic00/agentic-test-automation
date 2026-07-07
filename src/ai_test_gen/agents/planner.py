@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, AgentRetries
 from pydantic_ai.capabilities import ProcessHistory
 
 from ..config import Config
@@ -25,6 +25,7 @@ from ..llm import build_openai_model
 from ..models import ManualTestCase, TestPlan
 from ..playwright_mcp import build_playwright_mcp
 from ._context import (
+    agent_output_retries,
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
@@ -113,7 +114,9 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
         toolsets=[mcp],
         system_prompt=system_prompt,
         model_settings=model_settings,
-        retries=agent_retries(),  # room to recover from transient MCP tool errors
+        # tool: room to recover from transient MCP tool errors. output: the model's own bad
+        # responses (empty/unparsed turns) accumulate ACROSS the run — separate, larger budget.
+        retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
         # Long explorations accumulate dozens of stale page snapshots; keep only the
         # newest few so the model stays out of its long-context degradation zone.
         capabilities=[ProcessHistory(trim_stale_snapshots)],

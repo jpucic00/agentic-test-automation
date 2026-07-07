@@ -149,6 +149,26 @@ def reasoning_effort(env_var: str) -> ReasoningEffort | None:
     return cast(ReasoningEffort, value)
 
 
+def agent_output_retries(default: int = 15) -> int:
+    """Structured-output retry budget from ``AGENT_OUTPUT_RETRIES`` (default 15).
+
+    Retries for the MODEL'S OWN responses — empty turns, unparsed tool calls, output-schema
+    validation failures — as opposed to ``agent_retries`` (tool errors). pydantic-ai counts
+    these CUMULATIVELY across a run (successful turns never reset the counter) and, when no
+    separate budget is set, falls back to the tool budget (5): a gateway whose tool-call
+    parser intermittently returns empty husk turns then kills a long exploration even though
+    each bounce is individually recoverable. 15 rides that out; ``AGENT_REQUEST_LIMIT``
+    remains the hard backstop on total run size.
+    """
+    raw = os.environ.get("AGENT_OUTPUT_RETRIES")
+    if raw is None:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
 def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
     """Model settings for a browser agent: always-sequential tool calls + optional effort.
 
