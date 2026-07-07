@@ -71,9 +71,15 @@ _FINDBY_TO_BY = {
 _BY_OPEN_RE = re.compile(
     r'By\.(id|cssSelector|xpath|name|className|tagName|linkText|partialLinkText)\s*\('
 )
+# A Java type: dotted name, optional one-level-scanned generics, optional arrays.
+# Deliberately contains NO bare space/comma alternatives: comment-masking turns
+# comments into long space runs, and a type class that can match raw spaces sent
+# this regex into catastrophic backtracking on exactly those runs (minutes per
+# generated file). Spaces/commas are legal only INSIDE the <...> group.
+_TYPE_RE = r"[\w.$]+(?:<[^;{}()]*>)?(?:\[\])*"
 _METHOD_SIG_RE = re.compile(
     r'^[ \t]*(?:(?:public|protected|private|static|final|synchronized|abstract|default)\s+)*'
-    r'([\w<>\[\], ?.]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w, .]+\s*)?\{',
+    r'(' + _TYPE_RE + r')\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w, .]+\s*)?\{',
     re.M,
 )
 _CLASS_RE = re.compile(
@@ -82,7 +88,14 @@ _CLASS_RE = re.compile(
 _PACKAGE_RE = re.compile(r'^\s*package\s+([\w.]+)\s*;', re.M)
 _STATIC_IMPORT_RE = re.compile(r'^\s*import\s+static\s+([\w.]+)\.(\w+|\*)\s*;', re.M)
 _STRING_CONST_RE = re.compile(r'\bString\s+(\w+)\s*=\s*("(?:[^"\\]|\\.)*")\s*;')
-_FIELD_DECL_RE = re.compile(r'^\s*[\w \t]*?\b([A-Z]\w*)(?:<[^>\n]*>)?\s+(\w+)\s*[;=]', re.M)
+# Explicit modifier keywords instead of a lazy wildcard prefix — a lazy
+# `[\w \t]*?` re-scans every split of a whitespace run (quadratic on the space
+# blocks that comment/method blanking leaves behind).
+_FIELD_DECL_RE = re.compile(
+    r'^[ \t]*(?:(?:public|protected|private|static|final|transient|volatile)\s+)*'
+    r'([A-Z]\w*)(?:<[^>\n]*>)?(?:\[\])?\s+(\w+)\s*[;=]',
+    re.M,
+)
 _ASSIGN_NEW_RE = re.compile(r'\b(\w+)\s*=\s*new\s+([A-Z]\w*)\s*\(')
 _NEW_RE = re.compile(r'\bnew\s+([A-Z]\w*)\s*\(')
 _RECEIVER_CALL_RE = re.compile(r'\b(\w+)\s*\.\s*(\w+)\s*\(')
@@ -266,6 +279,7 @@ class _JavaClass:
     masked: str
     extends: str | None
     methods: dict[str, _JavaMethod]  # method name → parsed method (overloads merged)
+    method_spans: list[tuple[int, int]]  # every matched body incl. each overload's own
     fields: dict[str, str]  # field name → simple type name
     consts: dict[str, str]  # String constant name → literal value (raw, as written)
     assigned_types: dict[str, str]  # name → class assigned via `x = new T(...)` anywhere
@@ -292,8 +306,8 @@ class JavaIndex:
             name = class_match.group(1)
             extends_raw = class_match.group(2)
             package_match = _PACKAGE_RE.search(masked)
-            methods = _split_methods(text, masked, name)
-            fields = _class_fields(masked, methods)
+            methods, method_spans = _split_methods(text, masked, name)
+            fields = _class_fields(masked, method_spans)
             element_fields = {f for f, t in fields.items() if t in _ELEMENT_TYPES}
             element_fields.update(_findby_field_names(masked))
             member_imports: dict[str, str] = {}
@@ -313,6 +327,7 @@ class JavaIndex:
                 masked=masked,
                 extends=_simple_type(extends_raw) if extends_raw else None,
                 methods=methods,
+                method_spans=method_spans,
                 fields=fields,
                 consts={
                     m.group(1): m.group(2)[1:-1]
@@ -397,20 +412,27 @@ def _parse_params(params_src: str) -> dict[str, str]:
     return params
 
 
-def _split_methods(text: str, masked: str, class_name: str) -> dict[str, _JavaMethod]:
-    """Method name → parsed method (signature through matching close brace).
+def _split_methods(
+    text: str, masked: str, class_name: str
+) -> tuple[dict[str, _JavaMethod], list[tuple[int, int]]]:
+    """Method name → parsed method, plus the spans of EVERY matched body.
 
     Constructors are stored under ``<init>``. Overloads merge into one entry
-    (sources concatenated) so every body is available to resolution.
+    (sources concatenated) so every body is available to resolution — but each
+    overload's own span is still returned, so field-zone blanking removes all
+    method bodies, not just the first overload's.
     """
     methods: dict[str, _JavaMethod] = {}
+    spans: list[tuple[int, int]] = []
 
     def add(name: str, params_src: str, return_type: str, start: int, brace_at: int) -> None:
-        # `else if (...) {` / `new Thread() {` would otherwise parse as methods.
-        if name in _JAVA_KEYWORDS or return_type.strip() in ("new", "else"):
-            return
         body_end = _matching_brace(masked, brace_at)
         if body_end is None:
+            return
+        spans.append((start, body_end + 1))
+        # `else if (...) {` / `new Thread() {` would otherwise parse as methods
+        # (their spans sit inside a real method's span, so blanking is unharmed).
+        if name in _JAVA_KEYWORDS or return_type.strip() in ("new", "else"):
             return
         parsed = _JavaMethod(
             name=name,
@@ -441,22 +463,22 @@ def _split_methods(text: str, masked: str, class_name: str) -> dict[str, _JavaMe
     )
     for match in ctor_re.finditer(masked):
         add("<init>", match.group(1), class_name, match.start(), match.end() - 1)
-    return methods
+    return methods, spans
 
 
-def _blank_method_spans(masked: str, methods: dict[str, _JavaMethod]) -> str:
+def _blank_method_spans(masked: str, spans: list[tuple[int, int]]) -> str:
     """The class body with method bodies blanked — the field/constant zone."""
     blanked = list(masked)
-    for method in methods.values():
-        for i in range(method.start, min(method.end, len(blanked))):
+    for start, end in spans:
+        for i in range(start, min(end, len(blanked))):
             if blanked[i] != "\n":
                 blanked[i] = " "
     return "".join(blanked)
 
 
-def _class_fields(masked: str, methods: dict[str, _JavaMethod]) -> dict[str, str]:
+def _class_fields(masked: str, spans: list[tuple[int, int]]) -> dict[str, str]:
     """Field name → simple type, from the class body OUTSIDE method bodies."""
-    zone = _blank_method_spans(masked, methods)
+    zone = _blank_method_spans(masked, spans)
     fields: dict[str, str] = {}
     for match in _FIELD_DECL_RE.finditer(zone):
         type_name, name = match.group(1), match.group(2)
@@ -783,7 +805,7 @@ def _visit_class(
     bundle: TestBundle, java_class: _JavaClass, index: JavaIndex, state: _Resolution
 ) -> None:
     """First visit of a class: harvest its locator fields (+ @FindBy)."""
-    field_zone = _blank_method_spans(java_class.masked, java_class.methods)
+    field_zone = _blank_method_spans(java_class.masked, java_class.method_spans)
     locators, unresolved = _locators_in(
         field_zone, java_class, index, java_class.name, attribute_fields=True
     )

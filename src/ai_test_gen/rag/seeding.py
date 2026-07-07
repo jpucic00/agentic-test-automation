@@ -72,6 +72,12 @@ class SeedStats:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # Self-diagnosing stall watchdog: if anything dangles (a pathological source
+    # file, a wedged connection), the process prints every thread's stack to
+    # stderr each 120s — a silent hang always names its own culprit.
+    import faulthandler
+
+    faulthandler.dump_traceback_later(120, repeat=True)
     config = load_config()
     stats = run_seeding(
         config,
@@ -164,6 +170,7 @@ def run_seeding(
 
     bundles: list[TestBundle] = []
     if selenium_root:
+        logger.info(":: extracting Java tests from %s ...", selenium_root)
         bundles.extend(
             extract_java_tests(
                 selenium_root,
@@ -173,6 +180,7 @@ def run_seeding(
             )
         )
     if playwright_dir:
+        logger.info(":: extracting Playwright specs from %s ...", playwright_dir)
         bundles.extend(extract_playwright_specs(playwright_dir))
     _apply_xray_map(bundles, xray_map)
     stats.discovered = len(bundles)
