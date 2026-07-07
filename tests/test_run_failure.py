@@ -67,6 +67,16 @@ def test_snapshot_noise_is_skipped_and_empty_history_is_graceful():
     assert "captured 0 message(s)" in summarize_run_failure(RuntimeError("boom"), [])
 
 
+def test_partless_responses_are_flagged_with_their_metadata():
+    # An EMPTY model response (no text, no thinking, no tool call) is only diagnosable via
+    # its metadata: the summary must flag NO PARTS and print usage/model when available.
+    empty = ModelResponse(parts=[])
+    summary = summarize_run_failure(RuntimeError("boom"), [empty])
+
+    assert "ModelResponse: NO PARTS" in summary
+    assert "usage in=" in summary  # metadata line present even without parts
+
+
 def test_cause_tree_descends_groups_to_the_inner_errors():
     # The exact laptop shape: UnexpectedModelBehavior -> ExceptionGroup ->
     # UnexpectedModelBehavior -> ValidationError. The summary must surface the innermost

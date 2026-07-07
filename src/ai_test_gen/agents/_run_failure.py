@@ -100,8 +100,11 @@ def summarize_run_failure(exc: BaseException, messages: Sequence[Any]) -> str:
     lines.append(f"captured {len(messages)} message(s); showing last {len(tail)}:")
     for message in tail:
         parts = getattr(message, "parts", ())
-        kinds = ", ".join(type(part).__name__ for part in parts) or type(message).__name__
-        lines.append(f"- [{kinds}]")
+        kinds = ", ".join(type(part).__name__ for part in parts)
+        lines.append(f"- [{kinds or f'{type(message).__name__}: NO PARTS'}]")
+        meta = _response_meta(message)
+        if meta:
+            lines.append(f"  {meta}")
         for part in parts:
             kind = type(part).__name__
             if kind in _SKIPPED_PARTS:
@@ -110,6 +113,36 @@ def summarize_run_failure(exc: BaseException, messages: Sequence[Any]) -> str:
             if payload is not None:
                 lines.append(f"  {kind} {payload}")
     return "\n".join(lines)
+
+
+def _response_meta(message: Any) -> str | None:
+    """Usage/finish metadata of a model response — decisive when its parts are EMPTY.
+
+    An empty response discriminates three failure modes only through this metadata:
+    ``finish_reason=length`` with output tokens at the cap = the (thinking) turn was
+    truncated; ``finish_reason=stop`` with ~0 output tokens = the server emitted an empty
+    turn (chat-template / constrained-decoding trouble); ``stop`` with MANY output tokens
+    but no parts = the client didn't map a response field the gateway used.
+    """
+    bits: list[str] = []
+    usage = getattr(message, "usage", None)
+    if usage is not None:
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        if input_tokens is not None or output_tokens is not None:
+            bits.append(f"usage in={input_tokens} out={output_tokens}")
+    finish = getattr(message, "finish_reason", None)
+    details = getattr(message, "provider_details", None) or getattr(
+        message, "vendor_details", None
+    )
+    if not finish and isinstance(details, dict):
+        finish = details.get("finish_reason")
+    if finish:
+        bits.append(f"finish_reason={finish}")
+    model_name = getattr(message, "model_name", None)
+    if model_name:
+        bits.append(str(model_name))
+    return "; ".join(bits) if bits else None
 
 
 async def run_agent_logged[OutputT](
