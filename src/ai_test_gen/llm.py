@@ -16,6 +16,9 @@ Without this, the agents fail to reach the gateway on the company laptop with an
 """
 from __future__ import annotations
 
+from typing import Any
+
+import httpx
 from openai import DefaultAsyncHttpxClient
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -55,6 +58,7 @@ def build_openai_model(
     *,
     base_url: str | None = None,
     api_key: str | None = None,
+    timeout_s: float | None = None,
 ) -> OpenAIChatModel:
     """Return an ``OpenAIChatModel`` for ``model_name`` on the corp gateway.
 
@@ -66,11 +70,20 @@ def build_openai_model(
     target a separately-hosted (optionally keyless) OpenAI-compatible model. When both
     are omitted the shared ``config.llm_base_url`` / ``config.llm_api_key`` are used, so
     every other caller is unchanged.
+
+    ``timeout_s`` bounds a single request (connect capped at 30s) for callers that
+    must not dangle — the client library's default is 10 MINUTES per attempt (times
+    its retries), which reads as a silently hung process. Omitted → that default
+    stands, so the browser agents' long turns are unaffected.
     """
+    extra: dict[str, Any] = {}
+    if timeout_s is not None:
+        extra["timeout"] = httpx.Timeout(timeout_s, connect=30.0)
     http_client = DefaultAsyncHttpxClient(
         trust_env=mtls.get_trust_env(),
         verify=mtls.get_verify_arg(),
         cert=mtls.get_cert_arg(),  # None when no mTLS is configured
+        **extra,
     )
     provider = OpenAIProvider(
         base_url=base_url or config.llm_base_url,

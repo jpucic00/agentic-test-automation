@@ -301,6 +301,13 @@ re-distills). `--helper-depth N` (default 2) sets how many call hops the helper 
 extraction always runs unbounded. Requires a chat model for the Distiller (`DISTILLER_MODEL`) and —
 for the real run — an embedding model (`EMBEDDING_MODEL`) on your gateway.
 
+The run reports each stage as it happens: the discovered/planned counts print right after
+extraction, every manual-case fetch logs per key, and each record logs a `distilling (i/N)` line
+BEFORE its model call (which is bounded at 240s per attempt, so a hung gateway surfaces as an
+error rather than a silent stall). If nothing at all prints for more than a minute, the process
+is still in static extraction over a large repo; interrupt it (Ctrl+C) and the traceback names
+the exact spot.
+
 ---
 
 ## 8. Optional: gateway behind a proxy, mTLS, or private CA

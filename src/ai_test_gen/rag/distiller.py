@@ -25,6 +25,11 @@ from .models import KBSelector
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
+# One distill call is a single structured completion — bound it so a hung or
+# queued gateway surfaces as an error within minutes instead of dangling on the
+# client library's 10-minute-per-attempt default with zero output.
+_DISTILL_TIMEOUT_S = 240.0
+
 
 class DistilledCase(BaseModel):
     """The Distiller's structured output — the LLM-authored slice of a KBRecord.
@@ -54,7 +59,7 @@ class DistilledCase(BaseModel):
 
 def build_distiller(config: Config) -> Agent[None, DistilledCase]:
     """Build the Distiller agent (no toolset, no context files — bundle-only input)."""
-    model = build_openai_model(config, config.distiller_model)
+    model = build_openai_model(config, config.distiller_model, timeout_s=_DISTILL_TIMEOUT_S)
     system_prompt = (PROMPTS_DIR / "distiller.md").read_text()
     return Agent(
         model=model,

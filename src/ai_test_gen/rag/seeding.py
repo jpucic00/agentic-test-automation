@@ -189,6 +189,13 @@ def run_seeding(
         stats.skipped_existing = len(already)
         planned = [(b, rid) for b, rid in planned if rid not in already]
 
+    logger.info(
+        ":: discovered %d test(s); %d to distill via %s%s",
+        stats.discovered,
+        len(planned),
+        config.distiller_model,
+        " (DRY RUN)" if dry_run else "",
+    )
     linked_keys = list(dict.fromkeys(b.xray_key for b, _ in planned if b.xray_key))
     case_lookup, case_misses = _load_cases(config, cases or [], linked_keys, no_fetch=no_fetch)
     stats.cases_loaded = len(case_lookup)
@@ -199,9 +206,10 @@ def run_seeding(
 
     agent = build_distiller(config) if planned else None
     records: list[KBRecord] = []
-    for bundle, record_id in planned:
+    for position, (bundle, record_id) in enumerate(planned, start=1):
         case = case_lookup.get(bundle.xray_key or "")
         message = build_distill_message(bundle, case)
+        logger.info(":: distilling %s (%d/%d) ...", bundle.ref, position, len(planned))
         distilled = agent.run_sync(message).output  # type: ignore[union-attr]
         selectors, dropped = _enforce_ground_truth(distilled, bundle)
         record = _to_record(project, record_id, bundle, distilled, selectors, case)
@@ -395,6 +403,9 @@ def _load_local(
 ) -> dict[str, ManualTestCase]:
     from ..local_testcases import load_local_test_case
 
+    logger.info(
+        ":: loading %d manual case(s) from %s", len(keys), config.local_testcase_dir
+    )
     loaded: dict[str, ManualTestCase] = {}
     for key in keys:
         try:
@@ -417,10 +428,12 @@ def _fetch_live(
             misses[key] = f"Xray client unavailable: {exc}"
         logger.warning(":: Xray client unavailable — no manual cases loaded: %s", exc)
         return {}
+    logger.info(":: fetching %d manual case(s) from Jira/Xray ...", len(keys))
     loaded: dict[str, ManualTestCase] = {}
     for key in keys:
         try:
             loaded[key] = client.fetch(key)
+            logger.info(":: case %s fetched (%d steps)", key, len(loaded[key].steps))
         except Exception as exc:  # per-key tolerant — reported, never fatal
             misses[key] = f"fetch failed: {exc}"
             logger.warning(":: case %s not fetched: %s", key, exc)
