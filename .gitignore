@@ -39,6 +39,11 @@ yarn-error.log*
 
 # ─── Playwright (Phase 1.B+) ─────────────────────────────────────
 .playwright/
+# @playwright/mcp's DEFAULT output dir (page .yml snapshots, console logs), created
+# in the CWD when the server runs without --output-dir — e.g. an interactive/manual
+# MCP session. The pipeline itself redirects artifacts to output/snapshots/ (ignored
+# below), so this only catches the default-dir case. Matches the folder anywhere.
+.playwright-mcp/
 playwright-report/
 test-results/
 storage_state*.json
