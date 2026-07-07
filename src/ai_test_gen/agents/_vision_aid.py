@@ -199,7 +199,18 @@ def register_inspect_screen(
             )
         calls_made += 1
         logger.info("%s vision check %d/%d: %s", agent_label, calls_made, max_calls, question)
-        answer = await ask_vision(config, question, png.read_bytes())
+        try:
+            answer = await ask_vision(config, question, png.read_bytes())
+        except Exception as exc:  # noqa: BLE001 — a sensor failure must degrade, never abort the run
+            logger.warning(
+                "%s vision: Vision Aid call failed (%r) — continuing without vision",
+                agent_label,
+                exc,
+            )
+            return (
+                "Vision Aid is unavailable right now (backend error). Proceed using the "
+                "accessibility snapshot and do not call inspect_screen again this run."
+            )
         logger.info("%s vision answer: %s", agent_label, answer)
         return answer
 

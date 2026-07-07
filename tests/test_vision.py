@@ -134,6 +134,26 @@ def test_inspect_screen_fresh_png_calls_vision(cfg, monkeypatch):
     assert asyncio.run(tool("is a modal open?")) == "VISION_OK"
 
 
+def test_inspect_screen_degrades_when_vision_backend_fails(cfg, monkeypatch, caplog):
+    # A Vision Aid failure (e.g. a gateway that rejects image input) must degrade to a
+    # proceed-without-vision reply — a sensor can never abort the run it assists.
+    vcfg = _vision_cfg(cfg)
+    (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
+
+    async def failing_ask(config, question, png):
+        raise RuntimeError("gateway rejected the image")
+
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", failing_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg)
+    with caplog.at_level(logging.WARNING, logger=_VISION_LOGGER):
+        out = asyncio.run(tool("is a modal open?"))
+
+    assert "unavailable" in out
+    assert "accessibility snapshot" in out
+    assert any("Vision Aid call failed" in r.getMessage() for r in caplog.records)
+
+
 def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch, caplog):
     vcfg = _vision_cfg(cfg)
     shot = vcfg.snapshots_dir / "shot.png"

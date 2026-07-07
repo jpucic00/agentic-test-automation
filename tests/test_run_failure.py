@@ -63,7 +63,24 @@ def test_snapshot_noise_is_skipped_and_empty_history_is_graceful():
 
     assert "huge a11y tree" not in summary  # ToolReturnPart is replay noise
     assert "stray thinking text in the output turn" in summary  # TextPart is evidence
-    assert summarize_run_failure(RuntimeError("boom"), []) == "(no captured messages)"
+    # An empty capture is stated as a fact, never silent.
+    assert "captured 0 message(s)" in summarize_run_failure(RuntimeError("boom"), [])
+
+
+def test_cause_tree_descends_groups_to_the_inner_errors():
+    # The exact laptop shape: UnexpectedModelBehavior -> ExceptionGroup ->
+    # UnexpectedModelBehavior -> ValidationError. The summary must surface the innermost
+    # detail, not just repeat the wrapper reprs.
+    inner = ValueError("3 validation errors for TestPlan")
+    mid = UnexpectedModelBehavior("Exceeded maximum retries (5) for output validation")
+    mid.__cause__ = inner
+    outer = UnexpectedModelBehavior("exceeded maximum output retries (5)")
+    outer.__cause__ = BaseExceptionGroup("unhandled errors in a TaskGroup", [mid])
+
+    summary = summarize_run_failure(outer, [])
+
+    assert "Exceeded maximum retries (5) for output validation" in summary
+    assert "3 validation errors for TestPlan" in summary
 
 
 def test_leaf_exceptions_flatten_nested_groups():
