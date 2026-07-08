@@ -296,10 +296,18 @@ uv run python scripts/seed_kb.py --project NOTE \
 ```
 
 Re-running is idempotent (already-stored records are skipped without model calls; `--force`
-re-distills). `--helper-depth N` (default 2) sets how many call hops the helper walker follows;
-`--helper-cap N` (default 24000 chars) bounds the helper snippets handed to the model — locator
-extraction always runs unbounded. Requires a chat model for the Distiller (`DISTILLER_MODEL`) and —
-for the real run — an embedding model (`EMBEDDING_MODEL`) on your gateway.
+re-distills). The helper walker follows the test's whole execution path by default — `@Before*`
+setup methods (login/navigation usually live there), shared flow classes, base-class click/fill
+wrappers, and classes referenced only as constants (`Locators.SAVE`) — deduplicated, so it
+terminates on any repo. Class names resolve import/package-aware (two suites may both have a
+`LoginPage`); calls into classes imported from outside the tree (RestAssured, JDBC drivers…) are
+known-external and not reported as unresolved. Locator values built from constants resolve to
+literals; `String.format`/concatenation skeletons resolve to TEMPLATE values with `%s`/`{name}`
+placeholders kept. `--helper-depth N` bounds the walk (default: unlimited); `--helper-cap N`
+(default 48000 chars) bounds only the helper snippet text handed to the model — traversal and
+locator extraction always run to completion. Requires a chat model for the Distiller
+(`DISTILLER_MODEL`) and — for the real run — an embedding model (`EMBEDDING_MODEL`) on your
+gateway.
 
 The run reports each stage as it happens: the discovered/planned counts print right after
 extraction, every manual-case fetch logs per key, and each record logs a `distilling (i/N)` line

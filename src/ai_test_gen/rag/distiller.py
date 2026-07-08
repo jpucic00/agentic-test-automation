@@ -77,12 +77,20 @@ def build_distill_message(bundle: TestBundle, case: ManualTestCase | None) -> st
         f"## Test `{bundle.class_name}.{bundle.test_name}`\n"
         f"```{bundle.language}\n{bundle.code}\n```",
     ]
+    if bundle.lifecycle_refs:
+        setup = "\n".join(f"- {ref}" for ref in bundle.lifecycle_refs)
+        parts.append(
+            "## Setup that runs BEFORE the test (@Before lifecycle — bodies included "
+            "below as `// setup` snippets; their user-visible actions are the flow's "
+            f"first steps)\n{setup}"
+        )
     if bundle.helper_snippets:
         helpers = "\n\n".join(bundle.helper_snippets)
         parts.append(f"## Resolved helpers it calls\n```{bundle.language}\n{helpers}\n```")
     if bundle.locators:
         lines = "\n".join(
             f"- {loc.kind}: {loc.value}  (declared in {loc.declared_in})"
+            + ("  [TEMPLATE — {…}/%s parts are filled at runtime]" if loc.template else "")
             for loc in bundle.locators
         )
         parts.append(f"## EXTRACTED LOCATORS (ground truth — copy, never invent)\n{lines}")

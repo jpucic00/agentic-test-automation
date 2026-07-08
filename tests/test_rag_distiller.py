@@ -74,6 +74,24 @@ class TestMessageAssembly:
         message = build_distill_message(_bundle(), None)
         assert "Linked manual test case" not in message
 
+    def test_setup_and_template_locators_are_marked(self) -> None:
+        bundle = _bundle()
+        bundle.lifecycle_refs = ["BaseTest.setUp (core/BaseTest.java)"]
+        bundle.locators.append(
+            ExtractedLocator(
+                kind="xpath",
+                value='By.xpath("//tr[{row}]")',
+                declared_in="RowsPage#openRow",
+                template=True,
+            )
+        )
+        message = build_distill_message(bundle, None)
+        assert "Setup that runs BEFORE the test" in message
+        assert "BaseTest.setUp (core/BaseTest.java)" in message
+        assert "[TEMPLATE — {…}/%s parts are filled at runtime]" in message
+        # the non-template locator carries no marker
+        assert 'By.id("login-submit")  (declared in LoginPage.SUBMIT)\n' in message + "\n"
+
 
 class TestAgentRoundTrip:
     def test_structured_output_via_testmodel(self, cfg) -> None:

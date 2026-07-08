@@ -3,21 +3,31 @@
 Everything here is deterministic code — the Distiller agent never searches the
 repo (RETRIEVAL_MEMORY_PLAN.md §5). Discovery: any Java method annotated
 ``@Xray(testCase = "KEY")`` is a test; the rest of the walked tree becomes the
-helper pool. Per test, **bounded static resolution** (default depth 2,
-size-capped) follows the test's calls into helpers found in the tree — that is
-where page objects keep their locators. Receivers are typed from local
-declarations, class fields (the ``page = new LoginPage(driver)``-in-setUp
-pattern), method parameters, ``extends`` chains, ``this``/``super`` and static
-imports; fluent chains are followed through declared return types. Anything
-unresolvable is recorded as ``unresolved:...`` so extraction completeness is
-visible, never silent.
+helper pool. Per test, resolution FOLLOWS THE TEST'S EXECUTION PATH to the end
+of the in-repo call graph (unbounded by default, ``--helper-depth`` bounds it;
+dedup keeps it finite): ``@Before*`` lifecycle methods run first, every call is
+chased into helpers, base-class wrappers, shared flow classes — that is where
+page objects keep their locators and where "log in" turns into fill/fill/click.
+Receivers are typed from local declarations, class fields (the
+``page = new LoginPage(driver)``-in-setUp pattern), method parameters,
+``extends`` chains, ``this``/``super`` and static imports; fluent chains are
+followed through declared return types. Classes referenced only by FIELD access
+(``Locators.SAVE``) are visited too, so locator-repository classes are
+harvested. Class names resolve import/package-aware on fully-qualified names —
+two suites may both have a ``LoginPage`` without shadowing each other; a call
+into a class imported from OUTSIDE the tree is known-external and stays silent.
+Anything unresolvable is recorded as ``unresolved:...`` so extraction
+completeness is visible, never silent.
 
 Locator values written as string constants (``By.id(LOGIN_ID)`` with
 ``String LOGIN_ID = "login"`` — the dominant real-suite shape) are resolved to
-their literals; ``@FindBy`` PageFactory fields are read too. A locator whose
-value cannot be statically resolved lands in ``unresolved_locators`` — flagged,
-never guessed. All structure scanning runs on a comment-masked copy of the
-source, so braces or apostrophes inside comments can never mis-slice a method.
+their literals; ``@FindBy`` PageFactory fields are read too. Dynamic values
+whose SKELETON is static — ``String.format(ROW_XPATH, name)``, ``"…='" + id +
+"'…"`` — resolve to placeholder TEMPLATES (``%s`` kept, variables as
+``{name}``), marked as templates. A locator whose value cannot be resolved even
+as a template lands in ``unresolved_locators`` — flagged, never guessed. All
+structure scanning runs on a comment-masked copy of the source, so braces or
+apostrophes inside comments can never mis-slice a method.
 
 Extracted locators are ground truth the Distiller must not contradict; their
 ``kind`` maps onto the selector resilience ladder used everywhere else.
@@ -26,6 +36,7 @@ Heuristic name-based parsing; no Java compiler.
 from __future__ import annotations
 
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,15 +88,23 @@ _BY_OPEN_RE = re.compile(
 # this regex into catastrophic backtracking on exactly those runs (minutes per
 # generated file). Spaces/commas are legal only INSIDE the <...> group.
 _TYPE_RE = r"[\w.$]+(?:<[^;{}()]*>)?(?:\[\])*"
+# Signature prefix: same-line annotations (each atom is anchored by `@`, so the
+# group cannot re-split whitespace runs), then modifiers as explicit keywords,
+# then an optional method type-parameter list (anchored by `<`, one nesting
+# level, bounded) — `@Override public void x()` and `public <T> T x()` both parse.
 _METHOD_SIG_RE = re.compile(
-    r'^[ \t]*(?:(?:public|protected|private|static|final|synchronized|abstract|default)\s+)*'
+    r'^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]+)*'
+    r'(?:(?:public|protected|private|static|final|synchronized|abstract|default)\s+)*'
+    r'(?:<[^<>;{}()]{0,200}(?:<[^<>;{}()]{0,100}>[^<>;{}()]{0,100})?>\s+)?'
     r'(' + _TYPE_RE + r')\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w, .]+\s*)?\{',
     re.M,
 )
-_CLASS_RE = re.compile(
-    r'\b(?:class|@interface|interface|enum)\s+(\w+)(?:\s+extends\s+([\w.]+))?'
-)
+# Class declarations are scanned on string-blanked text (see _mask_strings), so
+# the word `class` inside a string literal cannot fake a declaration.
+_CLASS_DECL_RE = re.compile(r'\b(?:class|interface|enum)\s+(\w+)')
+_EXTENDS_RE = re.compile(r'\bextends\s+([\w.]+)')
 _PACKAGE_RE = re.compile(r'^\s*package\s+([\w.]+)\s*;', re.M)
+_IMPORT_RE = re.compile(r'^\s*import\s+(?!static\b)([\w.]+(?:\.\*)?)\s*;', re.M)
 _STATIC_IMPORT_RE = re.compile(r'^\s*import\s+static\s+([\w.]+)\.(\w+|\*)\s*;', re.M)
 _STRING_CONST_RE = re.compile(r'\bString\s+(\w+)\s*=\s*("(?:[^"\\]|\\.)*")\s*;')
 # Explicit modifier keywords instead of a lazy wildcard prefix — a lazy
@@ -101,6 +120,14 @@ _NEW_RE = re.compile(r'\bnew\s+([A-Z]\w*)\s*\(')
 _RECEIVER_CALL_RE = re.compile(r'\b(\w+)\s*\.\s*(\w+)\s*\(')
 _BARE_CALL_RE = re.compile(r'(?<![.\w])([a-z_]\w*)\s*\(')
 _CHAIN_NEXT_RE = re.compile(r'\s*\.\s*(\w+)\s*\(')
+# `Locators.SAVE` — qualified FIELD access (no call parens): the only reference
+# many locator-repository classes ever get. The trailing \b keeps \w+ from
+# stopping early to defeat the lookahead.
+_FIELD_ACCESS_RE = re.compile(r'\b([A-Z]\w*)\s*\.\s*(\w+)\b(?!\s*\()')
+_FORMAT_OPEN_RE = re.compile(r'String\s*\.\s*format\s*\(')
+_FORMAT_MARK_RE = re.compile(r'%[a-zA-Z]')
+_PLACEHOLDER_RE = re.compile(r'\{\w+\}')
+_BEFORE_ANNOTATION_RE = re.compile(r'@Before\w*\b')  # JUnit4/5 + TestNG @Before*
 _FINDBY_OPEN_RE = re.compile(r'@FindBy\s*\(')
 _FINDBY_FIELD_RE = re.compile(
     r'\s*(?:(?:public|private|protected|static|final)\s+)*'
@@ -127,8 +154,11 @@ _JAVA_KEYWORDS = {
 # them are framework actions, silently skipped. Repo types are "in the index" instead.
 _ELEMENT_TYPES = {"WebElement", "By"}
 
-DEFAULT_HELPER_DEPTH = 2
-DEFAULT_HELPER_CHAR_CAP = 24_000
+# Traversal follows the whole in-repo call graph by default; dedup on
+# (class, method) keeps it finite. An int bounds the hops (`--helper-depth`).
+DEFAULT_HELPER_DEPTH: int | None = None
+_UNBOUNDED_DEPTH = 1_000_000
+DEFAULT_HELPER_CHAR_CAP = 48_000
 _TS_CODE_CAP = 20_000
 _MAX_UNRESOLVED_FLAGS = 30
 _CHAIN_HOP_LIMIT = 8
@@ -139,6 +169,9 @@ class ExtractedLocator:
     kind: str
     value: str
     declared_in: str  # e.g. "LoginPage.EMAIL" or "CreateNoteTest#seededUserCreatesANote"
+    # True when the value is a resolved SKELETON with runtime-filled parts:
+    # `%s` from String.format, `{name}` from a concatenated variable/parameter.
+    template: bool = False
 
 
 @dataclass
@@ -155,12 +188,17 @@ class TestBundle:
     code: str
     helper_snippets: list[str] = field(default_factory=list)
     helper_refs: list[str] = field(default_factory=list)
+    # Labels of @Before* lifecycle methods bundled in (they run before the test).
+    lifecycle_refs: list[str] = field(default_factory=list)
     locators: list[ExtractedLocator] = field(default_factory=list)
     # Locators that exist in the code but whose VALUE could not be statically
-    # resolved (dynamic xpath, format call, unknown constant). Flagged so review
-    # sees them; the Distiller is told to never guess these.
+    # resolved (fully dynamic — not even a template). Flagged so review sees
+    # them; the Distiller is told to never guess these.
     unresolved_locators: list[str] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
+    # Unresolved-call count BEFORE the display cap — the summary must be truthful
+    # even when a bundle overflows _MAX_UNRESOLVED_FLAGS.
+    unresolved_count: int = 0
 
     @property
     def source_code(self) -> str:
@@ -212,6 +250,38 @@ def _mask_comments(text: str) -> str:
                 if text[i] == quote:
                     i += 1
                     break
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _mask_strings(masked: str) -> str:
+    """Blank string/char literal CONTENTS (quotes kept) of comment-masked text.
+
+    Used for declaration-level scans (package/imports/class decls) where a
+    literal like ``"class Foo"`` must not fake a declaration. (Java 15 text
+    blocks are not modeled — rare in test suites.)
+    """
+    out = list(masked)
+    i, n = 0, len(masked)
+    while i < n:
+        char = masked[i]
+        if char in ('"', "'"):
+            quote = char
+            i += 1
+            while i < n:
+                if masked[i] == "\\":
+                    out[i] = " "
+                    if i + 1 < n:
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if masked[i] == quote:
+                    i += 1
+                    break
+                if masked[i] != "\n":
+                    out[i] = " "
                 i += 1
         else:
             i += 1
@@ -272,100 +342,221 @@ class _JavaMethod:
 @dataclass
 class _JavaClass:
     name: str
+    fqn: str  # package-qualified name — the collision-safe identity
     package: str
     path: Path
     rel: str
-    text: str
-    masked: str
-    extends: str | None
+    text: str  # this class's slice of the file (comments intact)
+    masked: str  # comment-masked slice
+    extends: str | None  # as written (simple or dotted), generics stripped
     methods: dict[str, _JavaMethod]  # method name → parsed method (overloads merged)
     method_spans: list[tuple[int, int]]  # every matched body incl. each overload's own
     fields: dict[str, str]  # field name → simple type name
     consts: dict[str, str]  # String constant name → literal value (raw, as written)
     assigned_types: dict[str, str]  # name → class assigned via `x = new T(...)` anywhere
-    static_member_imports: dict[str, str]  # imported member → simple class name
-    static_star_imports: list[str]  # simple class names of `import static X.*`
+    imports: dict[str, str]  # simple name → imported FQN (file-level, single imports)
+    wildcard_imports: list[str]  # packages of `import x.y.*;`
+    static_member_imports: dict[str, str]  # imported member → owner FQN
+    static_star_imports: list[str]  # owner FQNs of `import static X.*`
     element_fields: set[str]  # WebElement/By-typed fields (incl. @FindBy) — leaf receivers
+    lifecycle_methods: list[str]  # names of @Before*-annotated methods, file order
 
 
 class JavaIndex:
-    """All classes/methods under a repo root, keyed for heuristic resolution."""
+    """All classes/methods under a repo root, keyed for heuristic resolution.
 
-    def __init__(self, classes: dict[str, _JavaClass]) -> None:
-        self.classes = classes
+    Identity is the fully-qualified name; simple names resolve through the
+    caller's imports → same package → wildcard imports → unique-in-repo. Two
+    suites can both have a ``LoginPage`` without silently shadowing each other.
+    """
+
+    def __init__(self, classes: list[_JavaClass]) -> None:
+        self.all = classes
+        self.by_fqn: dict[str, _JavaClass] = {c.fqn: c for c in classes}
+        self.by_simple: dict[str, list[_JavaClass]] = {}
+        for java_class in classes:
+            self.by_simple.setdefault(java_class.name, []).append(java_class)
+        # (owner fqn, method name) → (call targets, flags): _calls_of is
+        # deterministic per method, and full-graph traversal revisits shared
+        # helpers (base wrappers) from every test.
+        self.calls_cache: dict[tuple[str, str], tuple[list[tuple[str, str]], list[str]]] = {}
 
     @classmethod
     def build(cls, root: Path) -> JavaIndex:
-        classes: dict[str, _JavaClass] = {}
+        classes: list[_JavaClass] = []
         for path in sorted(root.rglob("*.java")):
             text = path.read_text(errors="replace")
             masked = _mask_comments(text)
-            class_match = _CLASS_RE.search(masked)
-            if not class_match:
-                continue
-            name = class_match.group(1)
-            extends_raw = class_match.group(2)
-            package_match = _PACKAGE_RE.search(masked)
-            methods, method_spans = _split_methods(text, masked, name)
-            fields = _class_fields(masked, method_spans)
-            element_fields = {f for f, t in fields.items() if t in _ELEMENT_TYPES}
-            element_fields.update(_findby_field_names(masked))
+            declscan = _mask_strings(masked)
+            package_match = _PACKAGE_RE.search(declscan)
+            package = package_match.group(1) if package_match else ""
+            imports: dict[str, str] = {}
+            wildcard_imports: list[str] = []
+            for imp in _IMPORT_RE.finditer(declscan):
+                target = imp.group(1)
+                if target.endswith(".*"):
+                    wildcard_imports.append(target[:-2])
+                else:
+                    imports[target.rsplit(".", 1)[-1]] = target
             member_imports: dict[str, str] = {}
             star_imports: list[str] = []
-            for imp in _STATIC_IMPORT_RE.finditer(masked):
-                owner_simple = imp.group(1).rsplit(".", 1)[-1]
+            for imp in _STATIC_IMPORT_RE.finditer(declscan):
                 if imp.group(2) == "*":
-                    star_imports.append(owner_simple)
+                    star_imports.append(imp.group(1))
                 else:
-                    member_imports[imp.group(2)] = owner_simple
-            classes[name] = _JavaClass(
-                name=name,
-                package=package_match.group(1) if package_match else "",
-                path=path,
-                rel=str(path.relative_to(root)),
-                text=text,
-                masked=masked,
-                extends=_simple_type(extends_raw) if extends_raw else None,
-                methods=methods,
-                method_spans=method_spans,
-                fields=fields,
-                consts={
-                    m.group(1): m.group(2)[1:-1]
-                    for m in _STRING_CONST_RE.finditer(masked)
-                },
-                assigned_types=_assigned_new_types(masked),
-                static_member_imports=member_imports,
-                static_star_imports=star_imports,
-                element_fields=element_fields,
-            )
+                    member_imports[imp.group(2)] = imp.group(1)
+            rel = str(path.relative_to(root))
+            for name, extends_raw, start, end in _top_level_class_decls(declscan):
+                c_text = text[start:end]
+                c_masked = masked[start:end]
+                methods, method_spans = _split_methods(c_text, c_masked, name)
+                fields = _class_fields(c_masked, method_spans)
+                element_fields = {f for f, t in fields.items() if t in _ELEMENT_TYPES}
+                element_fields.update(_findby_field_names(c_masked))
+                classes.append(
+                    _JavaClass(
+                        name=name,
+                        fqn=f"{package}.{name}" if package else name,
+                        package=package,
+                        path=path,
+                        rel=rel,
+                        text=c_text,
+                        masked=c_masked,
+                        extends=extends_raw,
+                        methods=methods,
+                        method_spans=method_spans,
+                        fields=fields,
+                        consts={
+                            m.group(1): m.group(2)[1:-1]
+                            for m in _STRING_CONST_RE.finditer(c_masked)
+                        },
+                        assigned_types=_assigned_new_types(c_masked),
+                        imports=imports,
+                        wildcard_imports=wildcard_imports,
+                        static_member_imports=member_imports,
+                        static_star_imports=star_imports,
+                        element_fields=element_fields,
+                        lifecycle_methods=[
+                            m.name
+                            for m in sorted(methods.values(), key=lambda m: m.start)
+                            if _BEFORE_ANNOTATION_RE.search(_decoration_zone(c_masked, m))
+                        ],
+                    )
+                )
         return cls(classes)
 
-    def ancestors(self, class_name: str) -> list[_JavaClass]:
+    def resolve(self, name: str, owner: _JavaClass | None = None) -> _JavaClass | None:
+        """A type name as written in ``owner`` → the repo class it denotes.
+
+        Dotted names must match a fully-qualified indexed class (an unknown
+        dotted name is external, never tail-matched — wrong-class risk). A
+        single import that points OUTSIDE the tree resolves to None without
+        falling back: the import is the author's answer.
+        """
+        if "." in name:
+            return self.by_fqn.get(name)
+        if owner is not None:
+            imported = owner.imports.get(name)
+            if imported is not None:
+                return self.by_fqn.get(imported)
+            same_package = self.by_fqn.get(f"{owner.package}.{name}" if owner.package else name)
+            if same_package is not None:
+                return same_package
+            for package in owner.wildcard_imports:
+                via_star = self.by_fqn.get(f"{package}.{name}")
+                if via_star is not None:
+                    return via_star
+        bucket = self.by_simple.get(name, [])
+        if len(bucket) == 1:
+            return bucket[0]
+        return None
+
+    def is_external(self, name: str, owner: _JavaClass) -> bool:
+        """True when ``owner`` imports ``name`` from outside the tree —
+        known-external (RestAssured, JDBC, JUnit…), silent by knowledge."""
+        imported = owner.imports.get(name)
+        return imported is not None and imported not in self.by_fqn
+
+    def ambiguity(self, name: str) -> int:
+        return len(self.by_simple.get(name, []))
+
+    def ancestors(self, java_class: _JavaClass) -> list[_JavaClass]:
         """The class followed by its ``extends`` chain (in-repo classes only)."""
         chain: list[_JavaClass] = []
         seen: set[str] = set()
-        current: str | None = class_name
-        while current and current not in seen:
-            seen.add(current)
-            java_class = self.classes.get(current)
-            if java_class is None:
-                break
-            chain.append(java_class)
-            current = java_class.extends
+        current: _JavaClass | None = java_class
+        while current is not None and current.fqn not in seen:
+            seen.add(current.fqn)
+            chain.append(current)
+            current = self.resolve(current.extends, current) if current.extends else None
         return chain
 
     def lookup_method(
-        self, class_name: str, method_name: str
+        self, java_class: _JavaClass, method_name: str
     ) -> tuple[_JavaClass, _JavaMethod] | None:
         """Resolve a method against a class or anything it extends."""
-        chain = self.ancestors(class_name)
+        chain = self.ancestors(java_class)
         if method_name == "<init>":  # constructors are not inherited
             chain = chain[:1]
-        for java_class in chain:
-            method = java_class.methods.get(method_name)
+        for candidate in chain:
+            method = candidate.methods.get(method_name)
             if method is not None:
-                return java_class, method
+                return candidate, method
         return None
+
+
+def _top_level_class_decls(declscan: str) -> list[tuple[str, str | None, int, int]]:
+    """Every top-level (class, extends, start, end) in string-blanked text.
+
+    Nested declarations stay inside the enclosing class's slice (its method
+    scan already covers them); a file may hold several top-level classes.
+    """
+    decls: list[tuple[str, str | None, int, int]] = []
+    taken: list[tuple[int, int]] = []
+    for match in _CLASS_DECL_RE.finditer(declscan):
+        if any(start <= match.start() < end for start, end in taken):
+            continue
+        brace_at = declscan.find("{", match.end())
+        if brace_at == -1:
+            continue
+        body_end = _matching_brace(declscan, brace_at)
+        if body_end is None:
+            continue
+        header = _strip_generics(declscan[match.end() : brace_at])
+        extends_match = _EXTENDS_RE.search(header)
+        decls.append(
+            (
+                match.group(1),
+                extends_match.group(1) if extends_match else None,
+                match.start(),
+                body_end + 1,
+            )
+        )
+        taken.append((match.start(), body_end + 1))
+    return decls
+
+
+def _strip_generics(header: str) -> str:
+    """``Foo<T extends Bar<T>> extends Base`` → ``Foo extends Base``."""
+    out: list[str] = []
+    depth = 0
+    for char in header:
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(char)
+    return "".join(out)
+
+
+def _decoration_zone(class_masked: str, method: _JavaMethod) -> str:
+    """The annotation zone of a method: above the signature (after the previous
+    member's closing brace) plus the signature's own first line — one-line
+    forms like ``@Xray(...) public void t() {`` are consumed into the match."""
+    preamble = class_masked[max(0, method.start - 400) : method.start]
+    first_line = method.masked.split("\n", 1)[0]
+    return preamble.rsplit("}", 1)[-1] + "\n" + first_line
 
 
 def _simple_type(raw: str) -> str:
@@ -456,7 +647,7 @@ def _split_methods(
     for match in _METHOD_SIG_RE.finditer(masked):
         add(match.group(2), match.group(3), match.group(1), match.start(), match.end() - 1)
     ctor_re = re.compile(
-        r'^[ \t]*(?:(?:public|protected|private)\s+)*'
+        r'^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]+)*(?:(?:public|protected|private)\s+)*'
         + re.escape(class_name)
         + r'\s*\(([^)]*)\)\s*\{',
         re.M,
@@ -490,8 +681,8 @@ def _class_fields(masked: str, spans: list[tuple[int, int]]) -> dict[str, str]:
 # --- locator extraction ----------------------------------------------------------
 
 
-def _split_top_level_plus(expr: str) -> list[str]:
-    """Split a Java expression on ``+`` outside strings/parens (concat folding)."""
+def _split_top_level(expr: str, separator: str) -> list[str]:
+    """Split a Java expression on ``separator`` outside strings/parens."""
     parts: list[str] = []
     depth = 0
     in_string: str | None = None
@@ -516,7 +707,7 @@ def _split_top_level_plus(expr: str) -> list[str]:
         elif char in ")>":
             depth -= 1
             current += char
-        elif char == "+" and depth == 0:
+        elif char == separator and depth == 0:
             parts.append(current)
             current = ""
         else:
@@ -526,45 +717,82 @@ def _split_top_level_plus(expr: str) -> list[str]:
     return parts
 
 
-def _resolve_string_expr(expr: str, owner: _JavaClass, index: JavaIndex) -> str | None:
-    """Fold a locator argument to its literal value, or None if not static.
+def _resolve_string_expr(
+    expr: str, owner: _JavaClass, index: JavaIndex
+) -> tuple[str, bool] | None:
+    """Fold a locator argument to (literal value, is_template), or None.
 
     Handles ``"literal"``, ``CONST`` (owner class + extends chain + static
-    imports), ``Other.CONST`` and ``+`` concatenations of resolvable parts.
+    imports), ``Other.CONST``, ``+`` concatenations, and dynamic SKELETONS:
+    ``String.format(FMT, …)`` keeps its ``%s`` markers, and a concatenated
+    variable/parameter becomes a ``{name}`` placeholder (lowercase identifiers
+    only — by Java convention those are variables; an unresolvable UPPER_CASE
+    name is a constant we failed to find and must stay unresolved, never
+    guessed). A value that is ONLY placeholders carries no information and
+    resolves to None.
     """
+    expr = expr.strip()
+    format_match = _FORMAT_OPEN_RE.match(expr)
+    if format_match:
+        close = _matching_paren(expr, format_match.end() - 1)
+        if close is None or expr[close + 1 :].strip():
+            return None
+        args = _split_top_level(expr[format_match.end() : close], ",")
+        if not args or not args[0].strip():
+            return None
+        skeleton = _resolve_string_expr(args[0], owner, index)
+        if skeleton is None:
+            return None
+        value = skeleton[0]
+        if not _FORMAT_MARK_RE.sub("", value).strip():
+            return None  # pure "%s" — no information
+        return value, True
+
     resolved: list[str] = []
-    for part in _split_top_level_plus(expr):
+    is_template = False
+    for part in _split_top_level(expr, "+"):
         part = part.strip()
+        if part.startswith("this."):
+            part = part[len("this.") :].strip()
         literal = re.fullmatch(r'"((?:[^"\\]|\\.)*)"', part)
         if literal:
             resolved.append(literal.group(1))
             continue
         if re.fullmatch(r"\w+", part):
             value = _lookup_const(part, owner, index)
-            if value is None:
-                return None
-            resolved.append(value)
+            if value is not None:
+                resolved.append(value)
+            elif part[0].islower() or part[0] == "_":
+                resolved.append("{" + part + "}")  # a variable/parameter by convention
+                is_template = True
+            else:
+                return None  # an UPPER_CASE constant we failed to resolve
             continue
         qualified = re.fullmatch(r"(\w+)\.(\w+)", part)
         if qualified:
-            other = index.classes.get(qualified.group(1))
+            other = index.resolve(qualified.group(1), owner)
             value = other.consts.get(qualified.group(2)) if other else None
             if value is None:
                 return None
             resolved.append(value)
             continue
         return None
-    return "".join(resolved)
+    value = "".join(resolved)
+    if is_template and not _PLACEHOLDER_RE.sub("", value).strip():
+        return None  # nothing but placeholders — no information
+    if _FORMAT_MARK_RE.search(value):
+        is_template = True  # a const that is itself a format skeleton
+    return value, is_template
 
 
 def _lookup_const(name: str, owner: _JavaClass, index: JavaIndex) -> str | None:
-    for java_class in index.ancestors(owner.name):
+    for java_class in index.ancestors(owner):
         if name in java_class.consts:
             return java_class.consts[name]
     imported_from = owner.static_member_imports.get(name)
-    search = [imported_from] if imported_from else owner.static_star_imports
-    for class_name in search:
-        java_class = index.classes.get(class_name or "")
+    owners = [imported_from] if imported_from else owner.static_star_imports
+    for owner_fqn in owners:
+        java_class = index.by_fqn.get(owner_fqn or "")
         if java_class and name in java_class.consts:
             return java_class.consts[name]
     return None
@@ -598,17 +826,19 @@ def _locators_in(
             field_match = re.search(r"By\s+(\w+)\s*=\s*By\.\w+\s*\(\Z", prefix)
             if field_match:
                 declared_in = f"{owner.name}.{field_match.group(1)}"
-        value = _resolve_string_expr(expr, owner, index)
-        if value is None:
+        resolved = _resolve_string_expr(expr, owner, index)
+        if resolved is None:
             unresolved.append(
                 f"{declared_in}: By.{by_method}({expr}) — value not statically resolvable"
             )
         else:
+            value, is_template = resolved
             locators.append(
                 ExtractedLocator(
                     kind=_BY_KIND[by_method],
                     value=f'By.{by_method}("{value}")',
                     declared_in=declared_in,
+                    template=is_template,
                 )
             )
     return locators, unresolved
@@ -655,18 +885,20 @@ def _findby_locators(
                     break
         if by_method is None:
             continue
-        value = _resolve_string_expr(value_expr, java_class, index)
-        if value is None:
+        resolved = _resolve_string_expr(value_expr, java_class, index)
+        if resolved is None:
             unresolved.append(
                 f"{declared_in}: @FindBy {by_method}({value_expr}) — "
                 "value not statically resolvable"
             )
         else:
+            value, is_template = resolved
             locators.append(
                 ExtractedLocator(
                     kind=_BY_KIND[by_method],
                     value=f'By.{by_method}("{value}")',
                     declared_in=declared_in,
+                    template=is_template,
                 )
             )
     return locators, unresolved
@@ -679,20 +911,19 @@ def extract_java_tests(
     root: Path,
     index: JavaIndex | None = None,
     *,
-    helper_depth: int = DEFAULT_HELPER_DEPTH,
+    helper_depth: int | None = DEFAULT_HELPER_DEPTH,
     helper_char_cap: int = DEFAULT_HELPER_CHAR_CAP,
 ) -> list[TestBundle]:
     """One bundle per ``@Xray``-annotated method found under ``root``."""
     index = index or JavaIndex.build(root)
+    depth = _UNBOUNDED_DEPTH if helper_depth is None else max(1, helper_depth)
     bundles: list[TestBundle] = []
-    for java_class in index.classes.values():
+    for java_class in index.all:
         for method_name, method in java_class.methods.items():
             # The annotation sits in the decoration zone directly above the
-            # signature — after the previous member's closing brace — so a key
-            # mentioned inside another method's body can never be picked up.
-            preamble = java_class.masked[max(0, method.start - 400) : method.start]
-            decoration_zone = preamble.rsplit("}", 1)[-1]
-            annotation = XRAY_RE.search(decoration_zone)
+            # signature (or on the signature line itself) — a key mentioned
+            # inside another method's body can never be picked up.
+            annotation = XRAY_RE.search(_decoration_zone(java_class.masked, method))
             if not annotation:
                 continue
             bundle = TestBundle(
@@ -704,7 +935,7 @@ def extract_java_tests(
                 code=f"// {java_class.rel}\n{method.source}",
             )
             _resolve_helpers(
-                bundle, method, java_class, index, depth=helper_depth, char_cap=helper_char_cap
+                bundle, method, java_class, index, depth=depth, char_cap=helper_char_cap
             )
             _collect_java_urls(bundle, method.masked)
             bundles.append(bundle)
@@ -715,10 +946,11 @@ class _Resolution:
     """Mutable state of one bundle's helper walk (dedup, budget, flags)."""
 
     def __init__(self, char_cap: int) -> None:
-        self.included: set[tuple[str, str]] = set()
-        self.visited_classes: set[str] = set()
+        self.included: set[tuple[str, str]] = set()  # (fqn, method) already snippeted
+        self.visited_classes: set[str] = set()  # fqns whose locator fields are harvested
         self.flags: list[str] = []
         self.flagged: set[str] = set()
+        self.unresolved_count = 0
         self.char_cap = char_cap
         self.used = 0
 
@@ -726,6 +958,8 @@ class _Resolution:
         if text not in self.flagged:
             self.flagged.add(text)
             self.flags.append(text)
+            if text.startswith("unresolved:"):
+                self.unresolved_count += 1
 
     def fits(self, snippet: str) -> bool:
         if self.used + len(snippet) > self.char_cap:
@@ -734,49 +968,99 @@ class _Resolution:
         return True
 
 
+def _lifecycle_entry_points(
+    test_class: _JavaClass, index: JavaIndex
+) -> list[tuple[_JavaClass, _JavaMethod]]:
+    """The ``@Before*`` methods that run before a test of ``test_class``,
+    parent-first (JUnit/TestNG execute the base class's setup first). Login and
+    navigation routinely live here — they are part of every test's real flow."""
+    entry_points: list[tuple[_JavaClass, _JavaMethod]] = []
+    for java_class in reversed(index.ancestors(test_class)):
+        for name in java_class.lifecycle_methods:
+            method = java_class.methods.get(name)
+            if method is not None:
+                entry_points.append((java_class, method))
+    return entry_points
+
+
 def _resolve_helpers(
     bundle: TestBundle,
     test_method: _JavaMethod,
     test_class: _JavaClass,
     index: JavaIndex,
-    depth: int = DEFAULT_HELPER_DEPTH,
+    depth: int,
     char_cap: int = DEFAULT_HELPER_CHAR_CAP,
 ) -> None:
-    """Bounded resolution of the test's calls into repo helpers (plan §5.2).
+    """Follow the test's execution path into repo helpers (plan §5.2).
 
+    ``@Before*`` lifecycle methods are walked first (they run first), then the
+    test's own calls, transitively to ``depth`` hops (unbounded by default).
     The snippet budget only limits helper TEXT handed to the Distiller —
     traversal, locator extraction and unresolved-flagging always run to the
     end, so a fat early helper can no longer starve later classes.
     """
     state = _Resolution(char_cap)
-    queue: list[tuple[str, str, int]] = [(test_class.name, "*", depth)]
-    queue.extend(_calls_of(test_method, test_class, index, depth, state))
+    queue: deque[tuple[str, str, int]] = deque()
+    for ancestor in index.ancestors(test_class):
+        queue.append((ancestor.fqn, "*", depth))
+    for setup_class, setup_method in _lifecycle_entry_points(test_class, index):
+        key = (setup_class.fqn, setup_method.name)
+        if key in state.included:
+            continue
+        state.included.add(key)
+        label = f"{setup_class.name}.{setup_method.name} ({setup_class.rel})"
+        snippet = f"// setup (@Before): {label} — runs before the test\n{setup_method.source}"
+        if state.fits(snippet):
+            bundle.helper_snippets.append(snippet)
+        else:
+            state.flag(f"truncated:setup {label} omitted (helper budget reached)")
+        bundle.helper_refs.append(f"setup:{label}")
+        bundle.lifecycle_refs.append(label)
+        _method_locators(
+            bundle, setup_method, setup_class, index,
+            f"{setup_class.name}#{setup_method.name}",
+        )
+        _collect_java_urls(bundle, setup_method.masked)
+        queue.extend(
+            (fqn, name, depth)
+            for fqn, name in _calls_of(setup_method, setup_class, index, state)
+        )
+    queue.extend(
+        (fqn, name, depth) for fqn, name in _calls_of(test_method, test_class, index, state)
+    )
     _method_locators(
         bundle, test_method, test_class, index, f"{test_class.name}#{bundle.test_name}"
     )
 
     while queue:
-        class_name, method_name, remaining = queue.pop(0)
-        java_class = index.classes.get(class_name)
-        if java_class is None:
-            state.flag(f"unresolved:{class_name}.{method_name}")
+        fqn, method_name, remaining = queue.popleft()
+        java_class = index.by_fqn.get(fqn)
+        if java_class is None:  # push-side resolution makes this unreachable; belt+braces
+            state.flag(f"unresolved:{fqn}.{method_name}")
             continue
-        if class_name not in state.visited_classes:
-            state.visited_classes.add(class_name)
+        if fqn not in state.visited_classes:
+            state.visited_classes.add(fqn)
             _visit_class(bundle, java_class, index, state)
+            # A class's locator fields include what it inherits — harvest the
+            # whole extends chain, not just the class the call resolved into.
+            queue.extend(
+                (ancestor.fqn, "*", remaining)
+                for ancestor in index.ancestors(java_class)[1:]
+                if ancestor.fqn not in state.visited_classes
+            )
         if method_name == "*":
             continue
-        resolved = index.lookup_method(class_name, method_name)
+        resolved = index.lookup_method(java_class, method_name)
         if resolved is None:
-            state.flag(f"unresolved:{class_name}.{method_name}")
+            state.flag(f"unresolved:{java_class.name}.{method_name}")
             continue
         defining, method = resolved
-        key = (defining.name, method_name)
+        key = (defining.fqn, method_name)
         if key in state.included:
             continue
         state.included.add(key)
-        if defining.name not in state.visited_classes:
-            state.visited_classes.add(defining.name)
+        if defining.fqn not in state.visited_classes:
+            state.visited_classes.add(defining.fqn)
             _visit_class(bundle, defining, index, state)
 
         label = "<init>" if method_name == "<init>" else method_name
@@ -792,8 +1076,12 @@ def _resolve_helpers(
         _method_locators(bundle, method, defining, index, f"{defining.name}#{label}")
         _collect_java_urls(bundle, method.masked)
         if remaining > 1:
-            queue.extend(_calls_of(method, defining, index, remaining - 1, state))
+            queue.extend(
+                (next_fqn, next_name, remaining - 1)
+                for next_fqn, next_name in _calls_of(method, defining, index, state)
+            )
 
+    bundle.unresolved_count = state.unresolved_count
     flags = state.flags
     if len(flags) > _MAX_UNRESOLVED_FLAGS:
         overflow = len(flags) - _MAX_UNRESOLVED_FLAGS
@@ -817,7 +1105,11 @@ def _visit_class(
         u for u in unresolved if u not in bundle.unresolved_locators
     )
     if added:
-        rendered = "\n".join(f"By {loc.declared_in.split('.')[-1]} = {loc.value};" for loc in added)
+        rendered = "\n".join(
+            f"By {loc.declared_in.split('.')[-1]} = {loc.value};"
+            + ("  // template — runtime-filled parts" if loc.template else "")
+            for loc in added
+        )
         snippet = f"// locator fields of {java_class.name} ({java_class.rel})\n{rendered}"
         if state.fits(snippet):
             bundle.helper_snippets.append(snippet)
@@ -860,7 +1152,7 @@ def _add_locators(bundle: TestBundle, locators: list[ExtractedLocator]) -> list[
 def _var_types_for(method: _JavaMethod, owner: _JavaClass, index: JavaIndex) -> dict[str, str]:
     """Receiver name → simple type, from every binding source we can see."""
     var_types: dict[str, str] = {}
-    for java_class in reversed(index.ancestors(owner.name)):
+    for java_class in reversed(index.ancestors(owner)):
         var_types.update(java_class.fields)
         var_types.update(java_class.assigned_types)
     var_types.update(method.params)
@@ -876,86 +1168,132 @@ def _calls_of(
     method: _JavaMethod,
     owner: _JavaClass,
     index: JavaIndex,
-    depth: int,
     state: _Resolution,
-) -> list[tuple[str, str, int]]:
-    """(class, method, depth) targets this method calls, heuristically resolved.
+) -> list[tuple[str, str]]:
+    """(class fqn, method) targets this method calls, heuristically resolved.
 
-    Every receiver we cannot type and every call we cannot place is FLAGGED via
-    ``state`` — resolution gaps must be visible in the review output, never
-    silent (the page-object layer lives behind exactly these calls).
+    Targets are resolved import/package-aware at the CALL SITE (the caller's
+    file knows which ``LoginPage`` it means). Every receiver we cannot type and
+    every call we cannot place is FLAGGED via ``state`` — resolution gaps must
+    be visible in the review output, never silent — EXCEPT names imported from
+    outside the tree (RestAssured, JDBC, JUnit…), which are known-external.
+    Deterministic per (owner, method), so results are cached on the index.
     """
+    cache_key = (owner.fqn, method.name)
+    cached = index.calls_cache.get(cache_key)
+    if cached is not None:
+        cached_targets, cached_flags = cached
+        for text in cached_flags:
+            state.flag(text)
+        return list(cached_targets)
+
     masked = method.masked
     var_types = _var_types_for(method, owner, index)
-    targets: list[tuple[str, str, int]] = []
+    targets: list[tuple[str, str]] = []
+    flags: list[str] = []
+
+    def flag(text: str) -> None:
+        if text not in flags:
+            flags.append(text)
 
     def element_field(name: str) -> bool:
-        return any(name in c.element_fields for c in index.ancestors(owner.name))
+        return any(name in c.element_fields for c in index.ancestors(owner))
 
-    def push(class_name: str, method_name: str) -> str | None:
-        """Queue a call target; returns its return type for chain-following."""
-        targets.append((class_name, method_name, depth))
-        resolved = index.lookup_method(class_name, method_name)
-        return resolved[1].return_type if resolved else None
+    def push(java_class: _JavaClass, method_name: str) -> _JavaClass | None:
+        """Queue a call target; returns its return type's class for chains."""
+        targets.append((java_class.fqn, method_name))
+        resolved = index.lookup_method(java_class, method_name)
+        if resolved is None:
+            return None
+        defining, target = resolved
+        # The return type is written in the DEFINING class's file — resolve it
+        # against that file's imports/package.
+        return index.resolve(target.return_type, defining) if target.return_type else None
 
-    def follow_chain(close_at: int, current_type: str | None) -> None:
+    def follow_chain(close_at: int, current: _JavaClass | None) -> None:
         hops = 0
         position = close_at + 1
-        while current_type and current_type in index.classes and hops < _CHAIN_HOP_LIMIT:
+        while current is not None and hops < _CHAIN_HOP_LIMIT:
             nxt = _CHAIN_NEXT_RE.match(masked, position)
             if not nxt:
                 return
-            current_type = push(current_type, nxt.group(1))
+            current = push(current, nxt.group(1))
             close = _matching_paren(masked, nxt.end() - 1)
             if close is None:
                 return
             position = close + 1
             hops += 1
 
+    def resolve_or_flag(name: str, method_name: str) -> _JavaClass | None:
+        java_class = index.resolve(name, owner)
+        if java_class is not None:
+            return java_class
+        if name in _KNOWN_RECEIVERS or name in _ELEMENT_TYPES or index.is_external(name, owner):
+            return None
+        if index.ambiguity(name) > 1:
+            flag(
+                f"unresolved:{name}.{method_name} (ambiguous: "
+                f"{index.ambiguity(name)} classes named {name})"
+            )
+        else:
+            flag(f"unresolved:{name}.{method_name}")
+        return None
+
     # new X(...) — visit the class (locator fields), include its constructor,
     # and follow any fluent chain hanging off the expression.
     for match in _NEW_RE.finditer(masked):
-        class_name = match.group(1)
-        if class_name not in index.classes:
+        java_class = index.resolve(match.group(1), owner)
+        if java_class is None:
             continue
-        targets.append((class_name, "*", depth))
-        if "<init>" in index.classes[class_name].methods:
-            targets.append((class_name, "<init>", depth))
+        targets.append((java_class.fqn, "*"))
+        if "<init>" in java_class.methods:
+            targets.append((java_class.fqn, "<init>"))
         close = _matching_paren(masked, match.end() - 1)
         if close is not None:
-            follow_chain(close, class_name)
+            follow_chain(close, java_class)
 
     for match in _RECEIVER_CALL_RE.finditer(masked):
         receiver, method_name = match.group(1), match.group(2)
         close = _matching_paren(masked, match.end() - 1)
         if receiver in ("this", "super"):
-            start_class = owner.extends if receiver == "super" else owner.name
-            if start_class and index.lookup_method(start_class, method_name):
-                return_type = push(start_class, method_name)
+            start: _JavaClass | None = owner
+            if receiver == "super":
+                start = index.resolve(owner.extends, owner) if owner.extends else None
+            if start is not None and index.lookup_method(start, method_name):
+                return_class = push(start, method_name)
                 if close is not None:
-                    follow_chain(close, return_type)
+                    follow_chain(close, return_class)
             else:
-                state.flag(f"unresolved:{owner.name}.{method_name}")
+                flag(f"unresolved:{owner.name}.{method_name}")
             continue
         if receiver[0].isupper():
-            if receiver in index.classes:
-                return_type = push(receiver, method_name)
+            if receiver in var_types:  # an upper-cased variable shadows the class namespace
+                continue
+            java_class = resolve_or_flag(receiver, method_name)
+            if java_class is not None:
+                return_class = push(java_class, method_name)
                 if close is not None:
-                    follow_chain(close, return_type)
-            elif receiver not in _KNOWN_RECEIVERS and receiver not in var_types:
-                state.flag(f"unresolved:{receiver}.{method_name}")
+                    follow_chain(close, return_class)
             continue
         receiver_type = var_types.get(receiver)
         if receiver_type is not None:
-            if receiver_type in index.classes:
-                return_type = push(receiver_type, method_name)
+            if receiver_type in _ELEMENT_TYPES or receiver_type in _KNOWN_RECEIVERS:
+                continue  # framework action on a JDK/Selenium-typed receiver
+            java_class = index.resolve(receiver_type, owner)
+            if java_class is not None:
+                return_class = push(java_class, method_name)
                 if close is not None:
-                    follow_chain(close, return_type)
-            # else: JDK/Selenium-typed receiver — framework action, silently fine
+                    follow_chain(close, return_class)
+            elif not index.is_external(receiver_type, owner) and index.ambiguity(receiver_type) > 1:
+                flag(
+                    f"unresolved:{receiver}.{method_name} (receiver type {receiver_type} "
+                    f"ambiguous: {index.ambiguity(receiver_type)} classes)"
+                )
+            # else: imported-external or unknown framework type — silently fine
             continue
         if element_field(receiver):
             continue
-        state.flag(f"unresolved:{receiver}.{method_name} (untyped receiver)")
+        flag(f"unresolved:{receiver}.{method_name} (untyped receiver)")
 
     for match in _BARE_CALL_RE.finditer(masked):
         name = match.group(1)
@@ -969,21 +1307,27 @@ def _calls_of(
             r"\s*(?:throws[\w, .]+)?\s*\{", masked[sig_close + 1 :]
         ):
             continue  # `name(args) {` is a definition (the method's own signature), not a call
-        own = index.lookup_method(owner.name, name)
+        own = index.lookup_method(owner, name)
         if own is not None:
-            return_type = push(own[0].name, name)
+            return_class = push(owner, name)
             close = _matching_paren(masked, match.end() - 1)
             if close is not None:
-                follow_chain(close, return_type)
+                follow_chain(close, return_class)
             continue
         imported_from = owner.static_member_imports.get(name)
         if imported_from is not None:
-            if imported_from in index.classes:
-                push(imported_from, name)
+            imported_class = index.by_fqn.get(imported_from)
+            if imported_class is not None:
+                push(imported_class, name)
             # else: static import from outside the repo (JUnit asserts, …) — known-external
             continue
         star_owner = next(
-            (c for c in owner.static_star_imports if index.lookup_method(c, name)), None
+            (
+                c
+                for fqn in owner.static_star_imports
+                if (c := index.by_fqn.get(fqn)) and index.lookup_method(c, name)
+            ),
+            None,
         )
         if star_owner is not None:
             push(star_owner, name)
@@ -992,9 +1336,22 @@ def _calls_of(
             continue  # plausibly an external static-star import (assertions, matchers)
         if name in var_types or element_field(name):
             continue  # a lambda/functional field, not a helper
-        state.flag(f"unresolved:{name}() (no matching method found)")
+        flag(f"unresolved:{name}() (no matching method found)")
 
-    return targets
+    # Qualified FIELD access (`Locators.SAVE`) — no call to chase, but the class
+    # holds locators: visit it. Static-import owners in the tree likewise.
+    for match in _FIELD_ACCESS_RE.finditer(masked):
+        java_class = index.resolve(match.group(1), owner)
+        if java_class is not None:
+            targets.append((java_class.fqn, "*"))
+    for owner_fqn in {*owner.static_member_imports.values(), *owner.static_star_imports}:
+        if owner_fqn in index.by_fqn:
+            targets.append((owner_fqn, "*"))
+
+    index.calls_cache[cache_key] = (targets, flags)
+    for text in flags:
+        state.flag(text)
+    return list(targets)
 
 
 def _collect_java_urls(bundle: TestBundle, source: str) -> None:

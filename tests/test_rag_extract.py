@@ -189,14 +189,29 @@ public class T {
         [bundle] = extract_java_tests(tmp_path)
         assert "unresolved:mystery.doThing (untyped receiver)" in bundle.helper_refs
 
-    def test_dynamic_locator_is_flagged_never_guessed(self, tmp_path: Path) -> None:
+    def test_dynamic_locator_resolves_to_template_or_stays_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        """Static skeletons become TEMPLATE locators ({name}/%s kept); anything
+        beyond that (method-call args, unknown UPPER consts) stays unresolved —
+        flagged, never guessed."""
         (tmp_path / "RowsPage.java").write_text(
             """
 package t;
 public class RowsPage {
     private static final String ROW_TPL = "//table//tr[";
+    private static final String CELL_FMT = "//tr[%s]/td[%s]";
     public void openRow(int index) {
         driver.findElement(By.xpath(ROW_TPL + index + "]")).click();
+    }
+    public void openCell(int row, int col) {
+        driver.findElement(By.xpath(String.format(CELL_FMT, row, col))).click();
+    }
+    public void openComputed(int index) {
+        driver.findElement(By.xpath(buildRow(index))).click();
+    }
+    public void openLost() {
+        driver.findElement(By.id(UNKNOWN_CONST)).click();
     }
 }
 """
@@ -209,13 +224,22 @@ public class T {
     public void t() {
         RowsPage rows = new RowsPage();
         rows.openRow(2);
+        rows.openCell(1, 2);
+        rows.openComputed(3);
+        rows.openLost();
     }
 }
 """
         )
         [bundle] = extract_java_tests(tmp_path)
-        assert any("By.xpath(ROW_TPL" in u for u in bundle.unresolved_locators)
-        assert not any("ROW_TPL" in loc.value for loc in bundle.locators)
+        by_value = {loc.value: loc for loc in bundle.locators}
+        concat = by_value.get('By.xpath("//table//tr[{index}]")')
+        assert concat is not None and concat.template
+        formatted = by_value.get('By.xpath("//tr[%s]/td[%s]")')
+        assert formatted is not None and formatted.template
+        assert any("By.xpath(buildRow(index))" in u for u in bundle.unresolved_locators)
+        assert any("By.id(UNKNOWN_CONST)" in u for u in bundle.unresolved_locators)
+        assert not any("UNKNOWN_CONST" in loc.value for loc in bundle.locators)
 
     def test_qualified_and_imported_constants_resolve(self, tmp_path: Path) -> None:
         (tmp_path / "Ids.java").write_text(
@@ -313,6 +337,276 @@ public class T {
         assert 'By.id("b-field")' in values  # extraction survived the budget
         assert any(r.startswith("truncated:") for r in bundle.helper_refs)
         assert bundle.helper_snippets == []  # nothing fit the 10-char cap
+
+
+class TestExecutionPathTraversal:
+    """The 2026-07-08 real-corpus gaps: the extractor must FOLLOW the test's
+    execution path — @Before lifecycle, shared flow classes, base wrappers,
+    locator-repository classes — wherever it leads (unbounded by default)."""
+
+    def test_before_lifecycle_login_is_part_of_the_bundle(self, tmp_path: Path) -> None:
+        """Login lives in @BeforeMethod on a base test class — the dominant
+        real-suite shape. Its body, locators and URL must land in the bundle."""
+        (tmp_path / "LoginPage.java").write_text(
+            """
+package t;
+public class LoginPage {
+    public static final By EMAIL = By.id("login-email");
+    public static final By PASSWORD = By.id("login-password");
+    public static final By SUBMIT = By.id("login-submit");
+    public void loginAs(String email, String password) {
+        driver.findElement(EMAIL).sendKeys(email);
+        driver.findElement(PASSWORD).sendKeys(password);
+        driver.findElement(SUBMIT).click();
+    }
+}
+"""
+        )
+        (tmp_path / "BaseTest.java").write_text(
+            """
+package t;
+import org.openqa.selenium.WebDriver;
+public class BaseTest {
+    protected WebDriver driver;
+    protected LoginPage loginPage;
+    @BeforeMethod
+    public void setUp() {
+        driver.get("http://localhost:3000/login");
+        loginPage = new LoginPage(driver);
+        loginPage.loginAs("demo@demo.test", "pw");
+    }
+}
+"""
+        )
+        (tmp_path / "NoteTest.java").write_text(
+            """
+package t;
+public class NoteTest extends BaseTest {
+    @Xray(testCase = "QA-10")
+    @Test
+    public void createsNote() {
+        int x = 1;
+    }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert any("BaseTest.setUp" in ref for ref in bundle.lifecycle_refs)
+        assert any(
+            s.startswith("// setup (@Before): BaseTest.setUp") for s in bundle.helper_snippets
+        )
+        assert any("LoginPage.loginAs" in s for s in bundle.helper_snippets)
+        values = {loc.value for loc in bundle.locators}
+        assert {
+            'By.id("login-email")',
+            'By.id("login-password")',
+            'By.id("login-submit")',
+        } <= values
+        assert "http://localhost:3000/login" in bundle.urls
+
+    def test_default_traversal_reaches_the_whole_chain_and_depth_still_bounds(
+        self, tmp_path: Path
+    ) -> None:
+        """test → flow → page → base wrapper (the click-helper-used-everywhere
+        shape): default traversal reaches the deepest locator; --helper-depth 2
+        still bounds the walk."""
+        (tmp_path / "FlowA.java").write_text(
+            "package t;\npublic class FlowA {\n"
+            "    public void start() { new FlowB().mid(); }\n}\n"
+        )
+        (tmp_path / "FlowB.java").write_text(
+            "package t;\npublic class FlowB {\n"
+            "    public void mid() { new DeepPage().submit(); }\n}\n"
+        )
+        (tmp_path / "DeepPage.java").write_text(
+            """
+package t;
+public class DeepPage extends BaseWidget {
+    public static final By DEEP = By.id("deep-btn");
+    public void submit() { click(DEEP); }
+}
+"""
+        )
+        (tmp_path / "BaseWidget.java").write_text(
+            "package t;\npublic class BaseWidget {\n"
+            "    protected void click(By target) { driver.findElement(target).click(); }\n}\n"
+        )
+        (tmp_path / "T.java").write_text(
+            """
+package t;
+public class T {
+    @Xray(testCase = "QA-11")
+    public void t() { new FlowA().start(); }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert 'By.id("deep-btn")' in {loc.value for loc in bundle.locators}
+        assert any("BaseWidget.click" in s for s in bundle.helper_snippets)  # the wrapper body
+        [bounded] = extract_java_tests(tmp_path, helper_depth=2)
+        assert 'By.id("deep-btn")' not in {loc.value for loc in bounded.locators}
+
+    def test_field_access_only_locator_repository_is_visited(self, tmp_path: Path) -> None:
+        """`Locators.SAVE` is a field access, never a call — the class must be
+        visited anyway, or repository-style suites lose every locator."""
+        (tmp_path / "Locators.java").write_text(
+            'package t;\npublic class Locators {\n'
+            '    public static final By SAVE = By.id("save-btn");\n}\n'
+        )
+        (tmp_path / "T.java").write_text(
+            """
+package t;
+public class T {
+    @Xray(testCase = "QA-12")
+    public void t() {
+        driver.findElement(Locators.SAVE).click();
+    }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert 'By.id("save-btn")' in {loc.value for loc in bundle.locators}
+
+    def test_simple_name_collisions_resolve_via_imports(self, tmp_path: Path) -> None:
+        """Two suites, both with a LoginPage: the caller's import decides —
+        never last-indexed-wins. Without an import, the call is flagged
+        ambiguous instead of silently resolving to the wrong suite."""
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        (tmp_path / "a" / "LoginPage.java").write_text(
+            "package a.pages;\npublic class LoginPage {\n"
+            '    public static final By EMAIL = By.id("a-email");\n'
+            "    public void go() { int x = 1; }\n}\n"
+        )
+        (tmp_path / "b" / "LoginPage.java").write_text(
+            "package b.pages;\npublic class LoginPage {\n"
+            '    public static final By EMAIL = By.id("b-email");\n'
+            "    public void go() { int x = 1; }\n}\n"
+        )
+        (tmp_path / "T.java").write_text(
+            """
+package a.tests;
+import a.pages.LoginPage;
+public class T {
+    @Xray(testCase = "QA-13")
+    public void t() { new LoginPage().go(); }
+}
+"""
+        )
+        (tmp_path / "T2.java").write_text(
+            """
+package c.tests;
+public class T2 {
+    @Xray(testCase = "QA-14")
+    public void t2() { LoginPage.open(); }
+}
+"""
+        )
+        bundles = {b.xray_key: b for b in extract_java_tests(tmp_path)}
+        values = {loc.value for loc in bundles["QA-13"].locators}
+        assert 'By.id("a-email")' in values
+        assert 'By.id("b-email")' not in values
+        assert any(
+            "ambiguous: 2 classes named LoginPage" in ref
+            for ref in bundles["QA-14"].helper_refs
+        )
+
+    def test_calls_into_imported_external_libraries_stay_silent(self, tmp_path: Path) -> None:
+        """RestAssured/JDBC-style calls are known-external (the import points
+        outside the tree) — they must not pollute the unresolved stats."""
+        (tmp_path / "T.java").write_text(
+            """
+package t;
+import io.restassured.RestAssured;
+public class T {
+    @Xray(testCase = "QA-15")
+    public void t() {
+        RestAssured.given();
+    }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert not any("RestAssured" in ref for ref in bundle.helper_refs)
+        assert bundle.unresolved_count == 0
+
+    def test_generic_and_annotated_one_liner_signatures_parse(self, tmp_path: Path) -> None:
+        """`public <T> T pick(...)` and `@Override public void open() {` used to
+        be invisible to the signature regex — every call into them a false
+        `unresolved:`."""
+        (tmp_path / "Util.java").write_text(
+            "package t;\npublic class Util {\n"
+            "    public <T> T pick(T value) { return value; }\n}\n"
+        )
+        (tmp_path / "Nav.java").write_text(
+            "package t;\npublic class Nav {\n"
+            '    @Override public void open() { driver.get("http://localhost/open"); }\n}\n'
+        )
+        (tmp_path / "T.java").write_text(
+            """
+package t;
+public class T {
+    @Xray(testCase = "QA-16")
+    public void t() {
+        Util u = new Util();
+        u.pick("x");
+        new Nav().open();
+    }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        refs = " | ".join(bundle.helper_refs)
+        assert "Util.pick" in refs and "unresolved:Util.pick" not in refs
+        assert "Nav.open" in refs and "unresolved:Nav.open" not in refs
+        assert "http://localhost/open" in bundle.urls
+
+    def test_multiple_top_level_classes_in_one_file_are_indexed(self, tmp_path: Path) -> None:
+        (tmp_path / "Pages.java").write_text(
+            """
+package t;
+class HeaderPage {
+    public static final By LOGO = By.id("logo");
+    public void go() { int x = 1; }
+}
+class FooterPage {
+    public static final By LINK = By.id("footer-link");
+    public void go() { int x = 1; }
+}
+"""
+        )
+        (tmp_path / "T.java").write_text(
+            """
+package t;
+public class T {
+    @Xray(testCase = "QA-17")
+    public void t() { new FooterPage().go(); }
+}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        values = {loc.value for loc in bundle.locators}
+        assert 'By.id("footer-link")' in values  # the SECOND class in the file
+        assert 'By.id("logo")' not in values  # unreferenced sibling stays out
+
+    def test_unresolved_count_is_not_display_capped(self, tmp_path: Path) -> None:
+        calls = "\n        ".join(f"u{i}.act();" for i in range(35))
+        (tmp_path / "T.java").write_text(
+            f"""
+package t;
+public class T {{
+    @Xray(testCase = "QA-18")
+    public void t() {{
+        {calls}
+    }}
+}}
+"""
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert bundle.unresolved_count == 35
+        shown = [r for r in bundle.helper_refs if r.startswith("unresolved:")]
+        assert len(shown) == 31  # 30 + the "… and N more" line
+        assert any("and 5 more" in r for r in shown)
 
 
 class TestPlaywrightExtraction:

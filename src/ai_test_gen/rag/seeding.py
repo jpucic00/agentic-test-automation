@@ -138,7 +138,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--helper-depth",
         type=int,
         default=DEFAULT_HELPER_DEPTH,
-        help=f"How many call hops to follow into helpers (default {DEFAULT_HELPER_DEPTH})",
+        help="Bound the call-graph hops followed into helpers "
+        "(default: unlimited — the whole in-repo call graph, deduplicated)",
     )
     parser.add_argument(
         "--helper-cap",
@@ -162,7 +163,7 @@ def run_seeding(
     limit: int | None = None,
     force: bool = False,
     no_fetch: bool = False,
-    helper_depth: int = DEFAULT_HELPER_DEPTH,
+    helper_depth: int | None = DEFAULT_HELPER_DEPTH,
     helper_char_cap: int = DEFAULT_HELPER_CHAR_CAP,
 ) -> SeedStats:
     project = project.strip().upper()
@@ -225,9 +226,7 @@ def run_seeding(
         stats.distilled += 1
         if not record.selectors:
             stats.selectorless.append(record.title)
-        stats.unresolved_calls += sum(
-            1 for ref in bundle.helper_refs if ref.startswith("unresolved:")
-        )
+        stats.unresolved_calls += bundle.unresolved_count  # pre-display-cap, truthful
         stats.unresolved_locators += len(bundle.unresolved_locators)
         stats.dropped_selectors += len(dropped)
         miss_reason = case_misses.get(bundle.xray_key or "") if case is None else None
@@ -308,11 +307,12 @@ def _enforce_ground_truth(
         key = (loc.kind, loc.value)
         if key not in seen:
             seen.add(key)
+            note = "; template — placeholders filled at runtime" if loc.template else ""
             kept.append(
                 KBSelector(
                     kind=cast(SelectorKind, loc.kind),
                     value=loc.value,
-                    description=f"declared in {loc.declared_in}",
+                    description=f"declared in {loc.declared_in}{note}",
                 )
             )
     return kept, dropped
