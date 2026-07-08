@@ -620,3 +620,140 @@ class TestPlaywrightExtraction:
         assert "getByTestId('login-email')" in values.replace('"', "'")
         assert "http://localhost:3000/login" in bundle.urls
         assert bundle.code.strip()
+
+
+class TestTextBlockRobustness:
+    """Java text blocks (SQL/JSON in DB and API tests) must never desync the
+    scanners — on the real corpus that dropped ~half the discovered tests
+    (729 → 352) by swallowing whole classes."""
+
+    def test_json_text_block_does_not_swallow_the_class(self, tmp_path: Path) -> None:
+        (tmp_path / "ApiJsonTest.java").write_text(
+            '''
+package t;
+public class ApiJsonTest {
+    private static final String BODY = """
+        { "name": "it's a test", "tags": ["a", "b"], "nested": { "x": 1 } }
+        """;
+
+    @Xray(testCase = "QA-3")
+    public void createViaApi() {
+        given().body(BODY).post("/api/things");
+    }
+
+    @Xray(testCase = "QA-4")
+    public void uiChecksTheThing() {
+        driver.findElement(By.id("thing-row")).isDisplayed();
+    }
+}
+'''
+        )
+        bundles = extract_java_tests(tmp_path)
+        assert sorted(b.xray_key for b in bundles) == ["QA-3", "QA-4"]
+        ui = next(b for b in bundles if b.xray_key == "QA-4")
+        assert ("testid", 'By.id("thing-row")') in {
+            (loc.kind, loc.value) for loc in ui.locators
+        }
+
+    def test_sql_text_block_with_odd_quotes_and_braces(self, tmp_path: Path) -> None:
+        (tmp_path / "DbQueryTest.java").write_text(
+            '''
+package t;
+public class DbQueryTest {
+    private static final String COUNT_SQL = """
+        SELECT count(*) FROM "orders"
+        WHERE status = 'OPEN' AND payload::jsonb @> '{ "kind": "b2b" }'
+        """;
+
+    @Xray(testCase = "QA-2")
+    public void openOrdersMatchLedger() {
+        jdbc.queryForObject(COUNT_SQL, Integer.class);
+    }
+}
+'''
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert bundle.xray_key == "QA-2"
+
+    def test_second_top_level_class_after_text_block_holder(self, tmp_path: Path) -> None:
+        """A brace leaking from a text block must not make the next class
+        'nested' — it is a separate top-level class with its own tests."""
+        (tmp_path / "TwoClasses.java").write_text(
+            '''
+package t;
+class SqlHolder {
+    static final String Q = """
+        SELECT '{' FROM dual
+        """;
+}
+public class AfterHolderTest {
+    @Xray(testCase = "QA-5")
+    public void worksAfterTheHolder() {
+        driver.findElement(By.id("after")).click();
+    }
+}
+'''
+        )
+        [bundle] = extract_java_tests(tmp_path)
+        assert bundle.xray_key == "QA-5"
+        assert bundle.class_name == "AfterHolderTest"
+
+    def test_class_keyword_inside_text_block_is_not_a_declaration(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "T.java").write_text(
+            '''
+package t;
+public class T {
+    static final String DOC = """
+        a class Fake extends Nothing { }
+        """;
+
+    @Xray(testCase = "QA-6")
+    public void t() {
+        driver.findElement(By.id("x")).click();
+    }
+}
+'''
+        )
+        index = JavaIndex.build(tmp_path)
+        assert [c.name for c in index.all] == ["T"]
+        [bundle] = extract_java_tests(tmp_path, index)
+        assert bundle.xray_key == "QA-6"
+
+    def test_unparseable_file_falls_back_to_whole_file_scan(self, tmp_path: Path) -> None:
+        """A truncated/hostile file must still surface its annotated tests via
+        the whole-file fallback — and be named in ``fallback_files``."""
+        (tmp_path / "Broken.java").write_text(
+            """
+package t;
+public class Broken {
+    @Xray(testCase = "QA-7")
+    public void stillFound() {
+        driver.findElement(By.id("y")).click();
+    }
+"""  # note: the class's closing brace is missing (truncated file)
+        )
+        index = JavaIndex.build(tmp_path)
+        assert index.fallback_files == ["Broken.java"]
+        [bundle] = extract_java_tests(tmp_path, index)
+        assert bundle.xray_key == "QA-7"
+
+    def test_xray_seen_counts_annotations_for_discovery_parity(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "A.java").write_text(
+            """
+package t;
+public class A {
+    @Xray(testCase = "QA-8")
+    public void a() { driver.findElement(By.id("a")).click(); }
+
+    @Xray(testCase = "QA-9")
+    public void b() { driver.findElement(By.id("b")).click(); }
+}
+"""
+        )
+        index = JavaIndex.build(tmp_path)
+        assert index.xray_seen == 2
+        assert len(extract_java_tests(tmp_path, index)) == 2

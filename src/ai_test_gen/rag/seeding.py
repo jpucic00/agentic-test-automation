@@ -66,6 +66,11 @@ class SeedStats:
     unresolved_calls: int = 0
     unresolved_locators: int = 0
     dropped_selectors: int = 0
+    # Discovery parity: @Xray annotations present in the tree vs Java tests
+    # actually discovered — a gap means the extractor lost tests, never OK.
+    xray_seen: int = 0
+    java_discovered: int = 0
+    fallback_files: list[str] = field(default_factory=list)
     review_dir: Path | None = None
 
 
@@ -172,14 +177,32 @@ def run_seeding(
     bundles: list[TestBundle] = []
     if selenium_root:
         logger.info(":: extracting Java tests from %s ...", selenium_root)
-        bundles.extend(
-            extract_java_tests(
-                selenium_root,
-                JavaIndex.build(selenium_root),
-                helper_depth=helper_depth,
-                helper_char_cap=helper_char_cap,
-            )
+        index = JavaIndex.build(selenium_root)
+        java_bundles = extract_java_tests(
+            selenium_root,
+            index,
+            helper_depth=helper_depth,
+            helper_char_cap=helper_char_cap,
         )
+        bundles.extend(java_bundles)
+        stats.xray_seen = index.xray_seen
+        stats.java_discovered = len(java_bundles)
+        stats.fallback_files = list(index.fallback_files)
+        if stats.fallback_files:
+            logger.warning(
+                ":: %d file(s) needed the whole-file fallback (class structure "
+                "not fully parsed): %s",
+                len(stats.fallback_files),
+                "; ".join(stats.fallback_files[:10])
+                + ("; …" if len(stats.fallback_files) > 10 else ""),
+            )
+        if stats.java_discovered < stats.xray_seen:
+            logger.warning(
+                ":: DISCOVERY GAP — %d @Xray annotation(s) in the tree but only "
+                "%d Java test(s) discovered; the summary lists the counts",
+                stats.xray_seen,
+                stats.java_discovered,
+            )
     if playwright_dir:
         logger.info(":: extracting Playwright specs from %s ...", playwright_dir)
         bundles.extend(extract_playwright_specs(playwright_dir))
@@ -539,6 +562,15 @@ def _write_summary(stats: SeedStats) -> None:
         f"# Seeding summary — {stats.project} ({'DRY RUN' if stats.dry_run else 'live'})",
         "",
         f"- discovered: {stats.discovered}",
+        f"- @Xray annotations in the tree: {stats.xray_seen} "
+        f"(Java tests discovered: {stats.java_discovered})"
+        + (
+            " — **DISCOVERY GAP, investigate**"
+            if stats.java_discovered < stats.xray_seen
+            else ""
+        ),
+        f"- whole-file fallback files: {len(stats.fallback_files)}"
+        + (" — " + "; ".join(stats.fallback_files) if stats.fallback_files else ""),
         f"- skipped (already stored): {stats.skipped_existing}",
         f"- distilled: {stats.distilled}",
         f"- upserted: {stats.upserted}",

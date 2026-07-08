@@ -290,7 +290,9 @@ uv run python scripts/seed_kb.py --project NOTE \
 #    read at distillation time (or WHY it is missing), the steps reverse-engineered from the
 #    code (what the test actually does), intent text, selectors incl. dropped model
 #    inventions, unresolved helper calls/locator values, and the full assembled source
-#    bundle. summary.md totals them.
+#    bundle. summary.md totals them and reports discovery parity: @Xray annotations seen
+#    in the tree vs tests discovered (a gap is flagged loudly), plus any files that needed
+#    the whole-file parsing fallback.
 #    Tune DISTILLER_MODEL in .env if step expansion looks shallow, and re-run the dry run.
 # 3. Seed for real (needs /embeddings on your gateway): drop --dry-run.
 ```

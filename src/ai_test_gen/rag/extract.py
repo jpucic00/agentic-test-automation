@@ -35,10 +35,13 @@ Heuristic name-based parsing; no Java compiler.
 """
 from __future__ import annotations
 
+import logging
 import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # The real repo's annotation form (user-confirmed): @Xray(testCase = "QA-123").
 # Also matches the same marker inside a comment (hand-written Playwright specs).
@@ -209,6 +212,27 @@ class TestBundle:
 # --- comment/string-aware scanning --------------------------------------------
 
 
+def _text_block_end(text: str, start: int) -> int:
+    """Index just past the closing ``\"\"\"`` of a Java text block whose opening
+    delimiter ends at ``start`` (fail-safe: end of text).
+
+    Text blocks (SQL/JSON in DB and API tests) desynchronize a pairwise quote
+    scanner: content quotes flip its string state and a brace inside the block
+    then corrupts every span downstream — on the real corpus that silently
+    dropped whole classes. Every scanner below must treat ``\"\"\"…\"\"\"``
+    as ONE literal.
+    """
+    i, n = start, len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == '"' and text[i + 1 : i + 3] == '""':
+            return i + 3
+        i += 1
+    return n
+
+
 def _mask_comments(text: str) -> str:
     """Length-preserving copy with comment bodies blanked to spaces.
 
@@ -240,6 +264,8 @@ def _mask_comments(text: str) -> str:
                 if i + 1 < n:
                     out[i + 1] = " "
                 i += 2
+        elif char == '"' and text[i + 1 : i + 3] == '""':
+            i = _text_block_end(text, i + 3)  # text block: one literal, kept verbatim
         elif char in ('"', "'"):
             quote = char
             i += 1
@@ -260,14 +286,23 @@ def _mask_strings(masked: str) -> str:
     """Blank string/char literal CONTENTS (quotes kept) of comment-masked text.
 
     Used for declaration-level scans (package/imports/class decls) where a
-    literal like ``"class Foo"`` must not fake a declaration. (Java 15 text
-    blocks are not modeled — rare in test suites.)
+    literal like ``"class Foo"`` must not fake a declaration. Java text blocks
+    are blanked as one literal — their quote-heavy SQL/JSON bodies must never
+    desynchronize the scan (that desync silently dropped whole classes on the
+    real corpus).
     """
     out = list(masked)
     i, n = 0, len(masked)
     while i < n:
         char = masked[i]
-        if char in ('"', "'"):
+        if char == '"' and masked[i + 1 : i + 3] == '""':
+            close = _text_block_end(masked, i + 3)
+            content_end = close - 3 if masked[close - 3 : close] == '"""' else close
+            for j in range(i + 3, content_end):
+                if masked[j] != "\n":
+                    out[j] = " "
+            i = close
+        elif char in ('"', "'"):
             quote = char
             i += 1
             while i < n:
@@ -305,6 +340,9 @@ def _matching_delim(masked: str, open_index: int, open_char: str, close_char: st
                 continue
             if char == in_string:
                 in_string = None
+        elif char == '"' and masked[i + 1 : i + 3] == '""':
+            i = _text_block_end(masked, i + 3)  # skip the whole text block
+            continue
         elif char in ('"', "'"):
             in_string = char
         elif char == open_char:
@@ -370,12 +408,21 @@ class JavaIndex:
     suites can both have a ``LoginPage`` without silently shadowing each other.
     """
 
-    def __init__(self, classes: list[_JavaClass]) -> None:
+    def __init__(
+        self,
+        classes: list[_JavaClass],
+        xray_seen: int = 0,
+        fallback_files: list[str] | None = None,
+    ) -> None:
         self.all = classes
         self.by_fqn: dict[str, _JavaClass] = {c.fqn: c for c in classes}
         self.by_simple: dict[str, list[_JavaClass]] = {}
         for java_class in classes:
             self.by_simple.setdefault(java_class.name, []).append(java_class)
+        # Discovery parity: every @Xray seen in the tree must map to a
+        # discovered test, or the seeding summary reports the gap loudly.
+        self.xray_seen = xray_seen
+        self.fallback_files = fallback_files or []
         # (owner fqn, method name) → (call targets, flags): _calls_of is
         # deterministic per method, and full-graph traversal revisits shared
         # helpers (base wrappers) from every test.
@@ -384,6 +431,8 @@ class JavaIndex:
     @classmethod
     def build(cls, root: Path) -> JavaIndex:
         classes: list[_JavaClass] = []
+        xray_seen = 0
+        fallback_files: list[str] = []
         for path in sorted(root.rglob("*.java")):
             text = path.read_text(errors="replace")
             masked = _mask_comments(text)
@@ -406,7 +455,36 @@ class JavaIndex:
                 else:
                     member_imports[imp.group(2)] = imp.group(1)
             rel = str(path.relative_to(root))
-            for name, extends_raw, start, end in _top_level_class_decls(declscan):
+            decls = _top_level_class_decls(declscan)
+            annotations_at = [m.start() for m in XRAY_RE.finditer(masked)]
+            xray_seen += len(annotations_at)
+            uncovered = [
+                at
+                for at in annotations_at
+                if not any(start <= at < end for _, _, start, end in decls)
+            ]
+            if uncovered:
+                # Class slicing failed to cover an annotated test (a construct
+                # the parser cannot span). Losing tests silently is the one
+                # unacceptable outcome — index the WHOLE FILE as one class
+                # (the pre-slicing behavior) and say so.
+                first = decls[0] if decls else None
+                decls = [
+                    (
+                        first[0] if first else path.stem,
+                        first[1] if first else None,
+                        0,
+                        len(text),
+                    )
+                ]
+                fallback_files.append(rel)
+                logger.warning(
+                    ":: %s: class structure not fully parsed — whole-file fallback "
+                    "(%d @Xray annotation(s) were outside every parsed class)",
+                    rel,
+                    len(uncovered),
+                )
+            for name, extends_raw, start, end in decls:
                 c_text = text[start:end]
                 c_masked = masked[start:end]
                 methods, method_spans = _split_methods(c_text, c_masked, name)
@@ -443,7 +521,7 @@ class JavaIndex:
                         ],
                     )
                 )
-        return cls(classes)
+        return cls(classes, xray_seen=xray_seen, fallback_files=fallback_files)
 
     def resolve(self, name: str, owner: _JavaClass | None = None) -> _JavaClass | None:
         """A type name as written in ``owner`` → the repo class it denotes.
