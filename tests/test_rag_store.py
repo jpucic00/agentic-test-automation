@@ -12,7 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.rag.models import KBRecord, KBSelector, make_record_id
+from ai_test_gen.models import ManualStep
+from ai_test_gen.rag.models import (
+    KBRecord,
+    ReconstructedPlan,
+    ReconstructedSelector,
+    ReconstructedStep,
+    make_record_id,
+)
 from ai_test_gen.rag.store import KBStore, collection_name
 
 
@@ -29,15 +36,27 @@ def _record(
         xray_key=ref if ref.startswith(project_key) else "",
         title=title,
         intent_text=f"{title}. The user logs in and sees the dashboard.",
-        steps=["Open the app", "Log in as admin", "Assert the dashboard heading"],
-        selectors=[
-            KBSelector(
-                kind="testid",
-                value="getByTestId('login-submit')",
-                description="login submit button",
-                route="/login",
-            )
-        ],
+        plan=ReconstructedPlan(
+            title=title,
+            start_route="/login",
+            steps=[
+                ReconstructedStep(action="Open the app", route="/login"),
+                ReconstructedStep(
+                    action="Log in as admin",
+                    selector=ReconstructedSelector(
+                        kind="testid",
+                        value="getByTestId('login-submit')",
+                        provenance="LoginPage.java#submit",
+                        verified=True,
+                    ),
+                    route="/login",
+                ),
+                ReconstructedStep(
+                    action="Assert the dashboard heading", expected="Dashboard is shown"
+                ),
+            ],
+        ),
+        manual_steps=[ManualStep(action="Log in as admin", data="admin/pw", expected="Dashboard")],
         routes=["/login"],
         spec="import { test, expect } from '@playwright/test';",
         outcome="green",
@@ -75,7 +94,7 @@ class TestStoreRoundTrip:
 
         assert len(results) == 1
         found, score = results[0]
-        assert found == record  # full payload round-trip, selectors included
+        assert found == record  # full payload round-trip, plan included
         assert score == pytest.approx(1.0, abs=1e-6)
 
     def test_search_orders_by_cosine_similarity(self, store: KBStore) -> None:

@@ -11,9 +11,15 @@ import logging
 
 import pytest
 
-from ai_test_gen.models import ManualTestCase
+from ai_test_gen.models import ManualStep, ManualTestCase
 from ai_test_gen.rag import retriever
-from ai_test_gen.rag.models import KBRecord, KBSelector, make_record_id
+from ai_test_gen.rag.models import (
+    KBRecord,
+    ReconstructedPlan,
+    ReconstructedSelector,
+    ReconstructedStep,
+    make_record_id,
+)
 from ai_test_gen.rag.retriever import RetrievedContext, retrieve
 
 
@@ -21,8 +27,11 @@ def _case(key: str = "QA-77") -> ManualTestCase:
     return ManualTestCase(
         key=key,
         title="Create a user",
-        steps=["Log in as admin", "Open user management", "Create the user"],
-        expected_results=["The new user appears in the list"],
+        steps=[
+            ManualStep(action="Log in as admin"),
+            ManualStep(action="Open user management"),
+            ManualStep(action="Create the user", expected="The new user appears in the list"),
+        ],
     )
 
 
@@ -41,10 +50,22 @@ def _record(
         xray_key=ref if xray_key is None else xray_key,
         title=title,
         intent_text=f"{title}. Steps and outcomes.",
-        steps=["Log in", "Do the flow", "Assert the result"],
-        selectors=[
-            KBSelector(kind="testid", value="getByTestId('save')", description="save button")
-        ],
+        plan=ReconstructedPlan(
+            title=title,
+            steps=[
+                ReconstructedStep(action="Log in"),
+                ReconstructedStep(
+                    action="Do the flow",
+                    selector=ReconstructedSelector(
+                        kind="testid",
+                        value="getByTestId('save')",
+                        provenance="Page.java#save",
+                        verified=True,
+                    ),
+                ),
+                ReconstructedStep(action="Assert the result", expected="Saved"),
+            ],
+        ),
         routes=["/admin"],
         spec=spec,
         outcome="legacy" if source != "pipeline" else "green",

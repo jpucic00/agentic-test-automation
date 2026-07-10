@@ -187,13 +187,14 @@ own ordered step.
 
 
 def _format_steps(tc: ManualTestCase) -> str:
-    """Render steps paired with their expected results (matched by index)."""
+    """Render each manual step with its (optional) data and expected result."""
     if not tc.steps:
         return "(no steps provided)"
     lines: list[str] = []
     for i, step in enumerate(tc.steps, 1):
-        expected = tc.expected_results[i - 1] if i - 1 < len(tc.expected_results) else ""
-        lines.append(f"{i}. {step}")
-        if expected:
-            lines.append(f"   Expected: {expected}")
+        lines.append(f"{i}. {step.action}")
+        if step.data:
+            lines.append(f"   Data: {step.data}")
+        if step.expected:
+            lines.append(f"   Expected: {step.expected}")
     return "\n".join(lines)

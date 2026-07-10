@@ -101,15 +101,16 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
 
 
 def _format_case_steps(test_case: ManualTestCase) -> str:
-    """Render the manual test case's steps paired with their expected results (the intent)."""
+    """Render the manual test case's steps with their data + expected results (the intent)."""
     if not test_case.steps:
         return "(no steps recorded)"
     lines: list[str] = []
     for i, step in enumerate(test_case.steps):
-        expected = test_case.expected_results[i] if i < len(test_case.expected_results) else ""
-        line = f"{i + 1}. {step}"
-        if expected:
-            line += f"  -> expect: {expected}"
+        line = f"{i + 1}. {step.action}"
+        if step.data:
+            line += f"  [data: {step.data}]"
+        if step.expected:
+            line += f"  -> expect: {step.expected}"
         lines.append(line)
     return "\n".join(lines)
 

@@ -35,6 +35,28 @@ def _safe_spec_filename(value: str) -> str:
 # === Input from Xray ===
 
 
+class ManualStep(BaseModel):
+    """One row of a manual test case — the Xray Raven ``{step, data, result}`` cell.
+
+    The three cells travel together as one object (RETRIEVAL_MEMORY_PLAN.md §1.16):
+    the parallel ``steps``/``expected_results`` string lists are gone, and the
+    per-step ``data`` cell — dropped by both normalizers before — is kept. These
+    company Xray cases are rough intent skeletons (``"log in as user"``, no creds),
+    so treat ``data`` as intent, never authoritative spec.
+    """
+
+    action: str = Field(description="What to do at this step (the Raven 'step' cell)")
+    data: str = Field(
+        default="",
+        description="Test data for this step, e.g. the credentials/values to enter "
+        "(the Raven 'data' cell); often empty on skeleton cases",
+    )
+    expected: str = Field(
+        default="",
+        description="Expected result of this step (the Raven 'result' cell); may be empty",
+    )
+
+
 class ManualTestCase(BaseModel):
     """A test case as it lives in Jira/Xray, normalized to a simple shape."""
 
@@ -45,12 +67,9 @@ class ManualTestCase(BaseModel):
         default_factory=list,
         description="Preconditions that must hold before the test runs",
     )
-    steps: list[str] = Field(
-        default_factory=list, description="Action to perform, one per step"
-    )
-    expected_results: list[str] = Field(
+    steps: list[ManualStep] = Field(
         default_factory=list,
-        description="Expected result, paired with steps by index",
+        description="Ordered manual steps; each carries its action, data and expected result",
     )
     labels: list[str] = Field(
         default_factory=list, description="Jira labels on the test case issue"

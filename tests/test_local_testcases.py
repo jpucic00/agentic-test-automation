@@ -56,10 +56,11 @@ def test_loads_raw_xray_shape(cfg, tmp_path):
     assert tc.title == "Log in and create a note"
     assert tc.description == "Seeded user logs in and adds a note."
     assert tc.labels == ["smoke", "notes"]
-    assert tc.steps == ["Open the login page", "Submit valid credentials"]
-    assert tc.expected_results == ["Login form is shown", "Notes page is shown"]
-    # The data cell is intentionally NOT folded into the action (mirrors _xray_server_steps).
-    assert all("demo@demo.test" not in s for s in tc.steps)
+    assert [s.action for s in tc.steps] == ["Open the login page", "Submit valid credentials"]
+    assert [s.expected for s in tc.steps] == ["Login form is shown", "Notes page is shown"]
+    # The data cell is KEPT on its own field, never folded into the action text.
+    assert [s.data for s in tc.steps] == ["", "demo@demo.test / Passw0rd!"]
+    assert all("demo@demo.test" not in s.action for s in tc.steps)
 
 
 def test_key_is_forced_to_issue_key(cfg, tmp_path):
@@ -84,8 +85,8 @@ def test_cell_prefers_raw_over_rendered(cfg, tmp_path):
         },
     )
     tc = local_testcases.load_local_test_case(_local_cfg(cfg, tmp_path), "T-1")
-    assert tc.steps == ["RAW action"]
-    assert tc.expected_results == ["RAW result"]
+    assert [s.action for s in tc.steps] == ["RAW action"]
+    assert [s.expected for s in tc.steps] == ["RAW result"]
 
 
 def test_description_adf_is_flattened(cfg, tmp_path):
@@ -99,7 +100,7 @@ def test_description_adf_is_flattened(cfg, tmp_path):
     _write(tmp_path, "T-2", {"fields": {"summary": "s", "description": adf}, "steps": []})
     tc = local_testcases.load_local_test_case(_local_cfg(cfg, tmp_path), "T-2")
     assert tc.description == "Hello\nWorld"
-    assert tc.steps == [] and tc.expected_results == []
+    assert tc.steps == []
 
 
 def test_issue_wrapper_is_tolerated(cfg, tmp_path):
@@ -114,7 +115,8 @@ def test_issue_wrapper_is_tolerated(cfg, tmp_path):
     )
     tc = local_testcases.load_local_test_case(_local_cfg(cfg, tmp_path), "T-3")
     assert tc.title == "Wrapped"
-    assert tc.steps == ["a"] and tc.expected_results == ["b"]
+    assert [s.action for s in tc.steps] == ["a"]
+    assert [s.expected for s in tc.steps] == ["b"]
 
 
 def test_missing_file_raises_filenotfound(cfg, tmp_path):

@@ -258,65 +258,29 @@ the same shape the live Xray client produces, just read from disk), and the `PRO
 the agents at the demo's own committed `project_context.md` / `project_map.md` without touching your app's
 root context files. See [`packages/demo-notes-app/README.md`](packages/demo-notes-app/README.md).
 
-### 7.2 Optional: seed the test-case knowledge base from an existing suite
+### 7.2 Optional: the test-case knowledge base
 
-The optional retrieval memory (`RAG_ENABLED`, off by default) learns from tests you already have.
-`scripts/seed_kb.py` mines an existing Selenium repo (tests found via their `@Xray(testCase = "…")`
-annotations), hand-written Playwright specs, and manual test cases into a per-project **embedded**
-vector store under `KB_PATH` (a local directory — no database service).
+The optional retrieval memory (`RAG_ENABLED`, off by default) is an **embedded** per-project vector
+store of solved test cases under `KB_PATH` (a local directory — no database service). At run time it
+feeds the most similar past cases back to the agents as advisory hints and examples, so a new case
+starts from "we've automated cases like this" instead of from scratch. It never weakens the
+verify-before-record selector rule, and with the flag off the pipeline is byte-identical (nothing
+under `rag/` is imported). See
+[docs/ARCHITECTURE.md → *retrieval memory*](docs/ARCHITECTURE.md) for the full design.
 
-Static extraction does the heavy lifting before any model call: page-object/helper code is
-resolved across class fields, `extends` chains, fluent call chains and static imports; selector
-values held in `String` constants (or `@FindBy` annotations) are folded to their literals; and
-anything unresolvable — a call the walker can't place, a locator whose value is built at runtime —
-is flagged in the output rather than silently skipped. The manual cases named by the `@Xray`
-annotations are fetched automatically (from Jira/Xray, or from `LOCAL_TESTCASE_DIR` when
-`TESTCASE_SOURCE=local`); pass `--cases DIR|KEYS` to override the source or `--no-fetch` to
-distill from code alone. After each model call the CLI re-enforces selector ground truth in code:
-model output that has no basis in the extracted locators is dropped (and reported), extracted
-locators the model missed are added back.
+Shipped and unit-tested today: the embedded store (`rag/store.py`), the gateway embedding/rerank
+client (`rag/embeddings.py`), the retriever (`rag/retriever.py`), the **corpus discovery layer**
+(`rag/discover.py`) and the **plan-shaped data model** (`ManualStep` + `ReconstructedPlan` + a v2 KB
+record). Discovery walks an existing suite and finds each test by a configurable marker regex —
+`TEST_MARKER_REGEX`, default `@Xray(testCase = "KEY")`, which also names the linked manual case — and
+reports completeness (markers seen vs tests discovered; a gap is flagged, never silent), computing
+each record's stable id before any model call.
 
-Always start with the dry-run review loop:
-
-```bash
-# 1. Dry run: distill a sample and READ the review files — no embeddings, no KB writes.
-#    (Works against the bundled demo corpus; swap in your own repo paths for real seeding.)
-uv run python scripts/seed_kb.py --project NOTE \
-    --selenium packages/demo-notes-app/legacy-suite \
-    --playwright packages/demo-notes-app/legacy-suite/playwright \
-    --cases packages/demo-notes-app/test-cases \
-    --dry-run --limit 5
-# 2. Review output/kb_review/<project>/ — per record: the linked manual case VERBATIM as it
-#    read at distillation time (or WHY it is missing), the steps reverse-engineered from the
-#    code (what the test actually does), intent text, selectors incl. dropped model
-#    inventions, unresolved helper calls/locator values, and the full assembled source
-#    bundle. summary.md totals them and reports discovery parity: @Xray annotations seen
-#    in the tree vs tests discovered (a gap is flagged loudly), plus any files that needed
-#    the whole-file parsing fallback.
-#    Tune DISTILLER_MODEL in .env if step expansion looks shallow, and re-run the dry run.
-# 3. Seed for real (needs /embeddings on your gateway): drop --dry-run.
-```
-
-Re-running is idempotent (already-stored records are skipped without model calls; `--force`
-re-distills). The helper walker follows the test's whole execution path by default — `@Before*`
-setup methods (login/navigation usually live there), shared flow classes, base-class click/fill
-wrappers, and classes referenced only as constants (`Locators.SAVE`) — deduplicated, so it
-terminates on any repo. Class names resolve import/package-aware (two suites may both have a
-`LoginPage`); calls into classes imported from outside the tree (RestAssured, JDBC drivers…) are
-known-external and not reported as unresolved. Locator values built from constants resolve to
-literals; `String.format`/concatenation skeletons resolve to TEMPLATE values with `%s`/`{name}`
-placeholders kept. `--helper-depth N` bounds the walk (default: unlimited); `--helper-cap N`
-(default 48000 chars) bounds only the helper snippet text handed to the model — traversal and
-locator extraction always run to completion. Requires a chat model for the Distiller
-(`DISTILLER_MODEL`) and — for the real run — an embedding model (`EMBEDDING_MODEL`) on your
-gateway.
-
-The run reports each stage as it happens: the discovered/planned counts print right after
-extraction, every manual-case fetch logs per key, and each record logs a `distilling (i/N)` line
-BEFORE its model call (which is bounded at 240s per attempt, so a hung gateway surfaces as an
-error rather than a silent stall). If nothing at all prints for more than a minute, the process
-is still in static extraction over a large repo; interrupt it (Ctrl+C) and the traceback names
-the exact spot.
+The **offline seeding tool** that fills the KB from that corpus — a suite-map pass, then a
+repo-exploring Distiller agent that reconstructs each test as a plan (selectors kept verbatim with a
+provenance citation and a verified-against-the-code flag), then a mechanical verification loop — is
+under active development (`DISTILLER_MODEL` selects its chat model). Until it lands, keep
+`RAG_ENABLED` off; the rest of the pipeline is unaffected.
 
 ---
 

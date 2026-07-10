@@ -41,9 +41,10 @@ def test_parse_manual_steps_list_of_objects():
         {"step": "Go to /login", "data": "", "result": "Login form visible"},
         {"step": "Submit valid creds", "data": "u/p", "result": "Dashboard shown"},
     ]
-    steps, expected = xray_client._parse_manual_steps(raw)
-    assert steps == ["Go to /login", "Submit valid creds"]
-    assert expected == ["Login form visible", "Dashboard shown"]
+    steps = xray_client._parse_manual_steps(raw)
+    assert [s.action for s in steps] == ["Go to /login", "Submit valid creds"]
+    assert [s.data for s in steps] == ["", "u/p"]  # the data cell is kept, not dropped
+    assert [s.expected for s in steps] == ["Login form visible", "Dashboard shown"]
 
 
 def test_parse_manual_steps_flattens_adf_values_and_missing_keys():
@@ -51,14 +52,14 @@ def test_parse_manual_steps_flattens_adf_values_and_missing_keys():
     raw = [
         {"step": {"type": "doc", "content": [{"type": "text", "text": "Click"}]}},
     ]
-    steps, expected = xray_client._parse_manual_steps(raw)
-    assert steps == ["Click"]
-    assert expected == [""]
+    steps = xray_client._parse_manual_steps(raw)
+    assert [s.action for s in steps] == ["Click"]
+    assert [s.expected for s in steps] == [""]
 
 
 @pytest.mark.parametrize("raw", [None, "", {}, 42])
 def test_parse_manual_steps_non_list_returns_empty(raw):
-    assert xray_client._parse_manual_steps(raw) == ([], [])
+    assert xray_client._parse_manual_steps(raw) == []
 
 
 # --- fetch() wiring (Jira mocked, Server/DC path) ---------------------------
@@ -106,8 +107,12 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
     assert result.key == "QA-1234"
     assert result.title == "Login happy path"
     assert result.description == "User can log in with valid credentials."
-    assert result.steps == ["Navigate to /login", "Submit valid credentials"]
-    assert result.expected_results == ["Login form is visible", "Redirected to /dashboard"]
+    assert [s.action for s in result.steps] == ["Navigate to /login", "Submit valid credentials"]
+    assert [s.data for s in result.steps] == ["", "u/p"]  # per-step data cell kept
+    assert [s.expected for s in result.steps] == [
+        "Login form is visible",
+        "Redirected to /dashboard",
+    ]
     assert result.labels == ["smoke", "auth"]
     jira.issue.assert_called_once_with("QA-1234", expand="names")
     jira.get.assert_called_once_with("rest/raven/1.0/api/test/QA-1234/step")
@@ -141,8 +146,8 @@ def test_fetch_server_falls_back_to_custom_field_when_raven_empty(monkeypatch):
         jira.get.return_value = []  # Raven yields nothing
         result = xray_client.XrayClient(cast(Config, config)).fetch("QA-2")
 
-    assert result.steps == ["Open app"]
-    assert result.expected_results == ["App loads"]
+    assert [s.action for s in result.steps] == ["Open app"]
+    assert [s.expected for s in result.steps] == ["App loads"]
 
 
 def test_parse_manual_steps_nested_fields_shape():
@@ -150,12 +155,13 @@ def test_parse_manual_steps_nested_fields_shape():
         {
             "id": 1,
             "index": 1,
-            "fields": {"action": "Click X", "data": "", "expected_result": "Y is shown"},
+            "fields": {"action": "Click X", "data": "row 7", "expected_result": "Y is shown"},
         },
     ]
-    steps, expected = xray_client._parse_manual_steps(raw)
-    assert steps == ["Click X"]
-    assert expected == ["Y is shown"]
+    steps = xray_client._parse_manual_steps(raw)
+    assert [s.action for s in steps] == ["Click X"]
+    assert [s.data for s in steps] == ["row 7"]  # nested-shape data cell kept
+    assert [s.expected for s in steps] == ["Y is shown"]
 
 
 def test_cell_text_handles_raw_rendered_string_and_adf():

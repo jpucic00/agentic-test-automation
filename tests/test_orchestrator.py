@@ -17,7 +17,9 @@ from ai_test_gen import models, orchestrator
 
 def _manual_case():
     return models.ManualTestCase(
-        key="QA-1", title="Login", steps=["log in"], expected_results=["dashboard"]
+        key="QA-1",
+        title="Login",
+        steps=[models.ManualStep(action="log in", expected="dashboard")],
     )
 
 

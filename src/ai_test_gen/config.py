@@ -31,6 +31,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # that also appear inside prod hostnames (e.g. "latest." contains "test").
 DEFAULT_NON_PROD_MARKERS: tuple[str, ...] = ("localhost", "127.0.0.1", "staging", "qa", "demo")
 
+# Default KB-seeding test-discovery marker (RETRIEVAL_MEMORY_PLAN.md §1.13/§5.1):
+# a method whose decoration zone matches this regex is a test, and group(1)
+# captures the linked Xray key. The company's Selenium suite is fully annotated
+# with @Xray(testCase = "KEY"); other corpora override via TEST_MARKER_REGEX (the
+# pattern MUST keep exactly one capture group for the key).
+DEFAULT_TEST_MARKER_REGEX = r'@Xray\s*\(\s*testCase\s*=\s*"([^"]+)"\s*\)'
+
 
 class ProductionURLError(RuntimeError):
     """Raised when STAGING_BASE_URL looks like a production host.
@@ -253,10 +260,13 @@ class Config:
     embedding_model: str = "mxbai-embed-large"
     reranker_model: str = "zeroentropy/zerank-1-small"
     rerank_endpoint: str | None = None
-    # Offline seeding only (scripts/seed_kb.py) — never part of the run loop. A
-    # code-reading chat model normalizing one pre-assembled test bundle per call.
-    # Defaults to GENERATOR_MODEL (the Devstral class on the active gateway);
-    # escalate to a reasoning model only if dry-run review shows shallow steps.
+    # Offline KB seeding only (never part of the run loop). Regex that marks a
+    # corpus test for discovery: a method whose decoration zone matches is one
+    # record, and group(1) is its Xray key (RETRIEVAL_MEMORY_PLAN.md §5.1).
+    test_marker_regex: str = DEFAULT_TEST_MARKER_REGEX
+    # Model the agentic Distiller uses to reconstruct plans from corpus code
+    # (offline seeding). Defaults to GENERATOR_MODEL (a code-reading class whose id
+    # is valid on whichever gateway this .env targets).
     distiller_model: str = "mistralai/devstral-small-2-2512"
 
 
@@ -353,6 +363,7 @@ def load_config() -> Config:
         embedding_model=os.environ.get("EMBEDDING_MODEL", "mxbai-embed-large"),
         reranker_model=os.environ.get("RERANKER_MODEL", "zeroentropy/zerank-1-small"),
         rerank_endpoint=os.environ.get("RERANK_ENDPOINT") or None,
+        test_marker_regex=os.environ.get("TEST_MARKER_REGEX") or DEFAULT_TEST_MARKER_REGEX,
         # Unset → follow the generator model: same code-reading class, and the id is
         # always valid on whichever gateway this .env targets.
         distiller_model=os.environ.get("DISTILLER_MODEL")

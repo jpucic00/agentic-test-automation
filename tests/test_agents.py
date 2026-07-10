@@ -207,8 +207,10 @@ def test_heal_message_includes_intent_plan_and_notes():
     case = models.ManualTestCase(
         key="QA-7",
         title="Create org",
-        steps=["click Add org", "fill name"],
-        expected_results=["dialog opens", "org created"],
+        steps=[
+            models.ManualStep(action="click Add org", expected="dialog opens"),
+            models.ManualStep(action="fill name", expected="org created"),
+        ],
     )
     plan = models.TestPlan(
         test_case_key="QA-7",
@@ -289,7 +291,9 @@ def test_generation_message_retry_includes_previous_code_and_error():
 
 
 def _heal_message_fixtures():
-    case = models.ManualTestCase(key="QA-7", title="Create org", steps=["click Add org"])
+    case = models.ManualTestCase(
+        key="QA-7", title="Create org", steps=[models.ManualStep(action="click Add org")]
+    )
     plan = models.TestPlan(
         test_case_key="QA-7",
         title="Create org",
@@ -346,7 +350,9 @@ def test_generation_message_carries_step_page_context():
 
 
 def test_heal_message_shows_plan_time_page_context():
-    case = models.ManualTestCase(key="QA-8", title="Invite member", steps=["click Add"])
+    case = models.ManualTestCase(
+        key="QA-8", title="Invite member", steps=[models.ManualStep(action="click Add")]
+    )
     test = models.GeneratedTest(file_name="QA-8.spec.ts", code="// spec", description="x")
     failure = models.TestRunResult(
         status="failed", stdout="", stderr="boom",
@@ -375,7 +381,9 @@ def test_heal_message_quotes_dying_line_and_execution_boundary():
     # The misdiagnosis fix: the Healer must know WHERE the run died and that code
     # after that line never executed — otherwise a downstream timeout reads as a
     # downstream bug and it "fixes" tail steps while the real blocker stays broken.
-    case = models.ManualTestCase(key="QA-9", title="Login", steps=["log in"])
+    case = models.ManualTestCase(
+        key="QA-9", title="Login", steps=[models.ManualStep(action="log in")]
+    )
     plan = models.TestPlan(
         test_case_key="QA-9", title="Login",
         target_url="https://staging.example.internal", steps=[],
@@ -395,7 +403,9 @@ def test_heal_message_quotes_dying_line_and_execution_boundary():
 
 
 def test_heal_message_has_no_boundary_without_error_line():
-    case = models.ManualTestCase(key="QA-9", title="Login", steps=["log in"])
+    case = models.ManualTestCase(
+        key="QA-9", title="Login", steps=[models.ManualStep(action="log in")]
+    )
     plan = models.TestPlan(
         test_case_key="QA-9", title="Login",
         target_url="https://staging.example.internal", steps=[],

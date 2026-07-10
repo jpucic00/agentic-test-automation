@@ -27,7 +27,7 @@ from atlassian import Jira
 
 from . import mtls
 from .config import Config
-from .models import ManualTestCase
+from .models import ManualStep, ManualTestCase
 
 # Server/DC custom field holding the manual test steps. Phase 0 finding (j1cnfng):
 # "Manual Test Steps" on the company tenant. Override per adopter via env.
@@ -123,58 +123,60 @@ class XrayClient:
         # diagnose_steps() can show the field's display name on the --raw smoke run.
         issue = self._get_issue(issue_key, expand="names")
         fields = issue["fields"]
-        steps, expected_results = self._xray_server_steps(issue_key)
+        steps = self._xray_server_steps(issue_key)
         if not steps:
-            steps, expected_results = _parse_manual_steps(fields.get(self.steps_field_id))
+            steps = _parse_manual_steps(fields.get(self.steps_field_id))
         return ManualTestCase(
             key=issue_key,
             title=fields.get("summary") or "",
             description=_strip_adf(fields.get("description")),
             preconditions=[],
             steps=steps,
-            expected_results=expected_results,
             labels=fields.get("labels") or [],
         )
 
-    def _xray_server_steps(self, issue_key: str) -> tuple[list[str], list[str]]:
+    def _xray_server_steps(self, issue_key: str) -> list[ManualStep]:
         """Fetch manual steps from the Xray Server/DC Raven REST API.
 
         ``GET /rest/raven/1.0/api/test/<KEY>/step`` returns an array of step
         objects: ``{"id", "index", "step": {"raw", "rendered"}, "data": {...},
         "result": {"raw", "rendered"}, "attachments": [...]}``. ``step`` is the
-        action and ``result`` the expected result; each cell is flattened by
-        ``_cell_text`` (preferring the plain ``raw`` value).
+        action, ``data`` the per-step test data, ``result`` the expected result;
+        each cell is flattened by ``_cell_text`` (preferring the plain ``raw``
+        value) and kept as one ManualStep (the ``data`` cell is no longer dropped).
         """
         raw = self.jira.get(f"rest/raven/1.0/api/test/{issue_key}/step")
         if not isinstance(raw, list):
-            return [], []
-        steps: list[str] = []
-        expected_results: list[str] = []
+            return []
+        steps: list[ManualStep] = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            steps.append(_cell_text(item.get("step")))
-            expected_results.append(_cell_text(item.get("result")))
-        return steps, expected_results
+            steps.append(
+                ManualStep(
+                    action=_cell_text(item.get("step")),
+                    data=_cell_text(item.get("data")),
+                    expected=_cell_text(item.get("result")),
+                )
+            )
+        return steps
 
     def _fetch_cloud(self, issue_key: str) -> ManualTestCase:
         # Path exists for completeness; the company tenant is Server/DC, so this is
         # not exercised today (AC #3). Kept faithful to the guide template.
         issue = self._get_issue(issue_key)
         fields = issue["fields"]
-        steps = self._xray_cloud_steps(issue_key)
         return ManualTestCase(
             key=issue_key,
             title=fields.get("summary") or "",
             description=_strip_adf(fields.get("description")),
             # Xray preconditions live in linked issues; fetch separately if needed.
             preconditions=[],
-            steps=[s.get("action", "") for s in steps],
-            expected_results=[s.get("result", "") for s in steps],
+            steps=self._xray_cloud_steps(issue_key),
             labels=fields.get("labels") or [],
         )
 
-    def _xray_cloud_steps(self, issue_key: str) -> list[dict[str, Any]]:
+    def _xray_cloud_steps(self, issue_key: str) -> list[ManualStep]:
         """Best-effort Xray Cloud step extraction (placeholder, per §3.6).
 
         The proper Xray Cloud path authenticates with separate API client
@@ -187,7 +189,11 @@ class XrayClient:
             steps = issue["fields"].get(cf)
             if steps:
                 return [
-                    {"action": s.get("step", ""), "result": s.get("result", "")}
+                    ManualStep(
+                        action=s.get("step", ""),
+                        data=s.get("data", ""),
+                        expected=s.get("result", ""),
+                    )
                     for s in steps
                 ]
         return []
@@ -227,27 +233,32 @@ def _build_jira(config: Config) -> Jira:
     )
 
 
-def _parse_manual_steps(raw: Any) -> tuple[list[str], list[str]]:
+def _parse_manual_steps(raw: Any) -> list[ManualStep]:
     """Fallback parser for the "Manual Test Steps" custom-field value.
 
     The value is a list of step objects. Newer Xray Server shapes nest the cells
     under ``fields`` (``{"fields": {"action", "data", "expected_result"}}``);
     older/loose shapes put them at the top level. Each cell may be a plain string,
     a ``{"raw", "rendered"}`` pair, or an ADF dict — all handled by ``_cell_text``.
+    The per-step ``data`` cell is kept alongside the action/expected.
     """
     if not isinstance(raw, list):
-        return [], []
-    steps: list[str] = []
-    expected_results: list[str] = []
+        return []
+    steps: list[ManualStep] = []
     for item in raw:
         if not isinstance(item, dict):
             continue
         cells = item["fields"] if isinstance(item.get("fields"), dict) else item
-        steps.append(_first_cell(cells, ("action", "step", "field")))
-        expected_results.append(
-            _first_cell(cells, ("expected_result", "result", "expectedResult", "expected"))
+        steps.append(
+            ManualStep(
+                action=_first_cell(cells, ("action", "step", "field")),
+                data=_first_cell(cells, ("data", "testData", "test_data")),
+                expected=_first_cell(
+                    cells, ("expected_result", "result", "expectedResult", "expected")
+                ),
+            )
         )
-    return steps, expected_results
+    return steps
 
 
 def _first_cell(cells: dict[str, Any], keys: tuple[str, ...]) -> str:

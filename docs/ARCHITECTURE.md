@@ -198,16 +198,22 @@ Possible extensions, not yet built:
 
 ## Planned: retrieval memory — an embedded test-case knowledge base + a reranker
 
-> **Status: built except the run-loop wiring.** Implemented and unit-tested: the embedded KB
-> store (`rag/store.py` — Qdrant local mode, one collection per project), the gateway
-> embedding/rerank client (`rag/embeddings.py`), the **Distiller + seeding CLI**
-> (`rag/distiller.py`, `rag/extract.py`, `scripts/seed_kb.py` — annotation-driven discovery,
-> helper resolution, per-record review files, `--dry-run`), and the **retriever**
-> (`rag/retriever.py` — search → rerank → capped context blocks, fail-open). Still to come: the
-> orchestrator injection + green-run write-back and the retrieval-quality eval — so nothing here
-> affects a run yet: `RAG_ENABLED` ships off and the default pipeline never imports `rag/`. A
-> committed demo corpus ([`packages/demo-notes-app/legacy-suite/`](../packages/demo-notes-app/legacy-suite/))
-> makes the whole seeding loop try-out-able against the demo app.
+> **Status: foundations built; the seeding pipeline is being rebuilt.** Implemented and
+> unit-tested: the embedded KB store (`rag/store.py` — Qdrant local mode, one collection per
+> project), the gateway embedding/rerank client (`rag/embeddings.py`), the **retriever**
+> (`rag/retriever.py` — search → rerank → capped context blocks, fail-open), the minimal static
+> **discovery layer** (`rag/discover.py` — folder/suite skeleton, marker-driven test discovery
+> with completeness accounting, stable pre-model record ids) and the **plan-shaped data model**
+> (`ManualStep` everywhere + `ReconstructedPlan` + a v2 KB record). The first-generation
+> deep-static Distiller + seeding CLI were removed: real-corpus dry-runs showed that parsing
+> arbitrary test repositories doesn't generalize, so seeding is being rebuilt around a
+> **suite-map pass + a repo-exploring Distiller agent** producing those plan-shaped records
+> (design below). Still to come: that agentic seeding pipeline (map → distill → verify → embed),
+> the orchestrator injection + green-run write-back, the post-plan validator, and the
+> retrieval-quality eval — so nothing here affects a run yet: `RAG_ENABLED` ships off and the
+> default pipeline never imports `rag/`. A committed demo corpus
+> ([`packages/demo-notes-app/legacy-suite/`](../packages/demo-notes-app/legacy-suite/))
+> makes the seeding loop try-out-able against the demo app.
 
 **The idea in one paragraph.** Today every test case is planned from scratch, as if it were the
 first — yet the pipeline *produces* the best possible reference material as it works: verified
@@ -224,7 +230,7 @@ flowchart LR
     EMB --> KB[("Test-case KB<br/>embedded vector DB")]
     KB -->|"top-N candidates<br/>vector search · recall"| RR["Reranker · zerank-1-small<br/>scores each pair · precision"]
     RR -->|top 2–3 truly similar| INJ["injected into agent context"]
-    INJ -->|plans + verified-selector hints| PL2["Planner"]
+    INJ -->|"compact hints · full prior plan for the same ticket"| PL2["Planner"]
     INJ -->|green specs as few-shot examples| GE2["Generator"]
     GRN["green run"] -. write back case + plan + spec .-> KB
 ```
@@ -235,7 +241,7 @@ flowchart LR
 |---|---|---|---|
 | **Test-case knowledge base** | every solved case: the manual case's text (embedded), its verified `TestPlan`, the final green spec, outcome + provenance metadata | the top-N nearest solved cases for a new case | an **embedded** vector DB — an in-process library persisting to a local directory, no extra service to operate (reference choice: Qdrant in local mode, whose `qdrant_storage/` dir is already gitignored). **One collection per target project** — selectors and flows never cross applications. The same client API points at a standalone server later if the index outgrows one machine. |
 | **Reranker** | the new case + each candidate, as text *pairs* | the candidates re-scored for genuine relevance; only the top 2–3 survive | **`zerank-1-small`** — a cross-encoder rerank model on the gateway's `/rerank` endpoint (the `.env.example` default; the endpoint is what `scripts/step0b_verify_embeddings.py` smoke-tests). `bge-reranker-v2-m3` is the A/B alternative — the retrieval eval measures both before either is trusted. |
-| **Distiller Agent** *(offline)* | the existing corpus: Selenium tests + the Xray cases they automate (auto-fetched via the tests' `@Xray` annotations), hand-written Playwright specs, bare manual cases | normalized KB records — intent text, plan-granularity steps, the manual case's steps verbatim, selectors with their ladder kind, provenance tag (`selenium-import`, `playwright-import`, …), plus the original source retained for reference | a gateway chat model, invoked by a `seed_kb` CLI **at seeding time only — never in the per-run loop**. Helper/page-object code is statically resolved by FOLLOWING THE TEST'S EXECUTION PATH — `@Before*` setup methods (where login/navigation live), shared flow classes, base-class click/fill wrappers, locator-repository classes referenced as constants — through the whole in-repo call graph (deduplicated; import/package-aware class resolution, so same-named classes across suites never shadow each other and calls into external libraries are known, not noise). Selector constants fold to their literal values; `String.format`/concatenation skeletons fold to placeholder TEMPLATES; every unresolvable call or locator value is flagged, never silent. The agent normalizes, it never invents — and selector ground truth is re-enforced in code after every model call. A dry-run mode writes per-record review files so distillation quality is human-checkable before anything is embedded. |
+| **Distiller Agent** *(offline)* | the existing corpus: Selenium tests + the Xray cases they automate (auto-fetched via the tests' `@Xray` annotations), hand-written Playwright specs, bare manual cases | normalized KB records — a code-derived **reconstructed plan** (one action per step; selectors kept verbatim with their ladder kind, a file-level provenance citation, and a verified-against-the-code flag; assertion hints; routes), the manual case's step/data/expected rows verbatim, a `ui`/`api`/`db` kind, provenance tag (`selenium-import`, `playwright-import`, …), plus the original source retained for reference | a gateway chat model with three read-only repo tools (read file / search / list), invoked by `seed_kb` **at seeding time only — never in the per-run loop**. Seeding runs in three stages — deterministic where it must be, model-driven where judgment is needed: (1) a **suite map** pass — a minimal static skeleton (folder tree, suites, annotation-driven test discovery with completeness accounting) refined by a Mapper agent into a browsable map of the repo's locator idioms, most-used helpers, and login/lifecycle conventions; (2) one bounded **repo exploration per test** — the agent follows the test's real execution path (page objects, shared wrappers, locator repositories, even `.properties`/XML locator files no static parser sees), steered by the map so shared knowledge is read once, not once per test; (3) a mechanical **verification loop** — every claimed selector must cite its source file and is string-checked there; failed claims bounce back to the agent once, survivors ship flagged unverified, and nothing is invented or silently dropped. Dry-run mode writes per-record review files so distillation quality is human-checkable before anything is embedded. |
 
 **Why two stages (embed → rerank).** Embedding search is *recall*: fast and cheap, but coarse —
 "create a user" and "delete a user" sit close together in vector space. The reranker is
@@ -246,11 +252,17 @@ examples, never the 10 nearest ones. The reranker is the quality gate that keeps
 
 **Who consumes what — asymmetric, like all context injection here.**
 
-- **Planner** — similar cases' plans and their **verified selectors as hints** ("the last case on
+- **Planner** — similar cases' plans and their **selectors as hints** ("the last case on
   this screen used these locators"). Hints shrink live exploration — fewer browser turns, faster and
   cheaper planning — but are never trusted blindly: every selector in the new plan is still
   captured and verified live on the current app build (the never-invent rule and the resilience
-  ladder are unchanged; the app may have changed since the hint was recorded).
+  ladder are unchanged; the app may have changed since the hint was recorded). Hints stay
+  deliberately compact — retrieved material must *inform* planning, never anchor it — with one
+  exception: a **prior solve of the same ticket** injects its full reconstructed plan, so a
+  re-run resumes instead of restarting. After planning, a deterministic **plan validator**
+  compares the fresh plan against the retrieved plans *outside* the Planner's context — missed
+  follow-up flows, unasserted expected results, suspicious step counts — and its advisory
+  findings feed one bounded plan-review round before generation (never a hard block).
 - **Generator** — 1–2 similar finished specs as few-shot examples: "write something that looks like
   these." Consistent style across the suite and fewer compile-retry round-trips. Examples are only
   ever Playwright-sourced (pipeline output or imported specs) — mined Selenium is *knowledge*, never
@@ -279,9 +291,11 @@ supersedes its imported twin.
   endpoint verifications.
 
 Planned code layout: `src/ai_test_gen/rag/` — `store.py` (embedded per-project KB) ·
-`embeddings.py` (gateway `/embeddings` + `/rerank`) · `distiller.py` + `prompts/distiller.md` +
-`scripts/seed_kb.py` (offline seeding) · `retriever.py` (search → rerank → top-k) — all behind the
-`RAG_ENABLED` config flag, off by default.
+`embeddings.py` (gateway `/embeddings` + `/rerank`) · `discover.py` (skeleton + annotation
+discovery) · `mapper.py` + `tools.py` (suite map + read-only repo tools) · `distiller.py` +
+`verify.py` + `scripts/seed_kb.py` (agentic seeding + the verification loop) · `retriever.py`
+(search → rerank → budgeted injection blocks) — plus `plan_validator.py` beside the
+orchestrator — all behind the `RAG_ENABLED` config flag, off by default.
 
 ## Where to read more
 

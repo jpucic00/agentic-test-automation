@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
-from .models import ManualTestCase
+from .models import ManualStep, ManualTestCase
 from .xray_client import _cell_text, _strip_adf
 
 
@@ -86,13 +86,17 @@ def _from_raw_xray(raw: dict[str, Any], issue_key: str) -> ManualTestCase:
         rows_obj = issue.get("steps")
     rows: list[Any] = rows_obj if isinstance(rows_obj, list) else []
 
-    steps: list[str] = []
-    expected_results: list[str] = []
+    steps: list[ManualStep] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        steps.append(_cell_text(row.get("step")))
-        expected_results.append(_cell_text(row.get("result")))
+        steps.append(
+            ManualStep(
+                action=_cell_text(row.get("step")),
+                data=_cell_text(row.get("data")),
+                expected=_cell_text(row.get("result")),
+            )
+        )
 
     return ManualTestCase(
         key=issue_key,
@@ -101,7 +105,6 @@ def _from_raw_xray(raw: dict[str, Any], issue_key: str) -> ManualTestCase:
         # Xray keeps preconditions in linked issues; the live Server/DC path returns [] too.
         preconditions=[],
         steps=steps,
-        expected_results=expected_results,
         labels=list(fields.get("labels") or []),
     )
 

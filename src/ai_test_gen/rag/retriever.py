@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from ..config import Config
 from ..models import ManualTestCase
 from . import embeddings
-from .models import KBRecord, build_intent_text, project_key_of
+from .models import KBRecord, ReconstructedSelector, build_intent_text, project_key_of
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def _retrieve(
     min_score: float,
 ) -> RetrievedContext:
     project = project_key_of(case.key)
-    query = build_intent_text(case.title, case.steps, case.expected_results)
+    query = build_intent_text(case.title, case.steps)
 
     owns_store = store is None
     if store is None:
@@ -172,14 +172,30 @@ def _render_planner_hints(records: list[KBRecord]) -> str:
 
 
 def _hint_block(record: KBRecord) -> str:
+    """One record's hint block — flow + advisory selectors, derived from the plan.
+
+    Selectors carry the resilience-ladder kind, a ✓/⚠ verification mark and their
+    provenance; they are hints to VERIFY live, never locators of record. (The full
+    injection policy — budget knob, same-ticket rich block, kind filter — lands
+    with the Retriever v2 rework.)
+    """
     label = record.xray_key or record.source
     lines = [f"- {record.title} ({label}):"]
-    if record.steps:
-        lines.append("  flow: " + " → ".join(record.steps[:6]))
-    for selector in record.selectors[:5]:
-        target = f" — {selector.description}" if selector.description else ""
-        route = f" [{selector.route}]" if selector.route else ""
-        lines.append(f"  {selector.kind}: {selector.value}{target}{route}")
+    actions = [step.action for step in record.plan.steps if step.action.strip()]
+    if actions:
+        lines.append("  flow: " + " → ".join(actions[:6]))
+    seen: set[tuple[str, str]] = set()
+    selectors: list[ReconstructedSelector] = []
+    for step in record.plan.steps:
+        for selector in (step.selector, step.assert_hint):
+            if selector is None or (selector.kind, selector.value) in seen:
+                continue
+            seen.add((selector.kind, selector.value))
+            selectors.append(selector)
+    for selector in selectors[:5]:
+        mark = "✓" if selector.verified else "⚠"
+        provenance = f" [{selector.provenance}]" if selector.provenance else ""
+        lines.append(f"  {selector.kind}: {selector.value} {mark}{provenance}")
     return "\n".join(lines)
 
 

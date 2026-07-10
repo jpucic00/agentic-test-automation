@@ -14,13 +14,24 @@ from ai_test_gen import models
 
 # One representative, fully-populated instance of every model.
 _INSTANCES: list[BaseModel] = [
+    models.ManualStep(
+        action="Fill credentials and submit",
+        data="qa.bot@example.internal / hunter2",
+        expected="Redirected to /dashboard",
+    ),
     models.ManualTestCase(
         key="QA-1234",
         title="Login happy path",
         description="User can log in with valid credentials.",
         preconditions=["User is logged out"],
-        steps=["Navigate to /login", "Fill credentials and submit"],
-        expected_results=["Login form is visible", "Redirected to /dashboard"],
+        steps=[
+            models.ManualStep(action="Navigate to /login", expected="Login form is visible"),
+            models.ManualStep(
+                action="Fill credentials and submit",
+                data="qa.bot / hunter2",
+                expected="Redirected to /dashboard",
+            ),
+        ],
         labels=["smoke", "auth"],
     ),
     models.PlanStep(
@@ -63,6 +74,7 @@ _INSTANCES: list[BaseModel] = [
 ]
 
 _MODEL_CLASSES: list[type[BaseModel]] = [
+    models.ManualStep,
     models.ManualTestCase,
     models.PlanStep,
     models.TestPlan,
