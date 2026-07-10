@@ -61,6 +61,7 @@ output/storage_states/
 output/tests/*
 !output/tests/.gitkeep
 output/kb_review/
+output/suite_map/
 
 # ─── RAG / Qdrant (Phase 2.5) ────────────────────────────────────
 qdrant_storage/

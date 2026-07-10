@@ -268,6 +268,10 @@ class Config:
     # (offline seeding). Defaults to GENERATOR_MODEL (a code-reading class whose id
     # is valid on whichever gateway this .env targets).
     distiller_model: str = "mistralai/devstral-small-2-2512"
+    # Per-exploration tool-call budget for the offline seeding agents (Mapper now,
+    # Distiller next): pydantic-ai's UsageLimits.request_limit, bounding how many
+    # read/search/list round-trips one map or one per-test distillation may spend.
+    distiller_request_limit: int = 40
 
 
 def load_config() -> Config:
@@ -368,4 +372,21 @@ def load_config() -> Config:
         # always valid on whichever gateway this .env targets.
         distiller_model=os.environ.get("DISTILLER_MODEL")
         or os.environ.get("GENERATOR_MODEL", "mistralai/devstral-small-2-2512"),
+        distiller_request_limit=_positive_int("DISTILLER_REQUEST_LIMIT", default=40),
     )
+
+
+def _positive_int(name: str, *, default: int) -> int:
+    """A positive-integer env var (``name``), falling back to ``default``.
+
+    Unset / non-numeric / non-positive → ``default`` (a typo'd budget should not
+    silently disable the exploration; it just keeps the shipped bound).
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default

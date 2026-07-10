@@ -270,17 +270,30 @@ under `rag/` is imported). See
 
 Shipped and unit-tested today: the embedded store (`rag/store.py`), the gateway embedding/rerank
 client (`rag/embeddings.py`), the retriever (`rag/retriever.py`), the **corpus discovery layer**
-(`rag/discover.py`) and the **plan-shaped data model** (`ManualStep` + `ReconstructedPlan` + a v2 KB
+(`rag/discover.py`), the **read-only repo tools** (`rag/tools.py`), the **suite Mapper**
+(`rag/mapper.py`) and the **plan-shaped data model** (`ManualStep` + `ReconstructedPlan` + a v2 KB
 record). Discovery walks an existing suite and finds each test by a configurable marker regex —
 `TEST_MARKER_REGEX`, default `@Xray(testCase = "KEY")`, which also names the linked manual case — and
 reports completeness (markers seen vs tests discovered; a gap is flagged, never silent), computing
 each record's stable id before any model call.
 
-The **offline seeding tool** that fills the KB from that corpus — a suite-map pass, then a
-repo-exploring Distiller agent that reconstructs each test as a plan (selectors kept verbatim with a
-provenance citation and a verified-against-the-code flag), then a mechanical verification loop — is
-under active development (`DISTILLER_MODEL` selects its chat model). Until it lands, keep
-`RAG_ENABLED` off; the rest of the pipeline is unaffected.
+The KB is filled offline by `scripts/seed_kb.py`. Its first phase — the **suite map** — is runnable
+now: a minimal static skeleton (tree, suites, discovered tests) is refined by a Mapper agent
+(`DISTILLER_MODEL`) that reads the corpus through the repo tools and writes one browsable
+`output/suite_map/<KEY>.suite_map.md` per project — the suite's locator idioms, most-reused helpers,
+and login/lifecycle convention, every claim citing a source file. Generate one for the bundled demo
+without embedding anything:
+
+```bash
+uv run python scripts/seed_kb.py --project NOTE \
+    --selenium packages/demo-notes-app/legacy-suite --map-only --dry-run
+```
+
+`--refresh-map` ignores the per-section cache; `--dry-run` writes the map but embeds nothing; drop it
+to also upsert the map's lifecycle + conventions as retrievable knowledge records. Human corrections
+to a map go in `<KEY>.suite_map.overrides.md` and survive regeneration. The per-test Distiller that
+reconstructs each test into a verified plan-shaped record is landing next. Keep `RAG_ENABLED` off
+until a project's KB is seeded and passes the retrieval eval; the rest of the pipeline is unaffected.
 
 ---
 

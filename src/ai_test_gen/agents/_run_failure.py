@@ -146,7 +146,11 @@ def _response_meta(message: Any) -> str | None:
 
 
 async def run_agent_logged[OutputT](
-    agent: Agent[None, OutputT], user_message: str, *, agent_label: str
+    agent: Agent[None, OutputT],
+    user_message: str,
+    *,
+    agent_label: str,
+    request_limit: int | None = None,
 ) -> OutputT:
     """Run a browser agent with its MCP context, logging failure evidence before re-raising.
 
@@ -156,15 +160,20 @@ async def run_agent_logged[OutputT](
     validation — the captured message tail is logged at ERROR so the run log shows what the
     model actually emitted and why it was rejected. The exception re-raises unchanged, so
     orchestrator flow (heal accounting, clean-failure wrapping) is untouched.
+
+    ``request_limit`` overrides the shared ``AGENT_REQUEST_LIMIT`` for one run — the offline
+    seeding agents (Mapper/Distiller) bound their own exploration via ``DISTILLER_REQUEST_LIMIT``.
+    Omitted → the shared default, so every browser-agent caller is unchanged.
     """
     # Version marker: this line in a run log PROVES the evidence-capture code is running —
     # its absence means the run used an older checkout, not that nothing failed.
     logger.info("%s run started (failure-evidence capture armed)", agent_label)
+    limit = request_limit if request_limit is not None else agent_request_limit()
     with capture_run_messages() as messages:
         try:
             async with agent:
                 result = await agent.run(
-                    user_message, usage_limits=UsageLimits(request_limit=agent_request_limit())
+                    user_message, usage_limits=UsageLimits(request_limit=limit)
                 )
                 return result.output
         except UnexpectedModelBehavior as exc:
