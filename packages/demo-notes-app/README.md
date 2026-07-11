@@ -94,9 +94,13 @@ The test cases live in [`test-cases/`](test-cases/) as raw-Xray-shaped JSON — 
 ## Legacy suite (KB-seeding demo corpus)
 
 [`legacy-suite/`](legacy-suite/) is a miniature "existing test repository" for trying the
-knowledge-base seeding workflow (`scripts/seed_kb.py`) without a real corpus: two Selenium/Java
+knowledge-base seeding workflow (`scripts/seed_kb.py`) without a real corpus: three Selenium/Java
 tests annotated `@Xray(testCase = "NOTE-…")` in a realistic suite layout (`main` page-object
 packages holding the `By.*` locators, a shared `core` package, one deliberately unresolvable
-call), plus one hand-written Playwright spec. The Java files are static fixtures — they are never
-compiled or executed (IDE import errors there are expected), and `tsconfig.json` excludes the
-directory from the demo app's build. See SETUP.md §7.2 for the dry-run seeding walkthrough.
+call), plus one hand-written Playwright spec. It deliberately contains shapes only *navigation*
+— not parsing — can see through: a `.properties` locator registry resolved at runtime
+(`core/main/resources/locators.properties` via `Locators.byKey`), a row-XPath template assembled
+from a note's title, and a flows layer (`NoteFlows`) between tests and page objects. The Java
+files are static fixtures — they are never compiled or executed (IDE import errors there are
+expected), and `tsconfig.json` excludes the directory from the demo app's build. See SETUP.md
+§7.2 for the dry-run seeding walkthrough.

@@ -271,29 +271,51 @@ under `rag/` is imported). See
 Shipped and unit-tested today: the embedded store (`rag/store.py`), the gateway embedding/rerank
 client (`rag/embeddings.py`), the retriever (`rag/retriever.py`), the **corpus discovery layer**
 (`rag/discover.py`), the **read-only repo tools** (`rag/tools.py`), the **suite Mapper**
-(`rag/mapper.py`) and the **plan-shaped data model** (`ManualStep` + `ReconstructedPlan` + a v2 KB
-record). Discovery walks an existing suite and finds each test by a configurable marker regex —
-`TEST_MARKER_REGEX`, default `@Xray(testCase = "KEY")`, which also names the linked manual case — and
-reports completeness (markers seen vs tests discovered; a gap is flagged, never silent), computing
-each record's stable id before any model call.
+(`rag/mapper.py`), the **plan-shaped data model** (`ManualStep` + `ReconstructedPlan` + a v2 KB
+record), the **agentic Distiller** (`rag/distiller.py`), the **verification bounce loop**
+(`rag/verify.py`) and the **seeding orchestration** (`rag/seeding.py`). Discovery walks an existing
+suite and finds each test by a configurable marker regex — `TEST_MARKER_REGEX`, default
+`@Xray(testCase = "KEY")`, which also names the linked manual case — and reports completeness
+(markers seen vs tests discovered; a gap is flagged, never silent), computing each record's stable
+id before any model call.
 
-The KB is filled offline by `scripts/seed_kb.py`. Its first phase — the **suite map** — is runnable
-now: a minimal static skeleton (tree, suites, discovered tests) is refined by a Mapper agent
-(`DISTILLER_MODEL`) that reads the corpus through the repo tools and writes one browsable
-`output/suite_map/<KEY>.suite_map.md` per project — the suite's locator idioms, most-reused helpers,
-and login/lifecycle convention, every claim citing a source file. Generate one for the bundled demo
-without embedding anything:
+The KB is filled offline by `scripts/seed_kb.py`, in phases:
+
+1. **Suite map.** A minimal static skeleton (tree, suites, discovered tests) is refined by a Mapper
+   agent (`DISTILLER_MODEL`) that reads the corpus through the repo tools and writes one browsable
+   `output/suite_map/<KEY>.suite_map.md` per project — the suite's locator idioms, most-reused
+   helpers, and login/lifecycle convention, every claim citing a source file. Cached per section;
+   `--refresh-map` regenerates everything. Human corrections go in `<KEY>.suite_map.overrides.md`
+   and survive regeneration. The map's lifecycle + conventions sections also become retrievable
+   knowledge records.
+2. **Per-test distillation.** One bounded repo exploration per discovered test (same model, same
+   read-only tools, at most `DISTILLER_REQUEST_LIMIT` round-trips), steered by the map's digest:
+   the agent follows the test's real execution path — page objects, flow helpers, even
+   `.properties`/XML locator files no static parser sees — and reconstructs a plan-shaped record.
+   Linked manual cases are auto-fetched per key, fault-tolerantly (`--cases DIR` overrides the
+   source with raw-Xray JSON files; `--no-fetch` skips fetching). On a gateway whose tool-call
+   serving is broken, set `DISTILLER_MODE=two-call` for the no-tools fallback (the model requests
+   files, the code reads them, one structured call distills).
+3. **Verification.** Every claimed selector cites `file#symbol` and is string-checked in code:
+   verified, citation auto-fixed (the value was found elsewhere), or bounced back to the agent
+   exactly once; survivors ship flagged `verified=false` — never silently dropped or kept.
+4. **Review + embed.** One review file per record plus an honesty summary (discovery parity,
+   unverified rate, bounce outcomes, escalation nudges, case misses) lands in
+   `output/kb_review/<KEY>/`; unless `--dry-run`, records are embedded and upserted incrementally
+   (idempotent by stable id, so an interrupted run resumes where it stopped; `--force` re-distills,
+   `--workers N` parallelizes, `--limit N` samples).
+
+Try it against the bundled demo corpus without embedding anything:
 
 ```bash
 uv run python scripts/seed_kb.py --project NOTE \
-    --selenium packages/demo-notes-app/legacy-suite --map-only --dry-run
+    --selenium packages/demo-notes-app/legacy-suite \
+    --cases packages/demo-notes-app/test-cases --dry-run
 ```
 
-`--refresh-map` ignores the per-section cache; `--dry-run` writes the map but embeds nothing; drop it
-to also upsert the map's lifecycle + conventions as retrievable knowledge records. Human corrections
-to a map go in `<KEY>.suite_map.overrides.md` and survive regeneration. The per-test Distiller that
-reconstructs each test into a verified plan-shaped record is landing next. Keep `RAG_ENABLED` off
-until a project's KB is seeded and passes the retrieval eval; the rest of the pipeline is unaffected.
+then review `output/kb_review/NOTE/` (add `--map-only` to stop after the suite map). Keep
+`RAG_ENABLED` off until a project's KB is seeded and passes the retrieval eval; the rest of the
+pipeline is unaffected.
 
 ---
 

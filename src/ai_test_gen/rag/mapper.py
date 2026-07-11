@@ -187,17 +187,23 @@ class SuiteMapResult:
     unresolved_citations: list[str] = field(default_factory=list)
     files_opened: list[str] = field(default_factory=list)
     tool_calls: int = 0
+    # The merged draft the map was rendered from — the distill phase derives each
+    # test's own suite block from it (§5.3: "§0 + the test's own suite block").
+    draft: MapDraft | None = None
 
 
 # --- the agent ---------------------------------------------------------------
 def build_mapper(config: Config, tools: RepoTools) -> Agent[None, MapDraft]:
     """Build the Mapper agent: DISTILLER_MODEL + the shared read-only repo tools."""
+    from .distiller import seeding_model_settings  # local: avoid a module-load cycle
+
     model = build_openai_model(config, config.distiller_model)
     system_prompt = (PROMPTS_DIR / "mapper.md").read_text()
     agent = Agent(
         model=model,
         output_type=MapDraft,
         system_prompt=system_prompt,
+        model_settings=seeding_model_settings(config),
         retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
     )
     tools.register(agent)
@@ -317,6 +323,7 @@ async def build_suite_map(
         unresolved_citations=unresolved,
         files_opened=sorted(tools.files_opened),
         tool_calls=tools.tool_calls,
+        draft=draft,
     )
 
 

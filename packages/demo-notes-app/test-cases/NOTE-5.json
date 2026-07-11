@@ -1,0 +1,31 @@
+{
+  "key": "NOTE-5",
+  "fields": {
+    "summary": "Delete a note",
+    "description": "A logged-in user can delete one of their notes; the note disappears from the list after confirming the dialog.",
+    "labels": ["notes", "regression"]
+  },
+  "steps": [
+    {
+      "id": 50001,
+      "index": 1,
+      "step": { "raw": "Log in as the seeded demo user.", "rendered": "<p>Log in as the seeded demo user.</p>" },
+      "data": { "raw": "demo@demo.test / Passw0rd!", "rendered": "<p>demo@demo.test / Passw0rd!</p>" },
+      "result": { "raw": "The notes list is shown.", "rendered": "<p>The notes list is shown.</p>" }
+    },
+    {
+      "id": 50002,
+      "index": 2,
+      "step": { "raw": "Create a note so there is one to delete.", "rendered": "<p>Create a note so there is one to delete.</p>" },
+      "data": { "raw": "title: Disposable; body: Delete me", "rendered": "<p>title: Disposable; body: Delete me</p>" },
+      "result": { "raw": "The note appears in the notes list.", "rendered": "<p>The note appears in the notes list.</p>" }
+    },
+    {
+      "id": 50003,
+      "index": 3,
+      "step": { "raw": "Click the note's Delete control and confirm in the dialog.", "rendered": "<p>Click the note's Delete control and confirm in the dialog.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The note is removed from the notes list.", "rendered": "<p>The note is removed from the notes list.</p>" }
+    }
+  ]
+}

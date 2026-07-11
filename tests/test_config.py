@@ -319,6 +319,41 @@ def test_rag_knobs_override(env, tmp_path):
     assert cfg.distiller_model == "custom-distiller"
 
 
+@pytest.mark.usefixtures("env")
+def test_distiller_mode_defaults_to_agentic():
+    cfg = load_config()
+    assert cfg.distiller_mode == "agentic"
+    assert cfg.distiller_extra_body is None
+
+
+def test_distiller_extra_body_parses_a_json_object(env):
+    env.setenv("DISTILLER_EXTRA_BODY", '{"provider": {"order": ["Venice"]}}')
+    assert load_config().distiller_extra_body == {"provider": {"order": ["Venice"]}}
+
+
+def test_distiller_extra_body_rejects_invalid_json(env):
+    env.setenv("DISTILLER_EXTRA_BODY", "{provider: Venice}")
+    with pytest.raises(RuntimeError, match="DISTILLER_EXTRA_BODY"):
+        load_config()
+
+
+def test_distiller_extra_body_rejects_non_objects(env):
+    env.setenv("DISTILLER_EXTRA_BODY", '["Venice"]')
+    with pytest.raises(RuntimeError, match="JSON object"):
+        load_config()
+
+
+def test_distiller_mode_two_call_accepted(env):
+    env.setenv("DISTILLER_MODE", "two-call")
+    assert load_config().distiller_mode == "two-call"
+
+
+def test_invalid_distiller_mode_fails_fast(env):
+    env.setenv("DISTILLER_MODE", "toolless")
+    with pytest.raises(RuntimeError, match="DISTILLER_MODE"):
+        load_config()
+
+
 # --- Planner-only LLM endpoint override --------------------------------------
 
 

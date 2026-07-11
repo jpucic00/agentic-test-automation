@@ -100,6 +100,52 @@ def _testcase_source() -> Literal["xray", "local"]:
     )
 
 
+def _distiller_extra_body() -> dict[str, object] | None:
+    """Optional JSON object from ``DISTILLER_EXTRA_BODY``, merged into every seeding
+    agent request body (Mapper + Distiller share the serving path).
+
+    The escape hatch for gateway serving quirks that only bite the offline seeding
+    loop: pin a provider on a load-balanced gateway (e.g. OpenRouter's ``provider``
+    routing — live 2026-07-11: one provider in its gemma-4 pool returns tool calls
+    as empty turns), or pass vLLM extras like ``chat_template_kwargs``. Fails fast
+    on anything that isn't a JSON object — a typo'd body silently dropped would
+    masquerade as "the pin doesn't work".
+    """
+    raw = os.environ.get("DISTILLER_EXTRA_BODY", "").strip()
+    if not raw:
+        return None
+    import json
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"DISTILLER_EXTRA_BODY is not valid JSON: {exc}") from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            f"DISTILLER_EXTRA_BODY must be a JSON object, got {type(parsed).__name__}"
+        )
+    return parsed
+
+
+def _distiller_mode() -> Literal["agentic", "two-call"]:
+    """Distillation mode from ``DISTILLER_MODE``: 'agentic' (default) or 'two-call'.
+
+    'two-call' is the degraded mode for a gateway that fails the tool-loop serving
+    check (tool calls returned as text): the Distiller then never uses tools — one
+    structured call requests the files it needs, the code reads them, a second
+    structured call produces the plan. Fails fast on any other value.
+    """
+    mode = os.environ.get("DISTILLER_MODE", "agentic").strip().lower()
+    if mode == "agentic":
+        return "agentic"
+    if mode == "two-call":
+        return "two-call"
+    raise RuntimeError(
+        f"DISTILLER_MODE={mode!r} is not valid; use 'agentic' (repo-exploring agent) or "
+        "'two-call' (degraded no-tools mode for gateways that fail the tool-loop check)."
+    )
+
+
 def _resolve_under_root(raw: str) -> Path:
     """Expand ``~`` and resolve ``raw``; a relative path is taken relative to PROJECT_ROOT.
 
@@ -268,10 +314,19 @@ class Config:
     # (offline seeding). Defaults to GENERATOR_MODEL (a code-reading class whose id
     # is valid on whichever gateway this .env targets).
     distiller_model: str = "mistralai/devstral-small-2-2512"
-    # Per-exploration tool-call budget for the offline seeding agents (Mapper now,
-    # Distiller next): pydantic-ai's UsageLimits.request_limit, bounding how many
+    # Per-exploration tool-call budget for the offline seeding agents (Mapper +
+    # Distiller): pydantic-ai's UsageLimits.request_limit, bounding how many
     # read/search/list round-trips one map or one per-test distillation may spend.
     distiller_request_limit: int = 40
+    # How the Distiller reaches the corpus: 'agentic' (read/search/list tools) or
+    # 'two-call' — the degraded mode for a gateway that fails the tool-loop serving
+    # check (RETRIEVAL_MEMORY_PLAN.md §1.12): structured file-request call, code
+    # reads the files, structured distill call. No tools ever cross the wire.
+    distiller_mode: Literal["agentic", "two-call"] = "agentic"
+    # Optional JSON object merged into every seeding-agent request body
+    # (DISTILLER_EXTRA_BODY) — provider pinning on load-balanced gateways,
+    # vLLM chat_template_kwargs, and similar serving workarounds.
+    distiller_extra_body: dict[str, object] | None = None
 
 
 def load_config() -> Config:
@@ -373,6 +428,8 @@ def load_config() -> Config:
         distiller_model=os.environ.get("DISTILLER_MODEL")
         or os.environ.get("GENERATOR_MODEL", "mistralai/devstral-small-2-2512"),
         distiller_request_limit=_positive_int("DISTILLER_REQUEST_LIMIT", default=40),
+        distiller_mode=_distiller_mode(),
+        distiller_extra_body=_distiller_extra_body(),
     )
 
 

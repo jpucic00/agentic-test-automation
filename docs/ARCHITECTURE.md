@@ -198,22 +198,28 @@ Possible extensions, not yet built:
 
 ## Planned: retrieval memory — an embedded test-case knowledge base + a reranker
 
-> **Status: foundations built; the seeding pipeline is being rebuilt.** Implemented and
-> unit-tested: the embedded KB store (`rag/store.py` — Qdrant local mode, one collection per
-> project), the gateway embedding/rerank client (`rag/embeddings.py`), the **retriever**
-> (`rag/retriever.py` — search → rerank → capped context blocks, fail-open), the minimal static
-> **discovery layer** (`rag/discover.py` — folder/suite skeleton, marker-driven test discovery
-> with completeness accounting, stable pre-model record ids) and the **plan-shaped data model**
-> (`ManualStep` everywhere + `ReconstructedPlan` + a v2 KB record). The first-generation
-> deep-static Distiller + seeding CLI were removed: real-corpus dry-runs showed that parsing
-> arbitrary test repositories doesn't generalize, so seeding is being rebuilt around a
-> **suite-map pass + a repo-exploring Distiller agent** producing those plan-shaped records
-> (design below). Still to come: that agentic seeding pipeline (map → distill → verify → embed),
-> the orchestrator injection + green-run write-back, the post-plan validator, and the
-> retrieval-quality eval — so nothing here affects a run yet: `RAG_ENABLED` ships off and the
-> default pipeline never imports `rag/`. A committed demo corpus
-> ([`packages/demo-notes-app/legacy-suite/`](../packages/demo-notes-app/legacy-suite/))
-> makes the seeding loop try-out-able against the demo app.
+> **Status: the offline seeding pipeline is built end-to-end.** Implemented and unit-tested:
+> the embedded KB store (`rag/store.py` — Qdrant local mode, one collection per project), the
+> gateway embedding/rerank client (`rag/embeddings.py`), the **retriever** (`rag/retriever.py`
+> — search → rerank → capped context blocks, fail-open), the minimal static **discovery layer**
+> (`rag/discover.py` — folder/suite skeleton, marker-driven test discovery with completeness
+> accounting, stable pre-model record ids), the **plan-shaped data model** (`ManualStep`
+> everywhere + `ReconstructedPlan` + a v2 KB record), the **suite Mapper** (`rag/mapper.py` —
+> a cached, per-section-refreshed map of the corpus's idioms/helpers/lifecycle), and now the
+> **agentic Distiller** (`rag/distiller.py` — one bounded repo exploration per discovered test,
+> steered by the map; a no-tools two-call fallback via `DISTILLER_MODE` for gateways whose
+> tool-call serving is broken), the **verification bounce loop** (`rag/verify.py` — every
+> selector claim cites `file#symbol` and is string-checked: verified, citation auto-fixed, or
+> bounced back to the agent ONCE; survivors ship flagged `verified=false`, never dropped) and
+> the **seeding orchestration** (`rag/seeding.py` + `scripts/seed_kb.py` — review file per
+> record, honesty summary, `--workers` parallelism, resume via stable ids, incremental
+> flushes, per-test failure containment). Still to come: the orchestrator injection +
+> green-run write-back, the post-plan validator, and the retrieval-quality eval — so nothing
+> here affects a run yet: `RAG_ENABLED` ships off and the default pipeline never imports
+> `rag/`. A committed demo corpus
+> ([`packages/demo-notes-app/legacy-suite/`](../packages/demo-notes-app/legacy-suite/) — now
+> including a `.properties` locator registry and a flows layer that only navigation, not
+> parsing, can see through) makes the whole seeding loop try-out-able against the demo app.
 
 **The idea in one paragraph.** Today every test case is planned from scratch, as if it were the
 first — yet the pipeline *produces* the best possible reference material as it works: verified
