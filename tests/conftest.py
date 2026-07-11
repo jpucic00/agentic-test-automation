@@ -55,5 +55,6 @@ def cfg(tmp_path: Path) -> Config:
         embedding_model="embed-model",
         reranker_model="rerank-model",
         rerank_endpoint=None,
+        rag_hint_word_budget=250,
         distiller_model="distiller-model",
     )

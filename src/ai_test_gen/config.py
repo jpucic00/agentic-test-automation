@@ -306,6 +306,12 @@ class Config:
     embedding_model: str = "mxbai-embed-large"
     reranker_model: str = "zeroentropy/zerank-1-small"
     rerank_endpoint: str | None = None
+    # Per-record word budget for the Planner hint block (§1.19 / §6): the total
+    # word count of all compact hints (title + flow + outcome + ~4 selectors) is
+    # capped here. The best-match record always fits; later ones fill the remainder.
+    # 250 words ≈ 2–4 records; raise if the Planner model handles a larger context
+    # well (env: RAG_HINT_WORD_BUDGET).
+    rag_hint_word_budget: int = 250
     # Offline KB seeding only (never part of the run loop). Regex that marks a
     # corpus test for discovery: a method whose decoration zone matches is one
     # record, and group(1) is its Xray key (RETRIEVAL_MEMORY_PLAN.md §5.1).
@@ -422,6 +428,7 @@ def load_config() -> Config:
         embedding_model=os.environ.get("EMBEDDING_MODEL", "mxbai-embed-large"),
         reranker_model=os.environ.get("RERANKER_MODEL", "zeroentropy/zerank-1-small"),
         rerank_endpoint=os.environ.get("RERANK_ENDPOINT") or None,
+        rag_hint_word_budget=_positive_int("RAG_HINT_WORD_BUDGET", default=250),
         test_marker_regex=os.environ.get("TEST_MARKER_REGEX") or DEFAULT_TEST_MARKER_REGEX,
         # Unset → follow the generator model: same code-reading class, and the id is
         # always valid on whichever gateway this .env targets.

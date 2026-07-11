@@ -1,9 +1,13 @@
 """Offline tests for the retriever — store/embed/rerank all mocked.
 
-Covers the acceptance criteria of the retriever task: rerank order beats vector
-order, the score threshold and top-K cap, the provenance rules (selenium-import
-never reaches generator_examples; pipeline supersedes its legacy twin), strict
-per-project scoping, size caps, and fail-open on every failure point.
+Covers the acceptance criteria of the retriever task (ngt7ca4 v2 rework):
+- Rerank order beats vector order; score threshold + top-K cap.
+- Provenance rules: selenium-import never reaches generator_examples; pipeline
+  supersedes its legacy twin.
+- Strict per-project scoping.
+- Injection policy D: compact hint block (word budget, outcome line, ~4 selectors),
+  same-ticket rich block, knowledge block, kind filter (api/db excluded).
+- Fail-open on every failure point.
 """
 from __future__ import annotations
 
@@ -43,6 +47,9 @@ def _record(
     spec: str = "",
     xray_key: str | None = None,
     project_key: str = "QA",
+    kind: str = "ui",
+    manual_steps: list[ManualStep] | None = None,
+    notes: str = "",
 ) -> KBRecord:
     return KBRecord(
         record_id=make_record_id(project_key, source, ref),  # type: ignore[arg-type]
@@ -65,11 +72,14 @@ def _record(
                 ),
                 ReconstructedStep(action="Assert the result", expected="Saved"),
             ],
+            notes=notes,
         ),
+        manual_steps=manual_steps or [],
         routes=["/admin"],
         spec=spec,
         outcome="legacy" if source != "pipeline" else "green",
         source=source,  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
     )
 
 
@@ -224,8 +234,8 @@ class TestRenderingCaps:
 
         assert "HINTS ONLY" in context.planner_hints
         assert "verify every selector live" in context.planner_hints
-        # budget: header + first block always fit; total stays near the cap
-        assert len(context.planner_hints.split()) <= retriever.PLANNER_HINT_WORD_BUDGET + 60
+        # budget comes from config; DEFAULT_HINT_WORD_BUDGET == cfg.rag_hint_word_budget
+        assert len(context.planner_hints.split()) <= cfg.rag_hint_word_budget + 60
 
     def test_empty_collection_short_circuits_before_rerank(
         self, cfg, no_embed, monkeypatch
@@ -238,6 +248,164 @@ class TestRenderingCaps:
         context = retrieve(cfg, _case(), store=FakeStore([]))
 
         assert context.is_empty
+
+
+class TestInjectionPolicyD:
+    """Policy D additions: same-ticket rich block, kind filter, outcome line."""
+
+    def test_same_xray_key_yields_rich_block_not_hints(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        prior = _record("QA-77", "Create user — prior solve", source="pipeline")
+        other = _record("QA-5", "Unrelated case")
+        store = FakeStore([(prior, 0.99), (other, 0.80)])
+        rerank_calls["ranked"] = [(0, 0.95), (1, 0.60)]
+
+        context = retrieve(cfg, _case("QA-77"), store=store)
+
+        assert "Prior solve of QA-77" in context.same_ticket_block
+        # same-ticket record must NOT appear in the compact hints block
+        assert "Create user — prior solve" not in context.planner_hints
+        # other record still appears in hints
+        assert "Unrelated case" in context.planner_hints
+
+    def test_same_ticket_block_renders_full_plan_steps(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        prior = _record("QA-77", "Create user", source="pipeline")
+        store = FakeStore([(prior, 0.99)])
+        rerank_calls["ranked"] = [(0, 0.99)]
+
+        context = retrieve(cfg, _case("QA-77"), store=store)
+
+        assert "Log in" in context.same_ticket_block
+        assert "Do the flow" in context.same_ticket_block
+
+    def test_api_and_db_records_excluded_from_all_injection(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        api = _record("QA-1", "API health check", kind="api")
+        db = _record("QA-2", "DB seed", kind="db")
+        store = FakeStore([(api, 0.9), (db, 0.8)])
+        rerank_calls["ranked"] = [(0, 0.9), (1, 0.8)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert context.planner_hints == ""
+        assert context.knowledge_block == ""
+        assert context.same_ticket_block == ""
+        # api/db records can still appear in retrieved log line but not in any injection block
+        assert len(context.retrieved) == 2
+
+    def test_knowledge_records_render_knowledge_block_not_hints(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        knowledge = _record(
+            "QA-0",
+            "Login conventions",
+            kind="knowledge",
+            notes="Use #username for login; role-based test users from project_context.md.",
+        )
+        store = FakeStore([(knowledge, 0.9)])
+        rerank_calls["ranked"] = [(0, 0.9)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert context.planner_hints == ""
+        assert context.same_ticket_block == ""
+        assert "Login conventions" in context.knowledge_block
+        assert "suite conventions" in context.knowledge_block
+
+    def test_knowledge_block_respects_word_cap(self, cfg, no_embed, rerank_calls) -> None:
+        knowledge = _record(
+            "QA-0",
+            "Very long conventions",
+            kind="knowledge",
+            notes="word " * 200,
+        )
+        store = FakeStore([(knowledge, 0.9)])
+        rerank_calls["ranked"] = [(0, 0.9)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert len(context.knowledge_block.split()) <= retriever._KNOWLEDGE_WORD_BUDGET + 15
+
+    def test_hint_block_includes_outcome_from_manual_steps(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        rec = _record(
+            "QA-3",
+            "Delete note",
+            manual_steps=[
+                ManualStep(action="Log in"),
+                ManualStep(action="Delete the note", expected="Note is removed from the list"),
+            ],
+        )
+        store = FakeStore([(rec, 0.9)])
+        rerank_calls["ranked"] = [(0, 0.9)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert "outcome: Note is removed from the list" in context.planner_hints
+
+    def test_hint_block_omits_outcome_when_no_manual_steps(
+        self, cfg, no_embed, rerank_calls
+    ) -> None:
+        rec = _record("QA-4", "No manual steps record")
+        store = FakeStore([(rec, 0.9)])
+        rerank_calls["ranked"] = [(0, 0.9)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert "outcome:" not in context.planner_hints
+
+    def test_hint_block_caps_selectors_at_four(self, cfg, no_embed, rerank_calls) -> None:
+        def _sel(value: str) -> ReconstructedSelector:
+            return ReconstructedSelector(kind="testid", value=value, provenance="f#s", verified=True)
+
+        many_selectors = KBRecord(
+            record_id=make_record_id("QA", "selenium-import", "QA-8"),
+            project_key="QA",
+            xray_key="QA-8",
+            title="Many selectors",
+            intent_text="Many selectors.",
+            plan=ReconstructedPlan(
+                title="Many selectors",
+                steps=[
+                    ReconstructedStep(action=f"Step {i}", selector=_sel(f"sel-{i}"))
+                    for i in range(8)
+                ],
+            ),
+            manual_steps=[],
+            outcome="legacy",
+            source="selenium-import",
+        )
+        store = FakeStore([(many_selectors, 0.9)])
+        rerank_calls["ranked"] = [(0, 0.9)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        # Each selector line starts with "  testid:" — count them
+        selector_lines = [
+            line for line in context.planner_hints.splitlines() if line.startswith("  testid:")
+        ]
+        assert len(selector_lines) <= 4
+
+    def test_mixed_kinds_routes_correctly(self, cfg, no_embed, rerank_calls) -> None:
+        ui = _record("QA-1", "UI case", kind="ui")
+        knowledge = _record(
+            "QA-0", "Conventions", kind="knowledge", notes="Use test-ids."
+        )
+        api = _record("QA-2", "API check", kind="api")
+        store = FakeStore([(ui, 0.9), (knowledge, 0.85), (api, 0.8)])
+        rerank_calls["ranked"] = [(0, 0.9), (1, 0.85), (2, 0.8)]
+
+        context = retrieve(cfg, _case(), store=store)
+
+        assert "UI case" in context.planner_hints
+        assert "Conventions" in context.knowledge_block
+        assert "API check" not in context.planner_hints
+        assert "API check" not in context.knowledge_block
 
 
 class TestFailOpen:
