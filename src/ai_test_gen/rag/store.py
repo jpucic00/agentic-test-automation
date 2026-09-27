@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .models import KBRecord
+from .models import KBKind, KBRecord
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 # Collection dimension is probed from the first vector actually stored — never a
@@ -98,23 +99,68 @@ class KBStore:
         self._client.upsert(collection_name=collection_name(project_key), points=points)
 
     def search(
-        self, project_key: str, vector: list[float], top_n: int
+        self,
+        project_key: str,
+        vector: list[float],
+        top_n: int,
+        *,
+        kinds: Sequence[KBKind] | None = None,
     ) -> list[tuple[KBRecord, float]]:
         """Top-``top_n`` nearest records from THIS project's collection only.
 
-        An absent collection (project never seeded) is an empty result, not an
-        error — retrieval is fail-open by design.
+        ``kinds`` narrows the search to those record kinds via a payload filter,
+        so excluded kinds never occupy a top-N slot. An absent collection
+        (project never seeded) is an empty result, not an error — retrieval is
+        fail-open by design.
         """
+        from qdrant_client.models import FieldCondition, Filter, MatchAny
+
         name = collection_name(project_key)
         if not self._client.collection_exists(name):
             return []
+        query_filter = (
+            Filter(must=[FieldCondition(key="kind", match=MatchAny(any=list(kinds)))])
+            if kinds is not None
+            else None
+        )
         response = self._client.query_points(
-            collection_name=name, query=vector, limit=top_n, with_payload=True
+            collection_name=name,
+            query=vector,
+            query_filter=query_filter,
+            limit=top_n,
+            with_payload=True,
         )
         return [
             (KBRecord.model_validate(point.payload), point.score)
             for point in response.points
         ]
+
+    def by_xray_key(
+        self, project_key: str, xray_key: str, *, kind: KBKind = "ui", limit: int = 10
+    ) -> list[KBRecord]:
+        """Records of ``kind`` linked to ``xray_key`` (exact match) — no vector, no ranking.
+
+        Covers every source and duplicate-key id variant, since it filters on the
+        payload rather than reconstructing ``make_record_id``.
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        name = collection_name(project_key)
+        if not xray_key or not self._client.collection_exists(name):
+            return []
+        points, _ = self._client.scroll(
+            collection_name=name,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="xray_key", match=MatchValue(value=xray_key)),
+                    FieldCondition(key="kind", match=MatchValue(value=kind)),
+                ]
+            ),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [KBRecord.model_validate(point.payload) for point in points]
 
     def count(self, project_key: str) -> int:
         """Number of records in the project's collection (0 if it doesn't exist)."""

@@ -11,12 +11,16 @@ Injection policy D (§1.19 / §6):
   ``outcome:`` (last manual expected) + ~4 selectors with kind/✓⚠/provenance.
   Word-budget from ``config.rag_hint_word_budget`` (default 250). Only ``ui``
   records render here; a same-ticket record is excluded (it gets its own block).
-- ``same_ticket_block`` — ~400-word rich block rendered when a retrieved record
-  shares the run's xray_key. Framed: "you solved exactly this ticket before —
-  verify everything live, the app may have changed."
+- ``same_ticket_block`` — ~400-word rich block rendered when a ``ui`` record
+  shares the run's xray_key. Fetched by key, independent of ranking — a prior
+  solve must not depend on surviving top-N, the rerank cutoff or top-K. Framed:
+  "you solved exactly this ticket before — verify everything live, the app may
+  have changed."
 - ``knowledge_block`` — ≤100-word block for ``knowledge``-kind records (suite
-  lifecycle/conventions distilled by the Mapper). ``api``/``db`` records are
-  excluded from all injection: they carry no browser surface.
+  lifecycle/conventions distilled by the Mapper), ranked with its own quota so
+  hints and knowledge never crowd each other out. ``api``/``db`` records are
+  excluded at the vector query: they carry no browser surface and must not
+  occupy ranking slots.
 - ``generator_examples`` — ≤2 Playwright specs; only ``pipeline``/
   ``playwright-import`` sources (mined Selenium is knowledge, never style).
 
@@ -39,6 +43,7 @@ logger = logging.getLogger(__name__)
 # quality gate protecting the prompt budget. Overridable per call.
 DEFAULT_TOP_N = 10
 DEFAULT_TOP_K = 3
+DEFAULT_KNOWLEDGE_K = 2  # independent quota; the ≤100-word block rarely fits more
 DEFAULT_MIN_SCORE = 0.30
 DEFAULT_HINT_WORD_BUDGET = 250  # env: RAG_HINT_WORD_BUDGET
 MAX_GENERATOR_EXAMPLES = 2
@@ -70,7 +75,7 @@ class RetrievedContext(BaseModel):
     )
     retrieved: list[str] = Field(
         default_factory=list,
-        description="One line per surviving record — 'KEY · title (score, source)' — for run logs",
+        description="One line per INJECTED record — 'KEY · title (score, source)' — for run logs",
     )
 
     @property
@@ -91,15 +96,17 @@ def retrieve(
     top_n: int = DEFAULT_TOP_N,
     top_k: int = DEFAULT_TOP_K,
     min_score: float = DEFAULT_MIN_SCORE,
+    knowledge_k: int = DEFAULT_KNOWLEDGE_K,
 ) -> RetrievedContext:
     """Top-K similar solved cases for ``case``, rendered for injection. Fail-open.
 
-    ``store`` accepts a pre-opened ``KBStore`` (tests inject a fake; the seeding
-    CLI reuses one); when None, a store is opened on ``config.kb_path`` for the
-    duration of the call.
+    ``top_k`` caps ``ui`` hints and ``knowledge_k`` caps knowledge records —
+    separate quotas over one rerank call. ``store`` accepts a pre-opened
+    ``KBStore`` (tests inject a fake; the seeding CLI reuses one); when None, a
+    store is opened on ``config.kb_path`` for the duration of the call.
     """
     try:
-        return _retrieve(config, case, store, top_n, top_k, min_score)
+        return _retrieve(config, case, store, top_n, top_k, min_score, knowledge_k)
     except Exception as exc:  # fail-open is the contract — never break a run
         logger.warning(
             "Retrieval memory unavailable for %s (%s: %s) — continuing unassisted.",
@@ -117,6 +124,7 @@ def _retrieve(
     top_n: int,
     top_k: int,
     min_score: float,
+    knowledge_k: int,
 ) -> RetrievedContext:
     project = project_key_of(case.key)
     query = build_intent_text(case.title, case.steps)
@@ -128,47 +136,67 @@ def _retrieve(
         store = KBStore(config.kb_path)
     try:
         vector = embeddings.embed(config, [query])[0]
-        candidates = store.search(project, vector, top_n)  # type: ignore[attr-defined]
+        # Kind filter at the query (§6): api/db never take a top-N slot.
+        ui_hits = store.search(project, vector, top_n, kinds=("ui",))  # type: ignore[attr-defined]
+        knowledge_hits = store.search(  # type: ignore[attr-defined]
+            project, vector, top_n, kinds=("knowledge",)
+        )
+        ticket_records = store.by_xray_key(project, case.key)  # type: ignore[attr-defined]
     finally:
         if owns_store:
             store.close()  # type: ignore[attr-defined]
 
-    records = _supersede_legacy_twins([record for record, _ in candidates])
-    if not records:
-        return RetrievedContext()
-
-    ranked = embeddings.rerank(
-        config, query, [record.intent_text for record in records], top_n=len(records)
+    # Same-ticket prior solve (§1.19): fetched by key, not ranked; the pipeline
+    # record wins over its legacy twin. Its key is kept out of the hint pool.
+    same_ticket = next(iter(_supersede_legacy_twins(ticket_records)), None)
+    ui_pool = _supersede_legacy_twins(
+        [record for record, _ in ui_hits if record.xray_key != case.key]
     )
-    selected = [
-        (records[index], score) for index, score in ranked if score >= min_score
-    ][:top_k]
-    if not selected:
-        return RetrievedContext()
+    candidates = ui_pool + [record for record, _ in knowledge_hits]
 
-    # Split by kind (§1.19 policy D).
-    # ui  → compact hint block (excluding the same-ticket record, which gets the rich block)
-    # knowledge → core-knowledge block (suite lifecycle/conventions from the Mapper)
-    # api/db → silently excluded (no browser surface, nothing for the Planner to apply)
-    all_records = [r for r, _ in selected]
-    same_ticket = next(
-        (r for r in all_records if r.kind == "ui" and r.xray_key == case.key), None
-    )
-    ui_records = [
-        r for r in all_records if r.kind == "ui" and r is not same_ticket
-    ]
-    knowledge_records = [r for r in all_records if r.kind == "knowledge"]
+    # One rerank call, independent quotas: ui hints → top_k, knowledge → knowledge_k.
+    ui_selected: list[tuple[KBRecord, float]] = []
+    knowledge_selected: list[tuple[KBRecord, float]] = []
+    if candidates:
+        ranked = embeddings.rerank(
+            config, query, [record.intent_text for record in candidates], top_n=len(candidates)
+        )
+        for index, score in ranked:
+            if score < min_score:
+                continue
+            record = candidates[index]
+            bucket, quota = (
+                (ui_selected, top_k) if index < len(ui_pool) else (knowledge_selected, knowledge_k)
+            )
+            if len(bucket) < quota:
+                bucket.append((record, score))
+    if same_ticket is None and not ui_selected and not knowledge_selected:
+        return RetrievedContext()
 
     word_budget = getattr(config, "rag_hint_word_budget", DEFAULT_HINT_WORD_BUDGET)
+    hints, hint_records = _render_planner_hints([r for r, _ in ui_selected], word_budget)
+    knowledge, knowledge_records = _render_knowledge_block([r for r, _ in knowledge_selected])
+    examples, example_records = _render_generator_examples(
+        ([same_ticket] if same_ticket else []) + [r for r, _ in ui_selected]
+    )
+
+    # Log only what was actually injected, in block order, each record once.
+    scores = {record.record_id: score for record, score in ui_selected + knowledge_selected}
+    injected: dict[str, KBRecord] = {}
+    for record in (
+        ([same_ticket] if same_ticket else []) + hint_records + knowledge_records + example_records
+    ):
+        injected.setdefault(record.record_id, record)
     return RetrievedContext(
-        planner_hints=_render_planner_hints(ui_records, word_budget),
+        planner_hints=hints,
         same_ticket_block=_render_same_ticket_block(same_ticket) if same_ticket else "",
-        knowledge_block=_render_knowledge_block(knowledge_records),
-        generator_examples=_render_generator_examples(all_records),
+        knowledge_block=knowledge,
+        generator_examples=examples,
         retrieved=[
-            f"{record.xray_key or record.record_id[:8]} · {record.title} "
-            f"({score:.2f}, {record.source})"
-            for record, score in selected
+            f"{record.xray_key or record.record_id[:8]} · {record.title} ("
+            + (f"{scores[record.record_id]:.2f}" if record.record_id in scores else "same ticket")
+            + f", {record.source})"
+            for record in injected.values()
         ],
     )
 
@@ -187,8 +215,9 @@ def _supersede_legacy_twins(records: list[KBRecord]) -> list[KBRecord]:
     ]
 
 
-def _render_planner_hints(records: list[KBRecord], word_budget: int) -> str:
+def _render_planner_hints(records: list[KBRecord], word_budget: int) -> tuple[str, list[KBRecord]]:
     """Compact similar-cases block for the Planner, capped at ``word_budget`` words.
+    Returns the block and the records that made it in.
 
     Records are appended in rank order until the budget is spent (the best match
     always fits). Selectors carry their ladder kind + provenance and are framed
@@ -198,7 +227,7 @@ def _render_planner_hints(records: list[KBRecord], word_budget: int) -> str:
     excluded before this call.
     """
     if not records:
-        return ""
+        return "", []
     header = (
         "Similar solved cases (HINTS ONLY — verify every selector live with "
         "browser_generate_locator before recording it; the app may have changed):"
@@ -212,7 +241,7 @@ def _render_planner_hints(records: list[KBRecord], word_budget: int) -> str:
             break
         blocks.append(block)
         used_words += block_words
-    return header + "\n" + "\n".join(blocks) if blocks else ""
+    return header + "\n" + "\n".join(blocks), records[: len(blocks)]
 
 
 def _hint_block(record: KBRecord) -> str:
@@ -280,17 +309,21 @@ def _render_same_ticket_block(record: KBRecord) -> str:
     return "\n".join(lines)
 
 
-def _render_knowledge_block(records: list[KBRecord]) -> str:
+def _render_knowledge_block(records: list[KBRecord]) -> tuple[str, list[KBRecord]]:
     """≤100-word core-knowledge block for ``knowledge``-kind records (§6, policy D).
 
     Knowledge records are distilled map sections (lifecycle, conventions) upserted
     by the Mapper. They are advisory — the Planner applies them unless the live app
-    contradicts them.
+    contradicts them. The best record always renders, truncated to the budget:
+    mapper bodies routinely exceed 100 words, and without that rule the block
+    rendered empty for exactly the records it exists to inject. Returns the block
+    and the records that made it in.
     """
     if not records:
-        return ""
+        return "", []
     header = "Core knowledge (suite conventions — apply unless the live app contradicts it):"
     parts: list[str] = []
+    rendered: list[KBRecord] = []
     used_words = len(header.split())
     for record in records:
         # Mapper puts conventions in plan.notes; fall back to step actions.
@@ -301,26 +334,34 @@ def _render_knowledge_block(records: list[KBRecord]) -> str:
             continue
         snippet = f"- {record.title}: {text}"
         snippet_words = len(snippet.split())
-        if used_words + snippet_words > _KNOWLEDGE_WORD_BUDGET:
-            break
+        remaining = _KNOWLEDGE_WORD_BUDGET - used_words
+        if snippet_words > remaining:
+            if parts:
+                break
+            # Best-match-always-fits (same rule as the planner hints): the top
+            # knowledge record renders truncated rather than not at all.
+            snippet = " ".join(snippet.split()[: max(remaining - 1, 1)]) + " …"
+            snippet_words = len(snippet.split())
         parts.append(snippet)
+        rendered.append(record)
         used_words += snippet_words
-    return header + "\n" + "\n".join(parts) if parts else ""
+    return (header + "\n" + "\n".join(parts) if parts else ""), rendered
 
 
-def _render_generator_examples(records: list[KBRecord]) -> str:
-    """Up to MAX_GENERATOR_EXAMPLES Playwright specs — never Selenium-sourced."""
+def _render_generator_examples(records: list[KBRecord]) -> tuple[str, list[KBRecord]]:
+    """Up to MAX_GENERATOR_EXAMPLES Playwright specs — never Selenium-sourced.
+    Returns the block and the records used."""
     specs = [
         record
         for record in records
         if record.source in _EXAMPLE_SOURCES and record.spec.strip()
     ][:MAX_GENERATOR_EXAMPLES]
     if not specs:
-        return ""
+        return "", []
     parts = ["Similar existing tests (style reference — follow their conventions):"]
     for record in specs:
         parts.append(
             f"### {record.title} ({record.xray_key or record.source})\n"
             f"```typescript\n{record.spec[:_EXAMPLE_CHAR_CAP]}\n```"
         )
-    return "\n".join(parts)
+    return "\n".join(parts), specs

@@ -18,7 +18,9 @@ from ai_test_gen.rag.models import (
     ReconstructedPlan,
     ReconstructedSelector,
     ReconstructedStep,
+    build_intent_text,
     make_record_id,
+    project_key_of,
 )
 from ai_test_gen.rag.store import KBStore, collection_name
 
@@ -114,6 +116,19 @@ class TestStoreRoundTrip:
 
         assert store.count("QA") == 1
 
+    def test_upsert_overwrites_payload_for_the_same_record_id(self, store: KBStore) -> None:
+        """--force re-distillation: same record_id upserts the NEW payload, no duplicate."""
+        original = _record(title="Login works")
+        updated = _record(title="Login works — re-distilled")
+        assert original.record_id == updated.record_id  # same (project, source, ref)
+
+        store.upsert("QA", [original], [[1.0, 0.0, 0.0]])
+        store.upsert("QA", [updated], [[1.0, 0.0, 0.0]])
+
+        assert store.count("QA") == 1
+        results = store.search("QA", [1.0, 0.0, 0.0], top_n=5)
+        assert [r.title for r, _ in results] == ["Login works — re-distilled"]
+
     def test_projects_are_fully_isolated(self, store: KBStore) -> None:
         qa = _record(project_key="QA", ref="QA-1")
         note = _record(project_key="NOTE", ref="NOTE-9", title="Create a note")
@@ -132,6 +147,28 @@ class TestStoreRoundTrip:
         assert store.search("ZZ", [1.0, 0.0, 0.0], top_n=3) == []
         assert store.count("ZZ") == 0
 
+    def test_kinds_filter_keeps_excluded_kinds_out_of_the_top_n(self, store: KBStore) -> None:
+        api = _record(ref="QA-1", title="API health", kind="api")
+        ui = _record(ref="QA-2", title="Login works")
+        store.upsert("QA", [api, ui], [[1.0, 0.0, 0.0], [0.5, 0.5, 0.0]])
+
+        results = store.search("QA", [1.0, 0.0, 0.0], top_n=1, kinds=("ui",))
+
+        assert [r.title for r, _ in results] == ["Login works"]
+
+    def test_by_xray_key_matches_key_and_kind_across_sources(self, store: KBStore) -> None:
+        legacy = _record(ref="QA-7", source="selenium-import", title="Legacy")
+        solved = _record(ref="QA-7", source="pipeline", title="Solved")
+        api = _record(ref="QA-7", source="manual", title="API twin", kind="api")
+        other = _record(ref="QA-8", title="Other")
+        store.upsert("QA", [legacy, solved, api, other], [[1.0, 0.0, 0.0]] * 4)
+
+        found = store.by_xray_key("QA", "QA-7")
+
+        assert sorted(r.title for r in found) == ["Legacy", "Solved"]
+        assert store.by_xray_key("QA", "") == []
+        assert store.by_xray_key("ZZ", "ZZ-1") == []
+
 
 class TestStoreValidation:
     def test_mismatched_records_and_vectors_raise(self, store: KBStore) -> None:
@@ -145,6 +182,28 @@ class TestStoreValidation:
     def test_empty_upsert_is_a_no_op(self, store: KBStore) -> None:
         store.upsert("QA", [], [])
         assert store.count("QA") == 0
+
+
+class TestExistingIds:
+    def test_mixed_known_and_unknown_ids_returns_the_stored_subset(
+        self, store: KBStore
+    ) -> None:
+        first = _record(ref="QA-1")
+        second = _record(ref="QA-2", title="Delete a user")
+        store.upsert("QA", [first, second], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        unknown = make_record_id("QA", "pipeline", "QA-404")
+
+        found = store.existing_ids("QA", [first.record_id, unknown, second.record_id])
+
+        assert found == {first.record_id, second.record_id}
+
+    def test_empty_id_list_is_empty(self, store: KBStore) -> None:
+        store.upsert("QA", [_record()], [[1.0, 0.0, 0.0]])
+        assert store.existing_ids("QA", []) == set()
+
+    def test_never_seeded_project_is_empty(self, store: KBStore) -> None:
+        ids = [make_record_id("ZZ", "pipeline", "ZZ-1")]
+        assert store.existing_ids("ZZ", ids) == set()
 
 
 class TestRecordId:
@@ -161,6 +220,38 @@ class TestRecordId:
             make_record_id("QA", "pipeline", "QA-2"),
         }
         assert len(ids) == 4
+
+
+class TestBuildIntentText:
+    def test_exact_v1_format_and_data_cell_exclusion(self) -> None:
+        """Pins the embedded text byte-for-byte: format drift silently invalidates
+        every stored vector (§1.17 no-re-embedding contract), and the per-step
+        data cell (credentials) must never reach the embedded text."""
+        text = build_intent_text(
+            "Login works",
+            [
+                ManualStep(
+                    action="Log in as admin",
+                    data="demo@demo.test / pw",
+                    expected="Dashboard is shown",
+                ),
+                ManualStep(action="Log out"),
+            ],
+        )
+
+        assert text == "Login works\nSteps: Log in as admin Log out\nExpected: Dashboard is shown"
+        assert "demo@demo.test" not in text
+
+    def test_empty_steps_yield_the_bare_title(self) -> None:
+        assert build_intent_text("Login works", []) == "Login works"
+
+
+class TestProjectKeyOf:
+    def test_lowercase_issue_key_routes_to_the_uppercase_project(self) -> None:
+        assert project_key_of("qa-123") == "QA"
+
+    def test_dashless_key_is_returned_whole_uppercased(self) -> None:
+        assert project_key_of("note") == "NOTE"
 
 
 def test_default_pipeline_never_imports_qdrant() -> None:

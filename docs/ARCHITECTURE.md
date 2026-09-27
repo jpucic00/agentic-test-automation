@@ -234,8 +234,9 @@ solved case makes the next one faster and cheaper.**
 flowchart LR
     MTC["new ManualTestCase"] --> EMB["embed<br/>gateway /embeddings"]
     EMB --> KB[("Test-case KB<br/>embedded vector DB")]
-    KB -->|"top-N candidates<br/>vector search · recall"| RR["Reranker · zerank-1-small<br/>scores each pair · precision"]
-    RR -->|top 2–3 truly similar| INJ["injected into agent context"]
+    KB -->|"top-N ui + knowledge candidates<br/>vector search · recall"| RR["Reranker · zerank-1-small<br/>scores each pair · precision"]
+    RR -->|"top 2–3 ui hints · top knowledge"| INJ["injected into agent context"]
+    KB -->|"same ticket · direct lookup by key"| INJ
     INJ -->|"compact hints · full prior plan for the same ticket"| PL2["Planner"]
     INJ -->|green specs as few-shot examples| GE2["Generator"]
     GRN["green run"] -. write back case + plan + spec .-> KB
@@ -265,7 +266,9 @@ examples, never the 10 nearest ones. The reranker is the quality gate that keeps
   ladder are unchanged; the app may have changed since the hint was recorded). Hints stay
   deliberately compact — retrieved material must *inform* planning, never anchor it — with one
   exception: a **prior solve of the same ticket** injects its full reconstructed plan, so a
-  re-run resumes instead of restarting. After planning, a deterministic **plan validator**
+  re-run resumes instead of restarting. That record is looked up directly by ticket key, not
+  ranked, and `api`/`db` records are filtered out in the search itself, so neither takes a
+  hint slot. After planning, a deterministic **plan validator**
   compares the fresh plan against the retrieved plans *outside* the Planner's context — missed
   follow-up flows, unasserted expected results, suspicious step counts — and its advisory
   findings feed one bounded plan-review round before generation (never a hard block).
