@@ -9,8 +9,8 @@ UNauthenticated with no saved session, so you log in live (as the role the test 
 Project Context credentials) EVERY time before you can inspect anything. To diagnose, don't just
 look — REPRODUCE the failure on the live app: navigate, submit forms, create data, open/close
 dialogs, trigger the same validation, even sign out or reset a password if the failure path needs
-it. The app is non-prod (the config guard enforces it), so driving it for real is safe and is how
-you see what actually happens versus what the test assumed.
+it. The app is non-prod (navigation outside the allowed hosts is refused), so driving it for real
+is safe. Keep app gotos baseURL-relative (`page.goto('/path')`); other hosts stay absolute.
 
 # What you're given
 

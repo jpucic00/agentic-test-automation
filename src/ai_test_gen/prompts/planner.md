@@ -48,10 +48,10 @@ the plan is a transcript the Generator replays verbatim.
    CLICKING the app's nav, menus, and buttons, the way a person would. Do NOT guess or hand-type
    feature URLs: `browser_navigate` ONLY to the staging URL given to you, or to a route or URL the
    Application Map explicitly marks as directly addressable — that includes auxiliary tool UIs the
-   map declares (e.g. a mail-catcher for email verification), which are legitimate navigation
-   targets even on another host. Many apps (SPAs) expose a feature ONLY
-   via in-app navigation, never a typed URL — and after you log in you are often ALREADY where the
-   test needs to be, so READ the current page before navigating anywhere.
+   map declares (e.g. a mail-catcher for email verification), even on another allowed host. Many
+   apps (SPAs) expose a feature ONLY via in-app navigation, never a typed URL — and after you log
+   in you are often ALREADY where the test needs to be, so READ the current page before
+   navigating anywhere.
 3. **Drive the flow live — PERFORM each step (happy AND failure paths) and OBSERVE the result.**
    Don't just verify selectors — actually DO the scenario, the way the test will. Perform each step
    as you plan it — log in, click, open modals/dialogs, fill fields, and SUBMIT — so its selectors
@@ -62,9 +62,9 @@ the plan is a transcript the Generator replays verbatim.
    custom widget: find the real selector and note the interaction (e.g. "combobox — selectOption").
    Then **SUBMIT and read the real outcome**: did it navigate, show a success toast, show a
    validation error, clear the form, stay put? This is how you capture a TRUE proof for the
-   assertion (step 5) and catch behaviors a static read misses. This app is non-prod (the config
-   guard enforces it), so exercising real submits and negative paths (wrong password, missing
-   required field) is safe and expected when the case calls for them. When you're done observing,
+   assertion (step 5) and catch behaviors a static read misses. This app is non-prod (navigation
+   outside the allowed hosts is refused), so exercising real submits and negative paths (wrong
+   password, missing required field) is safe and expected when the case calls for them. When you're done observing,
    CLOSE any leftover dialog (X / Cancel / Escape) so the page is usable for the next step — a modal
    blocks the whole page, so if clicks/navigation stop working, a dialog is open: close it first.
 4. For each step, on the screen you actually reached: identify the target element and capture a

@@ -308,3 +308,31 @@ def test_file_lookup_error_other_than_404_propagates(cfg, monkeypatch):
         client.open_mr(_generated(), _plan(), "QA-1")
     project.commits.create.assert_not_called()
     project.branches.delete.assert_called_once()
+
+
+def test_mr_description_renders_per_environment_results(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(
+        _generated(), _plan(), "QA-1",
+        final_status="passed",
+        environment_results=[
+            models.EnvironmentRunResult(
+                base_url="https://staging.example.internal", primary=True, status="passed"
+            ),
+            models.EnvironmentRunResult(
+                base_url="https://qa2.example.internal", primary=False, status="failed",
+                error="locator timeout",
+            ),
+        ],
+    )
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "### Environments (2)" in desc
+    assert "- `https://staging.example.internal` (primary — healed here): `passed`" in desc
+    assert "- `https://qa2.example.internal`: `failed` — locator timeout" in desc
+
+
+def test_mr_description_omits_environments_for_single_env_run(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1", final_status="passed", environment_results=[])
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "Environments" not in desc

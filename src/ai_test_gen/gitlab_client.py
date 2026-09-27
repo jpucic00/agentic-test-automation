@@ -12,6 +12,8 @@ the MR). Per AI_TEST_GENERATION_GUIDE.md §3.12, with three improvements:
 - **Heal-attempt transparency**: the heal count, final status, and each Healer
   ``changes_summary`` are rendered into the MR description so reviewers can spot tests
   that needed multiple rounds.
+- **Per-environment results**: on a multi-environment run (several ``STAGING_BASE_URL``
+  entries) the description lists the final spec's outcome on every environment.
 
 There is intentionally **no credential-leak scan** (2026-06-01 decision): generated
 tests embed the disposable staging dummy logins from ``project_context.md`` as literals.
@@ -29,7 +31,7 @@ import gitlab
 
 from . import mtls
 from .config import Config
-from .models import GeneratedTest, TestPlan
+from .models import EnvironmentRunResult, GeneratedTest, TestPlan
 
 MR_LABELS = ["ai-generated", "qa-review-needed"]
 
@@ -80,6 +82,7 @@ class GitLabClient:
         heal_attempts: int = 0,
         final_status: str | None = None,
         trace_path: str | None = None,
+        environment_results: list[EnvironmentRunResult] | None = None,
     ) -> str:
         """Create a branch, commit one revision per attempt + the plan JSON, open an MR.
 
@@ -94,6 +97,9 @@ class GitLabClient:
         ``plan_json`` is the serialized plan to commit (the orchestrator passes the
         context-hash-enriched JSON so the committed copy matches the local one); falls
         back to ``plan.model_dump_json`` when omitted.
+
+        ``environment_results`` (multi-environment runs only) is rendered as a per-environment
+        outcome list in the description; empty/``None`` leaves the description unchanged.
         """
         branch_name = _branch_name(test_case_key)
         file_path = f"tests/generated/{test.file_name}"
@@ -124,6 +130,7 @@ class GitLabClient:
                         heal_attempts=heal_attempts,
                         final_status=final_status,
                         trace_path=trace_path,
+                        environment_results=environment_results,
                     ),
                     "labels": MR_LABELS,
                     "remove_source_branch": True,
@@ -211,11 +218,27 @@ def _build_mr_description(
     heal_attempts: int,
     final_status: str | None,
     trace_path: str | None = None,
+    environment_results: list[EnvironmentRunResult] | None = None,
 ) -> str:
     healer_block = ""
     if heal_attempts > 0:
         bullets = "\n".join(f"- {s}" for s in (heal_summaries or [])) or "- (no summary recorded)"
         healer_block = f"\n### Healer attempts ({heal_attempts})\n{bullets}\n"
+
+    env_block = ""
+    if environment_results:
+        rows = []
+        for env in environment_results:
+            role = " (primary — healed here)" if env.primary else ""
+            error = f" — {env.error}" if env.error else ""
+            rows.append(f"- `{env.base_url}`{role}: `{env.status}`{error}")
+        env_block = (
+            f"\n### Environments ({len(environment_results)})\n"
+            "The final spec ran once on each environment; secondary environments are never "
+            "healed, so a failure there is an environment difference to review.\n"
+            + "\n".join(rows)
+            + "\n"
+        )
 
     # The trace is a local artifact on the machine that ran the pipeline (not committed);
     # pointing at it saves the reviewer of a red MR from re-running to get a trace.
@@ -238,7 +261,7 @@ def _build_mr_description(
 
 ### Planner notes
 {plan.notes or "(none)"}
-{healer_block}
+{healer_block}{env_block}
 ### Review checklist
 - [ ] Test name and description are accurate
 - [ ] Selectors are verified locators (getByTestId / getByRole / getByLabel), not raw #id/CSS

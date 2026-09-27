@@ -23,6 +23,12 @@ Improvements over the guide's template:
   history stays on disk. The MR then commits one revision per attempt (initial → optional
   regen → each heal) to a single committed file path, so a reviewer can diff one attempt
   against the next in GitLab's commit view.
+- **Multi-environment runs.** Plan → generate → run → heal happen once, against the primary
+  (first) ``STAGING_BASE_URL`` entry. The final spec then runs once on every other configured
+  environment — no Planner, no healing: a failure there is a real environment difference and
+  is reported per environment (summary, run log, MR description), not "fixed".
+- **Navigation allow-list.** Every run is pre-checked for absolute navigation outside the
+  allowed hosts (``test_runner``); a blocked run is an error surfaced for review, never healed.
 """
 from __future__ import annotations
 
@@ -43,7 +49,13 @@ from .agents.planner import plan_test_case
 from .config import PROJECT_ROOT, Config, load_config
 from .gitlab_client import GitLabClient, TestRevision
 from .local_testcases import load_local_test_case
-from .models import GeneratedTest, ManualTestCase, TestPlan, TestRunResult
+from .models import (
+    EnvironmentRunResult,
+    GeneratedTest,
+    ManualTestCase,
+    TestPlan,
+    TestRunResult,
+)
 from .test_runner import run_test
 from .xray_client import XrayClient
 
@@ -83,6 +95,12 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         max_heal_attempts = _resolve_max_heal_attempts()
 
     _clear_snapshots_dir(config)
+    logger.info(
+        "[%s] Environments (primary first): %s; extra allowed hosts: %s",
+        issue_key,
+        ", ".join(config.staging_base_urls),
+        ", ".join(config.staging_extra_urls) or "(none)",
+    )
 
     logger.info("[%s] Loading test case (source=%s)", issue_key, config.testcase_source)
     test_case = _load_test_case(config, issue_key)
@@ -145,7 +163,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     ]
 
     logger.info("[%s] Running test (attempt 1)", issue_key)
-    result = await run_test(config, test)
+    result = await run_test(config, test, plan=plan)
 
     # A failure with did_run=False is a compile/collection error — the spec never
     # executed, so there is nothing for the browser-driving Healer to inspect. Give the
@@ -179,7 +197,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 )
             )
             logger.info("[%s] Re-running regenerated test", issue_key)
-            result = await run_test(config, test)
+            result = await run_test(config, test, plan=plan)
         except Exception as exc:
             # Regeneration is best-effort: on a Generator/gateway crash keep the
             # original failure and let the normal heal/MR path handle it.
@@ -189,7 +207,8 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     failure_signatures: list[str] = []
     heal_attempts = 0
     consecutive_aborts = 0
-    while result.status != "passed" and heal_attempts < max_heal_attempts:
+    # A run blocked by the pre-run navigation check is a safety stop, not a healable failure.
+    while result.status != "passed" and not result.blocked and heal_attempts < max_heal_attempts:
         heal_attempts += 1
         # How many times in a row this exact failure has already recurred. When the SAME
         # step keeps failing the same way, re-trying the same locator kind isn't working —
@@ -257,13 +276,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             )
         )
         logger.info("[%s] Re-running test", issue_key)
-        result = await run_test(config, test)
+        result = await run_test(config, test, plan=plan)
 
-    if result.status != "passed":
+    if result.blocked:
+        logger.error("[%s] %s — not healed", issue_key, result.error_message)
+    elif result.status != "passed":
         logger.warning(
             "[%s] Still %s after %d heal attempt(s); opening MR for review anyway",
             issue_key, result.status, heal_attempts,
         )
+
+    env_results = await _run_other_environments(config, test, plan, issue_key, result)
 
     if not config.gitlab_enabled:
         logger.info(
@@ -280,7 +303,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         }
         if result.trace_path:
             summary["trace_path"] = result.trace_path
-        return summary
+        return _with_environments(summary, env_results)
 
     logger.info("[%s] Opening GitLab MR", issue_key)
     # The MR carries ONE file path (the original first-iteration filename) but one commit
@@ -301,6 +324,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             heal_attempts=heal_attempts,
             final_status=result.status,
             trace_path=result.trace_path,
+            environment_results=env_results,
         )
     except Exception as exc:
         # GitLab/auth/network failure must not discard the run: the generated test and plan
@@ -312,13 +336,16 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             config.tests_dir / test.file_name,
             config.plans_dir / f"{issue_key}.json",
         )
-        return {
-            "issue_key": issue_key,
-            "status": result.status,
-            "heal_attempts": heal_attempts,
-            "mr_url": None,
-            "error": f"MR creation failed: {exc}",
-        }
+        return _with_environments(
+            {
+                "issue_key": issue_key,
+                "status": result.status,
+                "heal_attempts": heal_attempts,
+                "mr_url": None,
+                "error": f"MR creation failed: {exc}",
+            },
+            env_results,
+        )
     logger.info("[%s] MR opened: %s", issue_key, mr_url)
 
     summary = {
@@ -329,6 +356,62 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     }
     if result.trace_path:
         summary["trace_path"] = result.trace_path
+    return _with_environments(summary, env_results)
+
+
+async def _run_other_environments(
+    config: Config,
+    test: GeneratedTest,
+    plan: TestPlan,
+    issue_key: str,
+    primary: TestRunResult,
+) -> list[EnvironmentRunResult]:
+    """Run the final spec once on every secondary environment; ``[]`` for a single env.
+
+    No Planner and no healing here: the spec was healed against the primary environment, so
+    a failure on another one is a real environment difference to surface, not to "fix".
+    Each secondary run writes Playwright output to its own ``test-results/env-N`` folder so
+    the primary run's trace survives. The returned list starts with the primary result.
+    """
+    if len(config.staging_base_urls) < 2:
+        return []
+    results = [_environment_result(config.staging_base_url, primary, primary=True)]
+    total = len(config.staging_base_urls)
+    for index, base_url in enumerate(config.staging_base_urls[1:], start=2):
+        logger.info(
+            "[%s] Running final spec on environment %d/%d: %s", issue_key, index, total, base_url
+        )
+        run = await run_test(
+            config, test, plan=plan, base_url=base_url, results_dir=f"test-results/env-{index}"
+        )
+        env_result = _environment_result(base_url, run, primary=False)
+        log = logger.info if env_result.status == "passed" else logger.warning
+        log(
+            "[%s] Environment %s: %s%s",
+            issue_key, base_url, env_result.status,
+            f" — {env_result.error}" if env_result.error else "",
+        )
+        results.append(env_result)
+    return results
+
+
+def _environment_result(
+    base_url: str, result: TestRunResult, *, primary: bool
+) -> EnvironmentRunResult:
+    """Per-environment summary: status plus the error's first line (capped) when not passed."""
+    error = None
+    if result.status != "passed":
+        lines = (result.error_message or result.stderr or "").strip().splitlines()
+        error = (lines[0] if lines else "(no error output)")[:300]
+    return EnvironmentRunResult(
+        base_url=base_url, primary=primary, status=result.status, error=error
+    )
+
+
+def _with_environments(summary: dict, env_results: list[EnvironmentRunResult]) -> dict:
+    """Add the per-environment results to a run summary (multi-environment runs only)."""
+    if env_results:
+        summary["environments"] = [r.model_dump() for r in env_results]
     return summary
 
 

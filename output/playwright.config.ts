@@ -11,6 +11,10 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
+    // The environment under test. The runner (src/ai_test_gen/test_runner.py) sets BASE_URL
+    // per run — the primary STAGING_BASE_URL entry, then each secondary one — so a
+    // baseURL-relative page.goto('/notes') follows the run. Absolute URLs ignore it.
+    baseURL: process.env.BASE_URL,
     // The target app's manually-written `id=` attributes ARE the test id: the Planner's
     // browser_generate_locator emits getByTestId('login-submit'), which resolves to
     // [id="login-submit"] only because of this line. Must stay in sync with

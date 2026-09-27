@@ -286,3 +286,64 @@ def test_run_test_failed_without_trace_has_none(cfg, monkeypatch):
     result = asyncio.run(runner.run_test(cfg, _generated()))
     assert result.status == "failed"
     assert result.trace_path is None
+
+
+# --- per-environment BASE_URL + pre-run navigation check -----------------------------
+
+
+def test_run_test_exports_base_url_defaulting_to_the_primary(cfg, monkeypatch):
+    monkeypatch.setenv("RUNNER_INHERIT_PROBE", "1")
+    spawn = AsyncMock(return_value=_FakeProc(0, stdout=b'{"suites": []}'))
+    monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", spawn)
+    asyncio.run(runner.run_test(cfg, _generated()))
+    kwargs = spawn.call_args.kwargs
+    assert kwargs["env"]["BASE_URL"] == cfg.staging_base_url
+    assert kwargs["env"]["RUNNER_INHERIT_PROBE"] == "1"  # still inherits the process env
+    assert "--output=test-results" in spawn.call_args.args
+
+
+def test_run_test_uses_the_given_environment_and_results_dir(cfg, monkeypatch):
+    spawn = AsyncMock(return_value=_FakeProc(0, stdout=b'{"suites": []}'))
+    monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", spawn)
+    asyncio.run(
+        runner.run_test(
+            cfg, _generated(), base_url="https://qa2.example.internal",
+            results_dir="test-results/env-2",
+        )
+    )
+    assert spawn.call_args.kwargs["env"]["BASE_URL"] == "https://qa2.example.internal"
+    assert "--output=test-results/env-2" in spawn.call_args.args
+
+
+def test_run_test_trace_is_looked_up_in_the_runs_results_dir(cfg, monkeypatch):
+    trace = cfg.output_dir / "test-results" / "env-2" / "QA-1" / "trace.zip"
+    trace.parent.mkdir(parents=True)
+    trace.write_bytes(b"zip")
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=b"boom"))
+    result = asyncio.run(runner.run_test(cfg, _generated(), results_dir="test-results/env-2"))
+    assert result.trace_path == str(trace)
+
+
+def test_offlist_goto_blocks_the_run_before_playwright_starts(cfg, monkeypatch):
+    spawn = AsyncMock()
+    monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", spawn)
+    code = "await page.goto('https://www.example.com/');"
+    result = asyncio.run(runner.run_test(cfg, _generated(code=code)))
+    spawn.assert_not_called()
+    assert result.status == "error"
+    assert result.blocked is True
+    assert result.did_run is False
+    assert "https://www.example.com" in (result.error_message or "")
+    # The spec is still written to disk for the reviewer.
+    assert (cfg.tests_dir / "QA-1-login.spec.ts").read_text() == code
+
+
+def test_offlist_plan_url_blocks_the_run(cfg, monkeypatch):
+    spawn = AsyncMock()
+    monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", spawn)
+    plan = models.TestPlan(
+        test_case_key="QA-1", title="t", target_url="https://prod.example.com/", steps=[]
+    )
+    result = asyncio.run(runner.run_test(cfg, _generated(code="await page.goto('/');"), plan=plan))
+    spawn.assert_not_called()
+    assert result.blocked and "plan target_url" in (result.error_message or "")

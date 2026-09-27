@@ -36,7 +36,7 @@ def test_mcp_output_dir_is_output_snapshots():
     assert pm.MCP_OUTPUT_DIR.parts[-2:] == ("output", "snapshots")
 
 
-def test_build_playwright_mcp_runs_subprocess_in_snapshots_dir(monkeypatch, tmp_path):
+def test_build_playwright_mcp_runs_subprocess_in_snapshots_dir(cfg, monkeypatch, tmp_path):
     # The MCP subprocess cwd is pinned to the snapshots dir so cwd-relative artifacts
     # (screenshots/pngs the server writes outside --output-dir) don't escape to the repo root.
     cli = tmp_path / "cli.js"
@@ -52,7 +52,7 @@ def test_build_playwright_mcp_runs_subprocess_in_snapshots_dir(monkeypatch, tmp_
         return real(**kwargs)
 
     monkeypatch.setattr(pm, "StdioTransport", spy)
-    pm.build_playwright_mcp(cast(Config, object()))
+    pm.build_playwright_mcp(cfg)
     assert captured["cwd"] == str(out)
 
 
@@ -62,11 +62,11 @@ def test_build_playwright_mcp_errors_clearly_when_cli_missing(monkeypatch, tmp_p
         pm.build_playwright_mcp(cast(Config, object()))
 
 
-def test_build_playwright_mcp_constructs_node_toolset_when_cli_present(monkeypatch, tmp_path):
+def test_build_playwright_mcp_constructs_node_toolset_when_cli_present(cfg, monkeypatch, tmp_path):
     cli = tmp_path / "cli.js"
     cli.write_text("// fake cli")
     monkeypatch.setattr(pm, "MCP_CLI_PATH", cli)
-    toolset = pm.build_playwright_mcp(cast(Config, object()), storage_state=tmp_path / "state.json")
+    toolset = pm.build_playwright_mcp(cfg, storage_state=tmp_path / "state.json")
     assert isinstance(toolset, pm.AbstractToolset)
 
 

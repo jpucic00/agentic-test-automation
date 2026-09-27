@@ -152,11 +152,18 @@ async def plan_test_case(
     """Run the Planner on a single test case and return its TestPlan."""
     agent = build_planner(config, storage_state=storage_state)
 
+    # Extra allowed hosts (STAGING_EXTRA_URLS — SSO, mail-catcher) are named only when
+    # configured, so a default run's message is unchanged; navigation anywhere else is refused.
+    extra_hosts = (
+        f"\n**Other allowed hosts:** {', '.join(config.staging_extra_urls)}"
+        if config.staging_extra_urls
+        else ""
+    )
     user_message = f"""# Manual Test Case to Plan
 
 **Issue Key:** {test_case.key}
 **Title:** {test_case.title}
-**Staging URL:** {config.staging_base_url}
+**Staging URL:** {config.staging_base_url}{extra_hosts}
 
 **Description:**
 {test_case.description}

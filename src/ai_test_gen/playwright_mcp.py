@@ -40,6 +40,7 @@ from pydantic_ai.mcp import MCPToolset, ProcessToolCallback, StdioTransport
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset
 
+from .agents._nav_guard import NavigationGuard
 from .config import Config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -133,8 +134,9 @@ def build_playwright_mcp(
     """Create an ``MCPToolset`` that runs Playwright MCP over stdio.
 
     Args:
-        config: app config. Reserved for future extensibility (e.g. proxy
-            settings); accepted now so the signature is stable across phases.
+        config: app config; its ``allowed_origins`` (every ``STAGING_BASE_URL``
+            environment + every ``STAGING_EXTRA_URLS`` host) feed the always-on
+            ``NavigationGuard`` that refuses off-list navigation.
         storage_state: LEGACY/optional path to a Playwright ``storage_state.json``
             for a pre-authenticated session. The pipeline now uses context-driven
             login (agents log in live from ``project_context.md`` creds), so this is
@@ -144,7 +146,8 @@ def build_playwright_mcp(
             ``LocatorFailureGuard`` here (always): it soft-lands
             ``browser_generate_locator`` retry exhaustion so a locator hunt can never
             abort the run, and — when vision is on — steers the agent to
-            ``inspect_screen`` mid-streak. Other callers leave it ``None``.
+            ``inspect_screen`` mid-streak. Other callers leave it ``None``. Whatever is
+            passed is WRAPPED by the ``NavigationGuard``, never replaced by it.
 
     Returns an ``MCPToolset`` to attach via ``Agent(model, toolsets=[...])``.
 
@@ -152,8 +155,6 @@ def build_playwright_mcp(
         RuntimeError: if the server CLI is not installed yet — run
             ``cd output && npm install``.
     """
-    del config  # not used yet; kept in the signature for forward compatibility
-
     if not MCP_CLI_PATH.exists():
         raise RuntimeError(
             f"Playwright MCP server not found at {MCP_CLI_PATH}. "
@@ -183,9 +184,9 @@ def build_playwright_mcp(
         # all absolute, so changing cwd is safe.
         StdioTransport(command="node", args=args, cwd=str(MCP_OUTPUT_DIR), keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
-        # Optional per-call hook (Planner's locator→vision steer). None for the Healer / default
-        # callers, so their tool calls dispatch straight to the server exactly as before.
-        process_tool_call=process_tool_call,
+        # Always-on navigation allow-list guard (agents/_nav_guard.py), composed around the
+        # caller's hook (the Planner's/Healer's LocatorFailureGuard), which still sees every call.
+        process_tool_call=NavigationGuard(config.allowed_origins, inner=process_tool_call),
     )
     # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.
     return toolset.filtered(_agent_safe_tool)

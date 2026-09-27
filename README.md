@@ -17,7 +17,9 @@ Jira/Xray key → fetch → Plan → Generate → Run → (Heal ↺) → open MR
   it all in a typed `TestPlan`.
 - **Generator** turns the plan into a runnable `.spec.ts` — no browser, because a focused code model
   writes better code from a precise plan.
-- **Test Runner** executes the test against staging and reports pass/fail plus a trace.
+- **Test Runner** executes the test against staging and reports pass/fail plus a trace. When several
+  environments are configured, the final (healed) test also runs once on each of the others, and the
+  per-environment results go into the run summary and the MR.
 - **Healer** is a full browser agent like the Planner: it logs in fresh and *reproduces* the failure
   in the live app (submitting forms, creating data, signing out + re-logging-in as needed) to see
   what really happens, then makes a *minimal* fix, retrying up to a configurable cap. If the failure
@@ -101,8 +103,11 @@ All configuration is environment variables, documented section-by-section in [`.
 - **Model gateway** — any OpenAI-compatible endpoint; one model each for the Planner, Generator, and Healer.
 - **Jira/Xray** — Cloud (API token) or Server/Data Center (PAT); the source of manual test cases.
 - **Test-case source** — `xray` (live Jira/Xray) or `local` (raw-Xray-shaped JSON files; powers the bundled demo, no tenant needed).
-- **Staging app** — the URL under test plus credentials. A fail-closed guardrail refuses to start unless
-  the host looks non-production.
+- **Staging app** — `STAGING_BASE_URL`, one environment or a comma-separated list (the first is where
+  the test is planned and healed; the others re-run the final test). A fail-closed guardrail refuses to
+  start unless every host looks non-production. `STAGING_EXTRA_URLS` lists extra hosts the app needs
+  (an SSO login, a mail-catcher); at run time the agents' browser and the generated tests may reach
+  only these hosts.
 - **GitLab** — optional merge-request destination.
 - **mTLS / proxy / private CA** — optional, for gateways that sit behind them.
 

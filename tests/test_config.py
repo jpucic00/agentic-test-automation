@@ -1,10 +1,17 @@
 """Unit tests for ai_test_gen.config — fully local (no network, no real .env)."""
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from ai_test_gen import config
-from ai_test_gen.config import Config, ProductionURLError, load_config
+from ai_test_gen.config import (
+    DEFAULT_TEST_MARKER_REGEX,
+    Config,
+    ProductionURLError,
+    load_config,
+)
 
 # Complete, valid fake environment with a SAFE (non-prod) staging URL.
 _FAKE_PASSWORD = "s3cr3t-staging-pw"
@@ -51,6 +58,12 @@ _OPTIONAL_VARS = (
     "RERANKER_MODEL",
     "RERANK_ENDPOINT",
     "DISTILLER_MODEL",
+    "DISTILLER_MODE",
+    "DISTILLER_EXTRA_BODY",
+    "DISTILLER_REQUEST_LIMIT",
+    "RAG_HINT_WORD_BUDGET",
+    "TEST_MARKER_REGEX",
+    "STAGING_EXTRA_URLS",
 )
 
 
@@ -354,6 +367,46 @@ def test_invalid_distiller_mode_fails_fast(env):
         load_config()
 
 
+@pytest.mark.parametrize(
+    ("var", "attr", "default"),
+    [
+        ("RAG_HINT_WORD_BUDGET", "rag_hint_word_budget", 250),
+        ("DISTILLER_REQUEST_LIMIT", "distiller_request_limit", 40),
+    ],
+)
+def test_positive_int_knobs_parse_and_fall_back(env, var, attr, default):
+    # _positive_int contract: unset → shipped default; a positive integer is honored;
+    # non-numeric / zero / negative keep the default (a typo'd budget must never
+    # silently disable the bounded exploration).
+    assert getattr(load_config(), attr) == default  # unset
+    env.setenv(var, "17")
+    assert getattr(load_config(), attr) == 17
+    for bad in ("lots", "0", "-5"):
+        env.setenv(var, bad)
+        assert getattr(load_config(), attr) == default, bad
+
+
+def test_rag_enabled_parses_the_gitlab_truthy_set(env):
+    # RAG_ENABLED uses the same truthy set as GITLAB_ENABLED (case-insensitive),
+    # just defaulting OFF — parity pinned so the two knobs never drift apart.
+    for on in ("1", "yes", "on", "TRUE"):
+        env.setenv("RAG_ENABLED", on)
+        assert load_config().rag_enabled is True, on
+    for off in ("0", "off", "no"):
+        env.setenv("RAG_ENABLED", off)
+        assert load_config().rag_enabled is False, off
+
+
+def test_test_marker_regex_override_and_empty_fallback(env):
+    assert load_config().test_marker_regex == DEFAULT_TEST_MARKER_REGEX  # unset
+    custom = r'@Case\("([A-Z]+-\d+)"\)'
+    env.setenv("TEST_MARKER_REGEX", custom)
+    assert load_config().test_marker_regex == custom  # respected verbatim
+    env.setenv("TEST_MARKER_REGEX", "")
+    # Empty string is falsy for the `or` fallback — the shipped marker survives.
+    assert load_config().test_marker_regex == DEFAULT_TEST_MARKER_REGEX
+
+
 # --- Planner-only LLM endpoint override --------------------------------------
 
 
@@ -390,3 +443,64 @@ def test_planner_key_override_without_base_stays_on_shared_url(env):
     cfg = load_config()
     assert cfg.planner_base_url == cfg.llm_base_url == "https://gateway.internal/v1"
     assert cfg.planner_api_key == "planner-key"
+
+
+# --- Multi-environment STAGING_BASE_URL + STAGING_EXTRA_URLS ------------------
+
+
+def test_single_staging_url_is_a_one_entry_environment_list(env):
+    cfg = load_config()
+    assert cfg.staging_base_url == "https://staging.example.internal"
+    assert cfg.staging_base_urls == ("https://staging.example.internal",)
+    assert cfg.staging_extra_urls == ()
+    assert cfg.allowed_origins == ("https://staging.example.internal",)
+
+
+def test_staging_url_list_parses_in_order_ignoring_whitespace_and_empties(env):
+    env.setenv(
+        "STAGING_BASE_URL",
+        " https://staging.acme.com , ,https://qa.acme.com:8443/,https://staging.acme.com",
+    )
+    cfg = load_config()
+    assert cfg.staging_base_url == "https://staging.acme.com"  # the first entry is primary
+    assert cfg.staging_base_urls == ("https://staging.acme.com", "https://qa.acme.com:8443/")
+    assert cfg.environment_origins == ("https://staging.acme.com", "https://qa.acme.com:8443")
+
+
+def test_one_prod_looking_environment_fails_the_whole_load(env):
+    env.setenv("STAGING_BASE_URL", "https://staging.acme.com,https://app.acme.com")
+    with pytest.raises(ProductionURLError, match="app.acme.com"):
+        load_config()
+
+
+def test_staging_url_list_of_only_separators_is_missing(env):
+    env.setenv("STAGING_BASE_URL", " , ,")
+    with pytest.raises(RuntimeError, match="STAGING_BASE_URL"):
+        load_config()
+
+
+def test_extra_urls_are_exempt_from_markers_and_join_the_allow_list(env):
+    # An SSO host rarely carries a non-prod marker — it must still be allowed.
+    env.setenv("STAGING_EXTRA_URLS", "https://sso.acme.com/auth, http://localhost:8025")
+    cfg = load_config()
+    assert cfg.staging_extra_urls == ("https://sso.acme.com/auth", "http://localhost:8025")
+    assert cfg.extra_origins == ("https://sso.acme.com", "http://localhost:8025")
+    assert cfg.allowed_origins == (
+        "https://staging.example.internal",
+        "https://sso.acme.com",
+        "http://localhost:8025",
+    )
+
+
+@pytest.mark.parametrize(
+    "bad", ["https://*.acme.com", "sso.acme.com", "ftp://files.acme.com", "https://"]
+)
+def test_extra_urls_must_be_full_http_urls_without_wildcards(env, bad):
+    env.setenv("STAGING_EXTRA_URLS", f"https://sso.acme.com,{bad}")
+    with pytest.raises(RuntimeError, match="STAGING_EXTRA_URLS"):
+        load_config()
+
+
+def test_config_rejects_primary_that_is_not_the_first_environment(cfg):
+    with pytest.raises(ValueError, match="primary"):
+        dataclasses.replace(cfg, staging_base_urls=("https://qa.example.internal",))

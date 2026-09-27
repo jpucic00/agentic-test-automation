@@ -15,20 +15,27 @@ guide's template lacks:
 
 The generated test logs itself in with the disposable staging dummy creds from
 ``project_context.md`` (context-driven auth), so the runner needs no credentials or
-storage state — the subprocess just inherits this process's environment for ``PATH`` /
-node.
+storage state — the subprocess inherits this process's environment for ``PATH`` / node,
+plus ``BASE_URL``: the environment this run targets, which ``output/playwright.config.ts``
+maps to ``use.baseURL`` so baseURL-relative ``page.goto('/…')`` calls follow the run.
+
+Before Playwright starts, the spec's literal ``goto(...)`` targets and the plan's recorded
+URLs are checked against the navigation allow-list (``allowlist.preflight_violations``); a
+violation returns ``status="error"`` with ``blocked=True`` and nothing is executed.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
 
+from .allowlist import preflight_violations
 from .config import Config
-from .models import GeneratedTest, TestRunResult
+from .models import GeneratedTest, TestPlan, TestRunResult
 
 # Hard cap on a single Playwright run. A hung browser/test must not wedge the
 # pipeline; on expiry the process is killed and the run is reported as an error.
@@ -39,16 +46,50 @@ RUN_TIMEOUT_S = 300
 REPORT_ERRORS_MAX_CHARS = 2000
 
 
-async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
+async def run_test(
+    config: Config,
+    test: GeneratedTest,
+    *,
+    plan: TestPlan | None = None,
+    base_url: str | None = None,
+    results_dir: str = "test-results",
+) -> TestRunResult:
     """Write ``test`` to disk, run it via Playwright, and parse the result.
+
+    ``base_url`` is the environment this run targets (default: the primary
+    ``config.staging_base_url``), exported as ``BASE_URL``. ``results_dir`` is the
+    Playwright ``--output`` folder under ``output/`` — secondary environments use their
+    own so they don't wipe the primary run's trace. ``plan`` adds its recorded URLs to the
+    pre-run allow-list check.
 
     Returns a :class:`~ai_test_gen.models.TestRunResult`. Does not raise when the test
     itself fails (that is healable); only infrastructure problems (timeout, the runner
-    failing to launch) surface as ``status="error"``.
+    failing to launch) and a refused pre-run navigation check surface as ``status="error"``.
     """
+    base_url = base_url or config.staging_base_url
     test_path = config.tests_dir / test.file_name
     test_path.parent.mkdir(parents=True, exist_ok=True)
     test_path.write_text(test.code)
+
+    violations = preflight_violations(
+        test.code,
+        plan,
+        base_url=base_url,
+        env_origins=config.environment_origins,
+        extra_origins=config.extra_origins,
+    )
+    if violations:
+        return TestRunResult(
+            status="error",
+            did_run=False,
+            blocked=True,
+            stdout="",
+            stderr="",
+            error_message=(
+                f"Run blocked before Playwright started (baseURL {base_url}): "
+                + "; ".join(violations)
+            ),
+        )
 
     cmd = [
         "npx",
@@ -57,6 +98,7 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
         str(test_path),
         "--reporter=json",
         "--workers=1",
+        f"--output={results_dir}",
     ]
 
     try:
@@ -65,9 +107,10 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(config.output_dir),
-            # No env= override: inherit this process's environment (PATH/node). The
-            # generated test carries its own literal dummy creds, so the run needs
-            # no per-run secrets or storage state.
+            # Inherit this process's environment (PATH/node) + BASE_URL for this run. The
+            # generated test carries its own literal dummy creds, so the run needs no
+            # per-run secrets or storage state.
+            env={**os.environ, "BASE_URL": base_url},
         )
     except (FileNotFoundError, OSError) as exc:  # npx/node missing, cwd gone, ...
         return TestRunResult(
@@ -125,7 +168,7 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
         failed_test=failed_test,
         error_message=error_message,
         error_line=error_line,
-        trace_path=_find_trace(config.output_dir),
+        trace_path=_find_trace(config.output_dir / results_dir),
     )
 
 
@@ -165,14 +208,13 @@ def _report_errors(report: dict) -> str | None:
     return "\n\n".join(parts)[:REPORT_ERRORS_MAX_CHARS] if parts else None
 
 
-def _find_trace(output_dir: Path) -> str | None:
-    """Path of the newest ``trace.zip`` under ``output/test-results``, if any.
+def _find_trace(results_dir: Path) -> str | None:
+    """Path of the newest ``trace.zip`` under the run's ``--output`` folder, if any.
 
     Playwright (``trace: 'retain-on-failure'``) writes a trace per failed test and
-    clears ``test-results/`` at the start of every run, so any trace found here
+    clears its output folder at the start of every run, so any trace found here
     belongs to the run that just finished.
     """
-    results_dir = output_dir / "test-results"
     if not results_dir.is_dir():
         return None
     traces = sorted(results_dir.rglob("trace.zip"), key=lambda p: p.stat().st_mtime)

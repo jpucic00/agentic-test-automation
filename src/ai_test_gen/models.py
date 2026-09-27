@@ -204,6 +204,25 @@ class TestRunResult(BaseModel):
     trace_path: str | None = Field(
         default=None, description="Path to the Playwright trace.zip, if one was produced"
     )
+    blocked: bool = Field(
+        default=False,
+        description=(
+            "True when the pre-run navigation check refused the spec (an absolute goto or plan "
+            "URL outside the allow-list) before Playwright started; status is 'error'. A "
+            "blocked run is surfaced to the reviewer, never healed."
+        ),
+    )
+
+
+class EnvironmentRunResult(BaseModel):
+    """Outcome of running the final spec on one configured environment (multi-env runs)."""
+
+    base_url: str = Field(
+        description="The environment's STAGING_BASE_URL entry (the run's baseURL)"
+    )
+    primary: bool = Field(description="True for the primary environment the spec was healed on")
+    status: Literal["passed", "failed", "error"] = Field(description="Outcome of the run")
+    error: str | None = Field(default=None, description="One-line error summary when not passed")
 
 
 # === Healer output ===

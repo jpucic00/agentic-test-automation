@@ -72,7 +72,9 @@ HOW TO FILL THIS IN:
      deep-linkable. One row per addressable route.
      AUXILIARY TOOL UIs count too: if a flow needs a separate tool on ANOTHER host — e.g. a
      mail-catcher web UI for email verification — list its FULL URL (scheme + host + port) here;
-     the agent may only navigate to URLs this table declares. -->
+     the agent may only navigate to URLs this table declares. ALSO add that URL (and any SSO login
+     host the app redirects to) to STAGING_EXTRA_URLS in .env: the runtime navigation guard refuses
+     every host outside STAGING_BASE_URL + STAGING_EXTRA_URLS. -->
 | Route | Purpose | Auth | Roles |
 |-------|---------|------|-------|
 | <`/route`> | <what it's for> | <public / logged-in> | <which roles can reach it> |

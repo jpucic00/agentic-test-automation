@@ -533,3 +533,94 @@ def test_recurring_failure_escalates_locator_kind(cfg, monkeypatch):
     asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
     escalations = [c.kwargs["locator_escalation"] for c in heal.call_args_list]
     assert escalations == [0, 1, 2]
+
+
+# --- multi-environment runs + blocked runs -------------------------------------------
+
+_QA2 = "https://qa2.example.internal"
+_QA3 = "https://qa3.example.internal"
+
+
+def _multi_env(cfg):
+    return dataclasses.replace(
+        cfg, staging_base_urls=(cfg.staging_base_url, _QA2, _QA3)
+    )
+
+
+def test_single_environment_output_is_unchanged(cfg, monkeypatch):
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert "environments" not in out
+    assert gl.open_mr.call_args.kwargs["environment_results"] == []
+
+
+def test_secondary_environments_run_final_spec_without_planner_or_healer(cfg, monkeypatch):
+    cfg = _multi_env(cfg)
+    gl = _wire(monkeypatch, cfg, [])
+    failed_qa3 = models.TestRunResult(
+        status="failed", stdout="", stderr="", error_message="locator timeout\nstack…"
+    )
+    run = AsyncMock(
+        side_effect=[_result("failed"), _result("passed"), _result("passed"), failed_qa3]
+    )
+    heal = AsyncMock(return_value=_healed())
+    plan = AsyncMock(return_value=_plan())
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    monkeypatch.setattr(orchestrator, "plan_test_case", plan)
+
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+
+    plan.assert_awaited_once()
+    heal.assert_awaited_once()  # healing only on the primary, despite the qa3 failure
+    # Primary runs use the default base URL; each secondary gets its own URL + results dir
+    # and runs the FINAL (healed) spec.
+    primary_runs, secondary_runs = run.call_args_list[:2], run.call_args_list[2:]
+    assert all("base_url" not in c.kwargs for c in primary_runs)
+    assert [(c.kwargs["base_url"], c.kwargs["results_dir"]) for c in secondary_runs] == [
+        (_QA2, "test-results/env-2"),
+        (_QA3, "test-results/env-3"),
+    ]
+    assert {c.args[1].code for c in secondary_runs} == {"// healed"}
+    assert out["status"] == "passed"  # the primary (healed) result
+    assert out["environments"] == [
+        {"base_url": cfg.staging_base_url, "primary": True, "status": "passed", "error": None},
+        {"base_url": _QA2, "primary": False, "status": "passed", "error": None},
+        {"base_url": _QA3, "primary": False, "status": "failed", "error": "locator timeout"},
+    ]
+    envs = gl.open_mr.call_args.kwargs["environment_results"]
+    assert [e.base_url for e in envs] == [cfg.staging_base_url, _QA2, _QA3]
+    gl.open_mr.assert_called_once()
+
+
+def test_multi_environment_results_reach_the_summary_without_gitlab(cfg, monkeypatch):
+    cfg = dataclasses.replace(_multi_env(cfg), gitlab_enabled=False)
+    _wire(monkeypatch, cfg, [_result("passed"), _result("error"), _result("passed")])
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert [e["status"] for e in out["environments"]] == ["passed", "error", "passed"]
+
+
+def test_blocked_run_is_not_healed(cfg, monkeypatch):
+    blocked = models.TestRunResult(
+        status="error", did_run=False, blocked=True, stdout="", stderr="",
+        error_message="Run blocked before Playwright started: …",
+    )
+    gl = _wire(monkeypatch, cfg, [blocked])
+    heal = AsyncMock(return_value=_healed())
+    gen = AsyncMock(return_value=_generated())
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    monkeypatch.setattr(orchestrator, "generate_test", gen)
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    heal.assert_not_called()
+    assert gen.await_count == 1  # no compile-retry regeneration either
+    assert out["status"] == "error"
+    assert out["heal_attempts"] == 0
+    gl.open_mr.assert_called_once()  # still surfaced to a human
+
+
+def test_runs_pass_the_plan_for_the_preflight_check(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [])
+    run = AsyncMock(side_effect=[_result("passed")])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert run.call_args.kwargs["plan"] == _plan()

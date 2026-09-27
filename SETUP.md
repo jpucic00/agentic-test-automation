@@ -111,7 +111,8 @@ Confirm you have, or have filed access requests for, every item below. Access of
 - [ ] **GitLab personal access token** with `api` scope (User Settings → Access Tokens), OR a project access
   token with `Developer` role + `write_repository` — only if you want the pipeline to open MRs
 - [ ] **Target GitLab repo** that will receive MRs (its path or numeric ID)
-- [ ] **Staging app URL** under test + working credentials there
+- [ ] **Staging app URL** under test + working credentials there (one URL per environment to run on, plus
+  the URLs of any other hosts the app sends the browser to — an SSO login, a mail-catcher UI)
 
 ---
 
@@ -134,7 +135,17 @@ section at a time. Watch out for:
 - `GITLAB_PROJECT_ID` — `group/subgroup/project` path or the numeric ID. URL-encoded path is also accepted
   (`group%2Fproject`).
 - `STAGING_BASE_URL` — must point at a non-production host; `load_config()` hard-fails otherwise (see the
-  guardrail note in `.env.example`).
+  guardrail note in `.env.example`). It may be a comma-separated list of environments
+  (`https://staging.example.com,https://qa.example.com`): the test is planned, generated, and healed
+  on the **first** (primary) one, then the final test runs once on each of the others — never healed
+  there, so a failure is reported as an environment difference. Every entry must pass the non-prod
+  check; one production-looking entry fails the whole load.
+- `STAGING_EXTRA_URLS` — optional comma-separated list of other hosts the agents and the generated
+  tests may open, e.g. an SSO login host or a mail-catcher UI
+  (`https://sso.example.com,http://localhost:8025`). These are **exempt from the non-prod marker
+  check** (a shared SSO host often has no marker), so each entry must be a full `http(s)://` URL with
+  a host — no wildcards — and the run log lists them at startup. At run time the browser agents may
+  navigate **only** to the `STAGING_BASE_URL` environments and these hosts; anything else is refused.
 
 `.env` is in [`.gitignore`](.gitignore) — it will never be staged.
 
@@ -165,8 +176,8 @@ curl -sS -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
   "$GITLAB_BASE_URL/api/v4/projects/$(printf '%s' "$GITLAB_PROJECT_ID" | sed 's|/|%2F|g')" \
   | head -c 200
 
-# Staging login works (open in browser):
-open "$STAGING_BASE_URL"   # macOS; use xdg-open on Linux or start on Windows
+# Staging login works (open each STAGING_BASE_URL environment in a browser):
+open "https://staging.yourapp.internal"   # macOS; use xdg-open on Linux or start on Windows
 ```
 
 Detailed expected output and a failure-mode table are in [`scripts/README.md`](scripts/README.md).
@@ -229,6 +240,17 @@ The Orchestrator fetches the case, plans it against your staging app, generates 
 heals on failure (up to the configured cap), and — unless `GITLAB_ENABLED=false` — opens a merge request.
 The generated test and its plan are written to `output/`. To run the whole thing in a container instead, see
 the [Docker section in the README](README.md#run-in-docker).
+
+Generated tests navigate the app with baseURL-relative paths (`page.goto('/notes')`), and
+`output/playwright.config.ts` takes `baseURL` from the `BASE_URL` environment variable, which the pipeline
+sets for every run. To re-run a generated test by hand, set it yourself:
+
+```bash
+cd output && BASE_URL=https://staging.yourapp.internal npx playwright test tests/QA-1234-login.spec.ts
+```
+
+With several `STAGING_BASE_URL` environments, the result summary printed at the end (and the MR
+description) lists the final test's outcome on each one under `environments`.
 
 ### 7.1 Or: try it against the bundled demo app (no Jira/staging needed)
 
@@ -366,6 +388,8 @@ If your gateway uses a private CA not in certifi's default bundle, point both `S
 | Scripts fail with "server disconnected without sending a response" (the TLS/mTLS handshake succeeds first) | Routing through an environment-configured proxy is dropping the request. The scripts connect directly by default — verify you have **not** set `USE_HTTP_PROXY=true`. A direct `curl` should return 200 while the same `curl` through the proxy fails identically. If the endpoint is reachable **only** through a proxy, set `USE_HTTP_PROXY=true`. If even a direct Python call drops, the gateway may fingerprint Python's TLS ClientHello — fall back to a libcurl-backed client (`curl_cffi`) |
 | Step 0 reports `Model did not call any tool` | The gateway isn't forwarding the `tools` parameter; some gateways need a custom header like `X-Use-Tools: true` — check with whoever operates it |
 | Step 0c lists every `customfield_*` for the issue | The Xray steps field has a non-standard human name; record the right ID and set `XRAY_STEPS_FIELD_ID` |
+| A run log shows `Navigation guard: refused browser_navigate …` or a plan notes a host it could not open | The agent tried to open a host outside the allow-list. If the app genuinely needs it (SSO login, mail-catcher), add its full URL to `STAGING_EXTRA_URLS` |
+| A run ends with `Run blocked before Playwright started` | The spec (or plan) navigates to a host outside the allow-list, or — on a secondary environment — hard-codes another environment's URL. Blocked runs are not healed: fix the `goto(...)` to a baseURL-relative path, or add a legitimate extra host to `STAGING_EXTRA_URLS` |
 | `git check-ignore .env` exits non-zero | `.gitignore` was edited; restore the `.env` line so secrets stay untracked |
 
 If you hit something that isn't in the table, add a row before you forget — this project is meant to be

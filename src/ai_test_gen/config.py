@@ -2,11 +2,14 @@
 
 All secrets and environment-specific values live here. ``load_config()`` reads the
 environment (loading a local ``.env`` first, if present) and returns a frozen
-``Config``. Before returning it asserts that ``STAGING_BASE_URL`` points at a
-non-production host (see ``_assert_non_prod_url``) so a misconfigured URL fails
-immediately — before any browser is launched or any model is contacted. The
-pipeline drives a real browser and runs generated tests against that URL; this is
-a hard architectural constraint: staging only, never production.
+``Config``. Before returning it asserts that EVERY ``STAGING_BASE_URL`` entry (a
+comma-separated list of environments) points at a non-production host (see
+``_assert_non_prod_url``) so a misconfigured URL fails immediately — before any browser
+is launched or any model is contacted. The pipeline drives a real browser and runs
+generated tests against those URLs; this is a hard architectural constraint: staging
+only, never production. ``STAGING_EXTRA_URLS`` (auxiliary hosts such as an SSO login or a
+mail-catcher UI) are exempt from the marker check but must be plain full URLs; together
+with the environments they form the runtime navigation allow-list (``allowlist.py``).
 
 Implements AI_TEST_GENERATION_GUIDE.md §3.4 + §3.5b.
 """
@@ -20,6 +23,8 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+from .allowlist import origins, url_origin
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -81,6 +86,43 @@ def _assert_non_prod_url(url: str, markers: Sequence[str]) -> None:
             "production URL. The pipeline is staging-only. If this IS a non-prod "
             "environment, add its marker to NON_PROD_URL_MARKERS in .env."
         )
+
+
+def _url_list(name: str) -> tuple[str, ...]:
+    """Comma-separated URLs from ``name``: stripped, empty entries dropped, duplicates removed."""
+    raw = os.environ.get(name, "")
+    return tuple(dict.fromkeys(u.strip() for u in raw.split(",") if u.strip()))
+
+
+def _staging_base_urls(markers: Sequence[str]) -> tuple[str, ...]:
+    """``STAGING_BASE_URL`` as an ordered list of environments; the first is the primary.
+
+    A single value (the historical form) is a one-entry list. Every entry must pass the
+    fail-closed non-prod marker check — one prod-looking entry fails the whole load.
+    """
+    urls = _url_list("STAGING_BASE_URL")
+    if not urls:
+        raise RuntimeError("Required environment variable STAGING_BASE_URL is not set")
+    for url in urls:
+        _assert_non_prod_url(url, markers)
+    return urls
+
+
+def _staging_extra_urls() -> tuple[str, ...]:
+    """``STAGING_EXTRA_URLS``: extra hosts agents and tests may reach (SSO, mail-catcher).
+
+    Exempt from the non-prod marker check — a shared SSO host rarely carries one — so each
+    entry must instead be an explicit, full http(s) URL with a parseable host and no
+    wildcard: the allow-list stays a list of exact origins, never a pattern.
+    """
+    urls = _url_list("STAGING_EXTRA_URLS")
+    for url in urls:
+        if "*" in url or url_origin(url) is None:
+            raise RuntimeError(
+                f"STAGING_EXTRA_URLS entry {url!r} is not a full http(s) URL with a host "
+                "(wildcards are not allowed), e.g. https://sso.example.com"
+            )
+    return urls
 
 
 def _testcase_source() -> Literal["xray", "local"]:
@@ -272,8 +314,10 @@ class Config:
     jira_token: str | None
     xray_is_cloud: bool  # True for Xray Cloud, False for Server/DC
 
-    # Staging app. Username/password are LEGACY: the pipeline authenticates from the
-    # test users in project_context.md; only scripts/save_auth_state.py reads these.
+    # Staging app. staging_base_url is the PRIMARY environment (the first STAGING_BASE_URL
+    # entry): planning, generation and healing run against it; staging_base_urls (below)
+    # holds every environment. Username/password are LEGACY: the pipeline authenticates
+    # from the test users in project_context.md; only scripts/save_auth_state.py reads these.
     staging_base_url: str
     staging_username: str | None
     staging_password: str | None
@@ -292,6 +336,12 @@ class Config:
     snapshots_dir: Path
     project_context_path: Path
     project_map_path: Path
+
+    # Every environment the final spec runs on (STAGING_BASE_URL, comma-separated), primary
+    # first; empty → (staging_base_url,). Extra hosts (STAGING_EXTRA_URLS) the agents and
+    # tests may also reach — together they are the navigation allow-list (allowed_origins).
+    staging_base_urls: tuple[str, ...] = ()
+    staging_extra_urls: tuple[str, ...] = ()
 
     # Retrieval memory (optional, OFF by default — RETRIEVAL_MEMORY_PLAN.md). When
     # rag_enabled is False nothing below is consulted and no rag/ module (or qdrant)
@@ -334,13 +384,34 @@ class Config:
     # vLLM chat_template_kwargs, and similar serving workarounds.
     distiller_extra_body: dict[str, object] | None = None
 
+    def __post_init__(self) -> None:
+        if not self.staging_base_urls:
+            object.__setattr__(self, "staging_base_urls", (self.staging_base_url,))
+        elif self.staging_base_urls[0] != self.staging_base_url:
+            raise ValueError("staging_base_urls[0] must be the primary staging_base_url")
+
+    @property
+    def environment_origins(self) -> tuple[str, ...]:
+        """Origins of every configured environment (STAGING_BASE_URL entries)."""
+        return origins(self.staging_base_urls)
+
+    @property
+    def extra_origins(self) -> tuple[str, ...]:
+        """Origins of the extra allowed hosts (STAGING_EXTRA_URLS)."""
+        return origins(self.staging_extra_urls)
+
+    @property
+    def allowed_origins(self) -> tuple[str, ...]:
+        """The navigation allow-list: every environment origin + every extra host origin."""
+        return origins((*self.staging_base_urls, *self.staging_extra_urls))
+
 
 def load_config() -> Config:
     load_dotenv()  # Load .env if present; does not override real env (override=False).
 
     # Guard FIRST — fail before any filesystem/model side effects.
-    staging_base_url = _required("STAGING_BASE_URL")
-    _assert_non_prod_url(staging_base_url, _non_prod_markers())
+    staging_base_urls = _staging_base_urls(_non_prod_markers())
+    staging_extra_urls = _staging_extra_urls()
 
     output_dir = PROJECT_ROOT / "output"
     plans_dir = output_dir / "plans"
@@ -406,7 +477,9 @@ def load_config() -> Config:
         jira_email=_required_if("JIRA_EMAIL", required=testcase_source == "xray"),
         jira_token=_required_if("JIRA_TOKEN", required=testcase_source == "xray"),
         xray_is_cloud=os.environ.get("XRAY_IS_CLOUD", "true").lower() == "true",
-        staging_base_url=staging_base_url,
+        staging_base_url=staging_base_urls[0],
+        staging_base_urls=staging_base_urls,
+        staging_extra_urls=staging_extra_urls,
         # Optional: only the legacy save_auth_state.py needs these; the pipeline's
         # test logins come from project_context.md, so a missing value is fine.
         staging_username=os.environ.get("STAGING_USERNAME"),

@@ -434,6 +434,84 @@ def test_healer_prompt_allows_intent_reconciliation():
     assert "browser_generate_locator" in healer_md
 
 
+def test_only_the_planner_passes_the_endpoint_override(cfg, monkeypatch):
+    # PLANNER_LLM_* wiring: build_planner must hand config.planner_base_url/api_key to
+    # build_openai_model, while the Generator and Healer call WITHOUT endpoint kwargs —
+    # they stay on the shared gateway even when the Planner is pointed elsewhere.
+    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("HEALER_REASONING_EFFORT", raising=False)
+    calls: dict[str, dict[str, object]] = {}
+
+    def spy_for(label, real):
+        def spy(config, model_name, **kwargs):
+            calls[label] = kwargs
+            return real(config, model_name, **kwargs)
+
+        return spy
+
+    monkeypatch.setattr(
+        planner_mod, "build_openai_model", spy_for("planner", planner_mod.build_openai_model)
+    )
+    monkeypatch.setattr(
+        generator_mod,
+        "build_openai_model",
+        spy_for("generator", generator_mod.build_openai_model),
+    )
+    monkeypatch.setattr(
+        healer_mod, "build_openai_model", spy_for("healer", healer_mod.build_openai_model)
+    )
+
+    endpoint_cfg = dataclasses.replace(
+        cfg, planner_base_url="https://planner.host/v1", planner_api_key="planner-key"
+    )
+    build_planner(endpoint_cfg)
+    build_generator(endpoint_cfg)
+    build_healer(endpoint_cfg)
+
+    assert calls["planner"]["base_url"] == "https://planner.host/v1"
+    assert calls["planner"]["api_key"] == "planner-key"
+    for label in ("generator", "healer"):
+        assert "base_url" not in calls[label], label
+        assert "api_key" not in calls[label], label
+
+
+def test_planner_step_formatter_emits_data_line_only_when_present():
+    # The manual case's data cell is intent the Planner needs (credentials/values to
+    # enter); a data-less step must not render a blank Data line.
+    tc = models.ManualTestCase(
+        key="QA-1",
+        title="Login",
+        steps=[
+            models.ManualStep(action="Log in", data="u/p", expected="Dashboard"),
+            models.ManualStep(action="Check"),
+        ],
+    )
+    out = planner_mod._format_steps(tc)
+    assert "1. Log in" in out
+    assert "   Data: u/p" in out
+    assert "   Expected: Dashboard" in out
+    assert "2. Check" in out
+    assert out.count("Data:") == 1  # only the step that carries data
+
+
+def test_heal_message_renders_step_data_in_brackets_only_when_present():
+    # The heal message's intent block carries each step's data cell as `[data: …]`
+    # and omits the bracket entirely for data-less steps.
+    test, failure, plan, _ = _heal_message_fixtures()
+    case = models.ManualTestCase(
+        key="QA-7",
+        title="Create org",
+        steps=[
+            models.ManualStep(action="Log in", data="u/p"),
+            models.ManualStep(action="Check"),
+        ],
+    )
+    msg = healer_mod._build_heal_message(test, failure, plan, case)
+    assert "1. Log in  [data: u/p]" in msg
+    assert "2. Check" in msg
+    assert msg.count("[data:") == 1
+
+
 def test_generator_prompt_fails_loudly_on_missing_selector():
     # An action step with no Planner-verified target_selector must NOT get a locator authored from
     # its wording (the observed failure: an invented getByRole for a non-semantic <div> logout).
@@ -476,3 +554,48 @@ def test_prompts_never_verify_css_xpath_with_verify_tools():
         md = (prompts / name).read_text()
         assert "count_matches" in md and "exactly 1" in md, name
         assert "browser_hover" not in md, name
+
+
+def test_generation_message_makes_environment_urls_relative():
+    # With the environments' origins passed, the plan the Generator sees has app URLs as
+    # baseURL-relative paths, so the spec follows BASE_URL on every environment; other
+    # hosts (an SSO login) stay absolute.
+    plan = _plan_with_page_context()
+    plan.steps.append(
+        models.PlanStep(action="log in", page_url="https://sso.example.com/realms/app/login")
+    )
+    msg = generator_mod._build_generation_message(
+        plan, app_origins=("https://staging.example.internal",)
+    )
+    assert '"target_url": "/"' in msg
+    assert '"page_url": "/users"' in msg
+    assert "https://sso.example.com/realms/app/login" in msg
+    assert "https://staging.example.internal" not in msg
+    assert plan.target_url == "https://staging.example.internal"  # caller's plan untouched
+
+
+@pytest.mark.parametrize(
+    ("extras", "expected_line"),
+    [((), None), (("https://sso.example.com",), "**Other allowed hosts:** https://sso.example.com")],
+)
+def test_planner_message_names_extra_hosts_only_when_configured(
+    cfg, monkeypatch, extras, expected_line
+):
+    captured: dict[str, str] = {}
+
+    async def fake_run(agent, message, *, agent_label):
+        captured["msg"] = message
+        return None
+
+    monkeypatch.setattr(planner_mod, "build_planner", lambda config, storage_state=None: None)
+    monkeypatch.setattr(planner_mod, "run_agent_logged", fake_run)
+    case = models.ManualTestCase(key="QA-1", title="t")
+    asyncio.run(
+        planner_mod.plan_test_case(dataclasses.replace(cfg, staging_extra_urls=extras), case)
+    )
+    msg = captured["msg"]
+    assert f"**Staging URL:** {cfg.staging_base_url}" in msg
+    if expected_line is None:
+        assert "Other allowed hosts" not in msg
+    else:
+        assert expected_line in msg

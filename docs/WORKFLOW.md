@@ -3,7 +3,7 @@
 > The run-time view: what happens, in what order, and which agent is called when.
 > For the component/structure view, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-The whole pipeline processes **one test case at a time** — fetched live from Jira/Xray, or read from a local raw-Xray-shaped JSON file when `TESTCASE_SOURCE=local` (the path the bundled demo uses). The Orchestrator runs this sequence: **fetch → plan → generate → run → (heal ↺) → open MR**.
+The whole pipeline processes **one test case at a time** — fetched live from Jira/Xray, or read from a local raw-Xray-shaped JSON file when `TESTCASE_SOURCE=local` (the path the bundled demo uses). The Orchestrator runs this sequence: **fetch → plan → generate → run → (heal ↺) → (run on other environments) → open MR**. When `STAGING_BASE_URL` lists several environments, everything up to the heal loop happens on the **primary** (first) one; the final spec then runs once on each of the others.
 
 ## End-to-end flow
 
@@ -15,13 +15,14 @@ flowchart TD
     PLAN["Planner Agent + browser · gpt-oss-120b<br/>drive the flow + verify selectors on staging<br/>→ TestPlan"] --> GEN
     GEN["Generator Agent · devstral-small-2<br/>plan → Playwright code<br/>→ GeneratedTest .spec.ts"] --> RUN
 
-    RUN["Test Runner<br/>execute .spec.ts on staging"] --> Q1{passed?}
-    Q1 -- yes --> MR
-    Q1 -- no --> Q2{more heal<br/>attempts left?}
+    RUN["Test Runner<br/>pre-run allow-list check, then<br/>execute .spec.ts on the primary env"] --> Q1{passed?}
+    Q1 -- yes --> ENVS
+    Q1 -- no --> Q2{more heal<br/>attempts left?<br/>not blocked?}
     Q2 -- yes --> HEAL["Healer Agent + browser · gpt-oss-120b<br/>reproduce failure live, fix / reconcile<br/>→ HealedTest"]
     HEAL --> RUN
-    Q2 -- no --> FLAG["give up healing<br/>real bug or stuck"]
-    FLAG --> MR
+    Q2 -- no --> FLAG["give up healing<br/>real bug, stuck, or blocked"]
+    FLAG --> ENVS
+    ENVS["Other environments (if configured)<br/>run the final spec once each<br/>no Planner, no healing"] --> MR
 
     MR["GitLab Client<br/>branch + commit + open MR<br/>labels: ai-generated, qa-review-needed"] --> REVIEW([Human QA reviews and merges])
 
@@ -59,7 +60,7 @@ sequenceDiagram
     R->>B: execute .spec.ts
     R-->>O: TestRunResult
 
-    loop while failing, up to MAX_HEAL_ATTEMPTS
+    loop while failing (and not blocked), up to MAX_HEAL_ATTEMPTS
         O->>H: heal_test(test, failure, plan, case, heal history)
         H->>B: log in + reproduce failure live + browser_generate_locator
         B-->>H: correct locators + observed behavior
@@ -68,7 +69,12 @@ sequenceDiagram
         R-->>O: TestRunResult
     end
 
-    O->>L: open_mr(test, plan)
+    loop each other STAGING_BASE_URL environment
+        O->>R: run_test(final test, base_url=env)
+        R-->>O: TestRunResult (reported, never healed)
+    end
+
+    O->>L: open_mr(test, plan, per-environment results)
     L-->>O: MR URL
 ```
 
@@ -81,7 +87,8 @@ sequenceDiagram
 | 3 | Generate | **Generator** | `TestPlan` → `GeneratedTest` (guarded `test.step`s, container-scoped locators) | none (writes file) | 10–20s |
 | 4 | Run | Test Runner | test → `TestRunResult` | runs the test on staging | 10–60s |
 | 5 | Heal *(only if step 4 failed)* | **Healer** (+MCP) | failed test + error + plan + intent → `HealedTest`, then back to step 4 | drives staging (logs in, reproduces the failure) | 30–60s / attempt |
-| 6 | Open MR *(skipped if `GITLAB_ENABLED=false`)* | GitLab Client | per-attempt test revisions + plan → MR URL | pushes branch, one commit per attempt, opens MR | <2s |
+| 6 | Other environments *(only with several `STAGING_BASE_URL` entries)* | Test Runner | final test → one `TestRunResult` per secondary environment | runs the test on each other environment | 10–60s / env |
+| 7 | Open MR *(skipped if `GITLAB_ENABLED=false`)* | GitLab Client | per-attempt test revisions + plan (+ per-environment results) → MR URL | pushes branch, one commit per attempt, opens MR | <2s |
 
 **Total: ~2–4 minutes per test case.**
 
@@ -97,6 +104,9 @@ sequenceDiagram
 - **Generated tests guard each step, so failures localize.** Each plan step is wrapped in `test.step('<action>', …)` with a pre-action `expect(target, '…').toBeVisible()` before it acts and — for steps that open a modal/menu or navigate — a post-action state assert after. A missing element fails fast at the expect timeout with a labeled message instead of a 60s click timeout, and a step that fails to open a modal fails on its OWN line. The Healer reads which guard fired: a failed pre-action guard means a wrong locator *or* a prior step whose effect never landed; a failed post-action assert means this step's own trigger didn't work.
 - **The Healer has a failure-mode catalog** — locator timeout, wrong URL, language mismatch, **strict-mode violations** (`resolved N elements`), which it fixes by making the name match `exact: true` or scoping to the active dialog, and **un-activated fresh accounts**: when a test creates an account and its first login fails, the Healer checks the context/map for a declared activation flow (e.g. an email-verification link on the mail-catcher UI) and ADDs the missing activation steps rather than blaming the selector. It captures selectors live (`browser_generate_locator`, or a verified CSS/XPath for inaccessible elements) rather than hand-writing them.
 - The Healer is told to **leave the test unchanged if the failure is a genuine app bug** rather than a selector problem — so a real regression surfaces honestly instead of being "fixed" away. This covers a **spec-vs-reality divergence**: if reproducing the flow shows the app genuinely behaves differently from what the test case demands (the case expects a disabled button, the app keeps it enabled with a validation message), the Healer keeps the assertion faithful to the test case and explains the divergence in `changes_summary` rather than weakening it to go green.
+- **A blocked run is never healed.** Before Playwright starts, every run checks the spec's literal `goto(...)` targets and the plan's recorded URLs against the navigation allow-list (the configured environments + `STAGING_EXTRA_URLS`). An off-list target fails that run with `status: error` and `blocked: true` and ends the heal loop: leaving the allowed hosts is a safety stop surfaced to the reviewer, not a selector problem to fix.
+- **One spec, many environments.** The Generator emits baseURL-relative navigation for the app's own pages (`page.goto('/')`, `page.waitForURL('/notes')`); the runner sets `BASE_URL` per run and `output/playwright.config.ts` maps it to `use.baseURL`. After the heal loop the final spec runs once on every other `STAGING_BASE_URL` environment — no Planner, no Healer. A failure there is a real environment difference: it is logged, added to the run summary's `environments` list (URL, status, one-line error), and listed in the MR description; the run's overall `status` stays the primary's. With one environment, the flow and the summary are unchanged.
+- **The agents stay on the allowed hosts.** In the Planner's and Healer's browser, `browser_navigate` to an off-list host is refused (the agent is told the allowed hosts and not to retry), and a click or redirect that lands off-list gets a navigate-back warning — both logged at WARNING. A host the app legitimately needs (an SSO login, a mail-catcher) goes in `STAGING_EXTRA_URLS`.
 - **If it still fails when the attempts run out, the MR is opened anyway.** Healing is a convenience, not a gate — a human reviews every result regardless. The MR labels (`ai-generated`, `qa-review-needed`) and the committed plan JSON give the reviewer full context.
 - **A stuck locator can't sink an attempt.** `browser_generate_locator` failures are guarded on both browser agents: at the retry ceiling (`AGENT_MCP_RETRIES`) the agent is handed give-up-this-element guidance — descend the ladder with an authored + verified CSS/XPath, use `probe_dom` when enabled, or record the gap and move on — instead of the run dying with "exceeded max retries". With vision on, a steer to `inspect_screen` fires earlier in the streak (`PLANNER_LOCATOR_STEER_AFTER`, default 3).
 - **Reviewers see the heal history.** Each attempt's `changes_summary`, the heal count, and the final status are rendered into the MR description — tests that needed multiple rounds are easy to spot and scrutinize.
