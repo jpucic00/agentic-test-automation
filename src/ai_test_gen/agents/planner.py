@@ -33,6 +33,7 @@ from ._context import (
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
+from ._match_count import register_count_matches
 from ._run_failure import run_agent_logged
 
 # Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
@@ -137,6 +138,9 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
     if config.dom_probe_max_calls > 0:
         _register_probe_dom(agent, config, mcp)
+    # Always-on read-only uniqueness check for authored CSS/XPath (see agents/_match_count.py) —
+    # browser_generate_locator errors on 0 matches but not on duplicates.
+    register_count_matches(agent, mcp)
     return agent
 
 

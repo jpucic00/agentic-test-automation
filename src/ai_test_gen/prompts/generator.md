@@ -21,10 +21,9 @@ from structured plans. Your output must be production-quality code.
 # Selectors
 
 - The plan's `target_selector` is a VERIFIED Playwright locator expression (no `page.` prefix),
-  captured live by the Planner (via `browser_generate_locator` and the verify tools). It may be ANY
-  kind — `getByTestId` / `getByRole` / `getByLabel` / `getByText` / `locator('css=...')` /
-  `locator('xpath=...')` — chosen as the most robust locator the element supports (id > accessible >
-  CSS > XPath). Prepend `page.` and use it AS-IS.
+  captured live by the Planner via `browser_generate_locator`. It may be ANY kind — `getByTestId` /
+  `getByRole` / `getByLabel` / `getByText` / `locator('css=...')` / `locator('xpath=...')` — the most
+  robust locator the element supports (id > accessible > CSS > XPath). Prepend `page.`; use it AS-IS.
 - `getByTestId('x')` targets the app's `id` (the runner sets `testIdAttribute: 'id'`). Keep it
   EXACTLY — do NOT rewrite it to `page.locator('#x')` / `data-testid`, and do NOT add `exact`.
   Plan `getByTestId('login-submit')` → `page.getByTestId('login-submit')`.
@@ -46,9 +45,10 @@ from structured plans. Your output must be production-quality code.
   user'"), ALWAYS scope that step's locator to it — `page.getByRole('dialog').getBy…`. Scope by
   role alone (locale-independent); add the container's name only if several such containers can
   be open at once.
-- If an ACTION step (click/fill/etc.) has NO `target_selector`, do NOT invent one. Use the closest
-  accessible locator from the step's wording (`getByRole` / `getByLabel`) WITH `exact: true`, and add
-  a `// TODO: selector not verified by the Planner` comment so the gap is visible to the reviewer.
+- If an ACTION step (click/fill/etc.) has NO `target_selector`, write NO locator for it — never a
+  `getByRole`/`getByText` guessed from its wording. Make it fail loudly right there (the one allowed
+  `throw`), so the Healer captures the selector live:
+  `await test.step('<step.action>', async () => { throw new Error('UNVERIFIED: step N has no Planner-verified selector — capture it live'); });`
 - `assert_selector` is the plan's VERIFIED locator for the element that PROVES a step's expected
   outcome (a post-login heading, a success toast, the opened dialog). When present, the after-state
   assertion uses it AS-IS (`page.<assert_selector>`, name-based ones get `exact: true` like any
@@ -88,8 +88,7 @@ step, not just a line number. Inside each step:
 
 1. **Before** an interaction, assert the target is present, THEN act:
    `await expect(<locator>, '<short what/where>').toBeVisible();`. A missing element then fails at the
-   expect timeout with your message + the locator — not a slow 60s action timeout. Use `expect(...)`,
-   never `if (!...) throw`.
+   expect timeout with your message + the locator — not a slow 60s action timeout.
 2. **After** an action that changes page state — opens a modal/menu/drawer, navigates, or submits —
    assert the NEW state before the next step relies on it. This makes the step that FAILS TO open the
    modal / load the page fail on its OWN line, not the next step. Pick the proof in THIS order, and

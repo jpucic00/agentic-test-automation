@@ -181,7 +181,7 @@ class TestRunResult(BaseModel):
     did_run: bool = Field(
         default=True,
         description=(
-            "False when Playwright produced no parseable JSON report — the spec failed "
+            "False when Playwright produced no JSON report with an executed test — the spec failed "
             "to compile/collect and never executed. The orchestrator routes that class "
             "back to the Generator (no browser needed), not the Healer."
         ),

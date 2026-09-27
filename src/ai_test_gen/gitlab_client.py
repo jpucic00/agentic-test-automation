@@ -146,11 +146,13 @@ class GitLabClient:
     ) -> None:
         """Commit each revision in order to ``file_path`` — one commit per attempt.
 
-        The first commit ``create``s the test file and the plan JSON; every later commit
-        ``update``s the test file in place, so consecutive commits diff cleanly in the MR.
-        A revision whose code is identical to the previously committed one is skipped:
-        GitLab rejects a commit with an empty diff, and an unchanged attempt has nothing
-        to show anyway.
+        The first commit writes the test file and the plan JSON — ``create`` when the path
+        is new on the target branch, ``update`` when an earlier merged MR for the same key
+        already put it there (re-runs), and omitted when its content is already identical.
+        Every later commit ``update``s the test file in place, so consecutive commits diff
+        cleanly in the MR. A revision whose code is identical to the previously committed
+        one is skipped: GitLab rejects a commit with an empty diff, and an unchanged
+        attempt has nothing to show anyway.
         """
         last_code: str | None = None
         created = False
@@ -159,10 +161,14 @@ class GitLabClient:
                 continue
             if not created:
                 actions = [
-                    {"action": "create", "file_path": file_path, "content": revision.code},
-                    {"action": "create", "file_path": plan_path, "content": plan_content},
+                    action
+                    for path, content in ((file_path, revision.code), (plan_path, plan_content))
+                    if (action := self._first_commit_action(path, content)) is not None
                 ]
                 created = True
+                if not actions:  # both files already identical on the target branch
+                    last_code = revision.code
+                    continue
             else:
                 actions = [
                     {"action": "update", "file_path": file_path, "content": revision.code}
@@ -175,6 +181,18 @@ class GitLabClient:
                 }
             )
             last_code = revision.code
+
+    def _first_commit_action(self, path: str, content: str) -> dict[str, str] | None:
+        """``create``/``update`` action for ``path`` vs the target branch; None if unchanged."""
+        try:
+            existing = self.project.files.get(path, ref=self.config.gitlab_target_branch)
+        except gitlab.GitlabGetError as exc:
+            if exc.response_code != 404:
+                raise
+            return {"action": "create", "file_path": path, "content": content}
+        if existing.decode() == content.encode():
+            return None
+        return {"action": "update", "file_path": path, "content": content}
 
 
 def _branch_name(test_case_key: str) -> str:

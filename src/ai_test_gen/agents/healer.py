@@ -32,6 +32,7 @@ from ._context import (
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
+from ._match_count import register_count_matches
 from ._run_failure import run_agent_logged
 from ._vision_aid import _make_screenshot_capture, register_inspect_screen
 
@@ -97,6 +98,8 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
     if config.dom_probe_max_calls > 0:
         register_probe_dom(agent, config, mcp, agent_label="Healer")
+    # Always-on read-only uniqueness check for authored CSS/XPath (see agents/_match_count.py).
+    register_count_matches(agent, mcp, agent_label="Healer")
     return agent
 
 

@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from .config import Config
@@ -32,6 +33,10 @@ from .models import GeneratedTest, TestRunResult
 # Hard cap on a single Playwright run. A hung browser/test must not wedge the
 # pipeline; on expiry the process is killed and the run is reported as an error.
 RUN_TIMEOUT_S = 300
+
+# Cap on the top-level report errors surfaced as error_message (compile/load errors
+# carry a code frame; several can stack up).
+REPORT_ERRORS_MAX_CHARS = 2000
 
 
 async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
@@ -96,13 +101,21 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
     if proc.returncode == 0:
         return TestRunResult(status="passed", stdout=stdout, stderr=stderr)
 
-    did_run = _report_parses(stdout)
-    failed_test, error_message, error_line = _parse_failure(stdout, test.file_name)
+    report = _load_report(stdout)
+    # A compile/load error still yields a valid JSON report — just one with no specs
+    # and the error in the top-level ``errors`` array. So "did it run" is decided by
+    # the report's content, not by whether stdout parses. did_run=False routes this
+    # class back to the Generator (the Healer's browser can't see a TypeScript error).
+    did_run = report is not None and _has_results(report)
+    failed_test, error_message, error_line = (
+        _parse_failure(report, test.file_name) if report is not None else (None, None, None)
+    )
+    if error_message is None and report is not None:
+        error_message = _report_errors(report)
     if error_message is None:
-        # No parseable JSON report (compile error, no tests, crash): the spec never
-        # actually ran. Surface the stderr tail; did_run=False routes this class back
-        # to the Generator (the Healer's browser can't see a TypeScript error).
-        error_message = stderr[:500] or "Playwright run failed (no JSON report produced)"
+        # No parseable JSON report at all (crash before the reporter ran): surface the
+        # stderr tail.
+        error_message = stderr[-500:] or "Playwright run failed (no JSON report produced)"
 
     return TestRunResult(
         status="failed",
@@ -116,13 +129,40 @@ async def run_test(config: Config, test: GeneratedTest) -> TestRunResult:
     )
 
 
-def _report_parses(stdout: str) -> bool:
-    """True when stdout is a parseable Playwright JSON report (i.e. tests actually ran)."""
+def _load_report(stdout: str) -> dict | None:
+    """The Playwright JSON report on stdout, or ``None`` when stdout is not one."""
     try:
-        json.loads(stdout)
+        report = json.loads(stdout)
     except json.JSONDecodeError:
-        return False
-    return True
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def _has_results(report: dict) -> bool:
+    """True when at least one spec in the report actually produced a test result."""
+    return any(
+        test_entry.get("results")
+        for spec in _iter_specs(report.get("suites", []))
+        for test_entry in spec.get("tests", [])
+    )
+
+
+def _report_errors(report: dict) -> str | None:
+    """Top-level report ``errors`` (compile/load/collection failures) as one message.
+
+    Each entry is prefixed with its ``file:line`` when Playwright gives a location, and
+    the result is capped so it stays a usable prompt snippet.
+    """
+    parts: list[str] = []
+    for error in report.get("errors", []):
+        message = (error.get("message") or "").strip()
+        if not message:
+            continue
+        location = error.get("location") or {}
+        if location.get("file") and location.get("line"):
+            message = f"{location['file']}:{location['line']}: {message}"
+        parts.append(message)
+    return "\n\n".join(parts)[:REPORT_ERRORS_MAX_CHARS] if parts else None
 
 
 def _find_trace(output_dir: Path) -> str | None:
@@ -140,40 +180,27 @@ def _find_trace(output_dir: Path) -> str | None:
 
 
 def _parse_failure(
-    stdout: str, file_name: str | None = None
+    report: dict, file_name: str | None = None
 ) -> tuple[str | None, str | None, int | None]:
-    """Extract ``(failed_test_title, error_message, error_line)`` from Playwright JSON.
+    """Extract ``(failed_test_title, error_message, error_line)`` from a Playwright report.
 
-    Returns ``(None, None, None)`` when the output is not parseable JSON, so the
-    caller can fall back to stderr.
+    Returns ``(None, None, None)`` when no spec failed, so the caller can fall back to
+    the report's top-level errors / stderr.
     """
-    try:
-        report = json.loads(stdout)
-    except json.JSONDecodeError:
-        return None, None, None
-
-    for suite in report.get("suites", []):
-        found = _scan_suite(suite, file_name)
-        if found is not None:
-            return found
-    return None, None, None
-
-
-def _scan_suite(
-    suite: dict, file_name: str | None
-) -> tuple[str | None, str | None, int | None] | None:
-    """Depth-first search for the first failed/timedOut spec in a Playwright suite tree."""
-    for spec in suite.get("specs", []):
+    for spec in _iter_specs(report.get("suites", [])):
         for test_entry in spec.get("tests", []):
             for run in test_entry.get("results", []):
                 if run.get("status") in ("failed", "timedOut"):
                     error = run.get("error") or {}
                     return spec.get("title"), error.get("message"), _error_line(error, file_name)
-    for child in suite.get("suites", []):
-        found = _scan_suite(child, file_name)
-        if found is not None:
-            return found
-    return None
+    return None, None, None
+
+
+def _iter_specs(suites: list[dict]) -> Iterator[dict]:
+    """Depth-first walk of a Playwright suite tree: each suite's specs, then its children."""
+    for suite in suites:
+        yield from suite.get("specs", [])
+        yield from _iter_specs(suite.get("suites", []))
 
 
 def _error_line(error: dict, file_name: str | None) -> int | None:

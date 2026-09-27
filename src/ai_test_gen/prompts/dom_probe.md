@@ -9,9 +9,9 @@ selector, e.g. of the open dialog) to search only inside a container.
 
 - The snapshot + `browser_generate_locator` remain your PRIMARY path — reach for `probe_dom` when
   that path fails you, not first.
-- Candidates are RECONNAISSANCE, not locators of record. Before recording or using one, VERIFY it:
-  pass the candidate as `browser_generate_locator`'s `target`, and/or confirm with
-  `browser_verify_element_visible`. NEVER record an unverified candidate.
+- Candidates are RECONNAISSANCE, not locators of record. VERIFY one whose match count is 1 by
+  passing it RAW (`xpath=//…` / `css=…`) as `browser_generate_locator`'s `target`.
+  NEVER record an unverified candidate.
 - A match with `inIframe` set lives inside an embedded frame — plain page locators cannot reach it;
   record that fact in `notes` instead of forcing a selector. `crossOriginIframes` lists frames the
   probe cannot see into at all.

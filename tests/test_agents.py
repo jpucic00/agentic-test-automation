@@ -432,3 +432,47 @@ def test_healer_prompt_allows_intent_reconciliation():
     healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
     assert "DO NOT restructure the test." not in healer_md
     assert "browser_generate_locator" in healer_md
+
+
+def test_generator_prompt_fails_loudly_on_missing_selector():
+    # An action step with no Planner-verified target_selector must NOT get a locator authored from
+    # its wording (the observed failure: an invented getByRole for a non-semantic <div> logout).
+    # The Generator emits a step that throws UNVERIFIED so the run fails exactly there.
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    assert "UNVERIFIED" in generator_md
+    assert "throw new Error('UNVERIFIED" in generator_md
+    assert "Use the closest" not in generator_md  # retired: authored getByRole from wording
+    assert "TODO: selector not verified" not in generator_md
+
+
+def test_healer_prompt_replaces_unverified_step_with_live_selector():
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "UNVERIFIED" in healer_md
+    assert "captured live" in healer_md
+
+
+def _chunks(md: str) -> list[str]:
+    """Split a prompt into paragraph/bullet chunks."""
+    return [c for p in md.split("\n\n") for c in p.split("\n- ")]
+
+
+def test_prompts_never_verify_css_xpath_with_verify_tools():
+    # @playwright/mcp's browser_verify_element_visible takes only {role, accessibleName} and
+    # browser_verify_text_visible only {text}: neither can check a CSS/XPath selector. Authored
+    # selectors are verified by passing them RAW as browser_generate_locator's `target`.
+    prompts = planner_mod.PROMPTS_DIR
+    for name in ("planner.md", "healer.md", "dom_probe.md", "generator.md"):
+        md = (prompts / name).read_text()
+        for chunk in _chunks(md):
+            if "browser_verify_" in chunk:
+                low = chunk.lower()
+                assert "xpath" not in low and "css" not in low, (name, chunk)
+    for name in ("planner.md", "healer.md", "dom_probe.md"):
+        md = (prompts / name).read_text()
+        assert "RAW" in md and "`target`" in md, name
+    # generate_locator does not flag duplicates; uniqueness comes from the read-only
+    # count_matches tool (never a side-effecting action such as a hover).
+    for name in ("planner.md", "healer.md"):
+        md = (prompts / name).read_text()
+        assert "count_matches" in md and "exactly 1" in md, name
+        assert "browser_hover" not in md, name

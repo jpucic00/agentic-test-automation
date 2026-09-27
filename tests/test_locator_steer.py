@@ -120,7 +120,11 @@ def test_exhaust_message_mentions_probe_only_when_probe_on():
     without_probe = LocatorFailureGuard(ceiling=1, vision_on=False, probe_on=False)
     out = asyncio.run(without_probe(None, _fail, LOCATOR_TOOL, {}))
     assert "probe_dom" not in out
-    assert "browser_verify_element_visible" in out  # the ladder/verify advice is always there
+    # The ladder/verify advice is always there — and verifies an authored selector the way the
+    # MCP actually supports (raw selector as generate_locator's target; browser_verify_* can't).
+    assert "browser_verify_element_visible" not in out
+    assert "RAW" in out and "`target`" in out
+    assert "count_matches" in out and "browser_hover" not in out
 
 
 # --- reset: one clean locator clears the streak --------------------------------

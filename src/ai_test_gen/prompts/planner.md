@@ -134,15 +134,14 @@ typed from memory:
 
 - **Primary capture:** call `browser_generate_locator` on the element's snapshot `ref`. For an id'd
   element it returns `getByTestId(...)`; for an accessible one `getByRole`/`getByLabel`; for an
-  inaccessible one it falls back to a CSS locator. Record exactly what it returns (no `page.` prefix).
+  inaccessible one it falls back to a CSS locator. Record what it returns (no `page.` prefix; name
+  locators get `exact: true`, see below).
 - **CSS/XPath you author (rungs 3–4):** when you need a more robust or different-kind locator than
-  the snapshot offers, you MAY write a candidate CSS/XPath — but you MUST verify it resolves to
-  exactly the intended element BEFORE recording it. `browser_generate_locator` accepts a unique
-  selector as its `target` (not only a `ref`): pass your CSS/XPath there to confirm it resolves, and
-  use `browser_verify_element_visible` / `browser_verify_text_visible` to confirm it's the right
-  element. Only a candidate that verifies cleanly goes into `target_selector` (as
-  `locator('xpath=...')` / `locator('css=...')`). An unverified hand-written selector is a guess —
-  do not record it.
+  the snapshot offers, you MAY write a candidate — but VERIFY it BEFORE recording it: pass the RAW
+  selector (`xpath=//…` / `css=…`, not wrapped in `locator(...)`) as `browser_generate_locator`'s
+  `target` (errors on 0 matches), AND `count_matches` must report exactly 1 (generate_locator does
+  NOT flag duplicates). Only then record it in `target_selector` as `locator('xpath=...')` /
+  `locator('css=...')`. Never record an unverified one.
 
 The #1 hallucination to avoid: inventing `getByRole('button', { name })` for a text label. Menu
 items, dropdown options, and custom controls are often `<div>`/`<span>`/`<li>`, NOT buttons, so a

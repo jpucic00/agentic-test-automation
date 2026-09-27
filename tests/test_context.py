@@ -6,6 +6,7 @@ into the fixture's tmp_path-backed paths per test.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,8 @@ _CONTEXT_TEXT = "PROJECT-CONTEXT-MARKER conventions go here."
 _MAP_TEXT = "APPLICATION-MAP-MARKER routes go here."
 
 _CONTEXT_LOGGER = "ai_test_gen.agents._context"
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write_context_files(cfg):
@@ -53,6 +56,40 @@ def test_html_comments_stripped_from_assembled_prompt(cfg):
     assert "GUIDANCE-MARKER" not in out
     assert "real rule A" in out
     assert "real rule B" in out
+
+
+def test_nested_comment_example_is_removed_whole(tmp_path):
+    # Template headers quote a literal `<!-- … -->` inside an outer comment; a
+    # non-greedy match would stop at the inner `-->` and leak the rest of the header.
+    p = tmp_path / "f.md"
+    p.write_text(
+        "before\n<!--\nDelete every `<!-- … -->` comment.\nLEAKED-GUIDANCE\n-->\nafter"
+    )
+    out = _load_context_file(p)
+    assert "LEAKED-GUIDANCE" not in out
+    assert "<!--" not in out and "-->" not in out
+    assert "before" in out and "after" in out
+
+
+def test_ordinary_comments_removed_and_surrounding_content_kept(tmp_path):
+    p = tmp_path / "f.md"
+    p.write_text("keep A <!-- drop 1 --> keep B\n<!-- drop\n2 -->\nkeep C")
+    assert _load_context_file(p) == "keep A  keep B\n\nkeep C"
+
+
+@pytest.mark.parametrize(
+    "rel_path",
+    [
+        "project_context.example.md",
+        "project_map.example.md",
+        "packages/demo-notes-app/project_context.md",
+        "packages/demo-notes-app/project_map.md",
+    ],
+)
+def test_shipped_context_files_inject_no_comment_markers(rel_path):
+    out = _load_context_file(_REPO_ROOT / rel_path)
+    assert "<!--" not in out
+    assert "-->" not in out
 
 
 def test_template_placeholders_trigger_warning_with_file_and_count(cfg, caplog):

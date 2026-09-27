@@ -117,9 +117,10 @@ class LocatorFailureGuard:
             )
         hints.append(
             "descend the resilience ladder: AUTHOR a candidate CSS or XPath anchored on the "
-            "element's stable text/attributes and VERIFY it before recording it "
-            "(browser_generate_locator accepts a unique selector as its `target`; "
-            "browser_verify_element_visible confirms it is the right element)"
+            "element's stable text/attributes and VERIFY it before recording it: pass the RAW "
+            "selector (prefixed xpath= or css=) as browser_generate_locator's `target` (it "
+            "errors on 0 matches), AND count_matches must report exactly 1 (generate_locator "
+            "does not flag duplicates)"
         )
         if self._vision_on:
             hints.append(
@@ -128,8 +129,8 @@ class LocatorFailureGuard:
             )
         numbered = "; ".join(f"({i + 1}) {hint}" for i, hint in enumerate(hints))
         return (
-            f"{LOCATOR_TOOL} has failed {n} times in a row on this target — STOP calling it for "
-            "this element; that retry budget is exhausted. This does NOT abort your task: "
+            f"{LOCATOR_TOOL} has failed {n} times in a row on this target — STOP calling it with "
+            "this target; that retry budget is exhausted. This does NOT abort your task: "
             f"{numbered}. If NO locator can be verified at all, leave this element's selector "
             "empty, record exactly what you observed in notes (or changes_summary), and MOVE ON "
             "with the rest of the task. Do not repeat the call that just failed."

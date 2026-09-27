@@ -193,6 +193,10 @@ def test_probe_fragment_demands_verification():
     assert "browser_generate_locator" in fragment
     assert "RECONNAISSANCE" in fragment
     assert "NEVER record an unverified candidate" in fragment
+    # browser_verify_element_visible takes only {role, accessibleName} — it cannot check a
+    # CSS/XPath candidate; the candidate goes RAW into browser_generate_locator's `target`.
+    assert "browser_verify_element_visible" not in fragment
+    assert "RAW" in fragment and "match count" in fragment
 
 
 def test_probe_tool_docstring_demands_verification(cfg):
@@ -200,3 +204,5 @@ def test_probe_tool_docstring_demands_verification(cfg):
     doc = tool.__doc__ or ""
     assert "browser_generate_locator" in doc
     assert "UNVERIFIED" in doc
+    assert "browser_verify_element_visible" not in doc
+    assert "RAW" in doc

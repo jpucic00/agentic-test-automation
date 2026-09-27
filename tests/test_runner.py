@@ -199,6 +199,61 @@ def test_run_test_no_report_marks_did_run_false(cfg, monkeypatch):
     assert result.did_run is False
 
 
+def test_run_test_compile_error_report_marks_did_run_false(cfg, monkeypatch):
+    # A spec that fails to load/compile still gets a VALID JSON report from Playwright:
+    # no suites, the error only in the top-level "errors" array, stderr empty. That is
+    # still "never ran" (-> Generator retry) and the real error must be surfaced.
+    report = {
+        "suites": [],
+        "errors": [
+            {
+                "message": "SyntaxError: QA-1-login.spec.ts: Unexpected token (3:12)",
+                "location": {"file": "/app/output/tests/QA-1-login.spec.ts", "line": 3},
+            },
+            {"message": "Error: No tests found"},
+        ],
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode(), stderr=b""))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.did_run is False
+    assert result.failed_test is None
+    msg = result.error_message or ""
+    assert "SyntaxError: QA-1-login.spec.ts: Unexpected token" in msg
+    assert "/app/output/tests/QA-1-login.spec.ts:3" in msg
+    assert "No tests found" in msg
+
+
+def test_run_test_failing_test_report_keeps_did_run_true_and_test_error(cfg, monkeypatch):
+    # A spec that ran and failed: did_run stays True and the test's own error wins over
+    # any top-level report errors.
+    failed_run = {"status": "failed", "error": {"message": "expect(locator).toBeVisible failed"}}
+    report = {
+        "suites": [
+            {"title": "x.spec.ts", "suites": [
+                {"title": "Login", "specs": [
+                    {"title": "QA-1: x", "tests": [{"results": [failed_run]}]}
+                ]}
+            ]}
+        ],
+        "errors": [{"message": "Error: unrelated worker teardown"}],
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert result.did_run is True
+    assert result.failed_test == "QA-1: x"
+    assert result.error_message == "expect(locator).toBeVisible failed"
+
+
+def test_run_test_unparseable_uses_stderr_tail(cfg, monkeypatch):
+    stderr = b"x" * 600 + b"Error: the real cause"
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=stderr))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert (result.error_message or "").endswith("Error: the real cause")
+    assert len(result.error_message or "") == 500
+
+
 def test_run_test_parsed_report_failure_keeps_did_run_true(cfg, monkeypatch):
     failed_run = {"status": "failed", "error": {"message": "locator timeout"}}
     report = {

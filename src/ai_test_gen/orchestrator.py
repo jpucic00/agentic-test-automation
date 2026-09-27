@@ -153,7 +153,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     # still falls through to the heal loop / MR so a human always gets something.
     if result.status == "failed" and not result.did_run:
         logger.info(
-            "[%s] Test never ran (no JSON report — compile/collection error); "
+            "[%s] Test never ran (no test executed — compile/collection error); "
             "regenerating once via the Generator",
             issue_key,
         )

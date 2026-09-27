@@ -57,6 +57,8 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
   click ran but didn't produce its effect — THIS step is the blocker. Its trigger is wrong (often a
   guessed role on a `<div>`/`<span>` — re-capture via `browser_generate_locator`) or the state needs an
   explicit wait. Don't go hunting downstream.
+- **A step throws `UNVERIFIED`**: the Planner never captured its selector. Replace the `throw` with the
+  step's real action, using a selector captured live via the ladder below — never guessed.
 
 # Constraints
 
@@ -76,11 +78,11 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
   an unverified selector.
 - NEVER invent a selector from memory — a hallucinated `id` / `getByTestId('…')` / role+name is the
   #1 way a heal makes the test WORSE. But a CSS or XPath you AUTHOR and then VERIFY live is NOT an
-  invention: you MAY write a candidate `locator('css=...')` / `locator('xpath=...')`, confirm it
-  resolves to exactly the intended element (`browser_generate_locator` accepts a unique selector as
-  its `target`; `browser_verify_element_visible` / `browser_verify_text_visible` confirm it's the
-  right one), and only then record it. The rule is *verify before you trust*, not *ids only*. If you
-  can't verify any locator, keep the existing one and say so in `changes_summary`.
+  invention: pass the RAW selector (`xpath=//…` / `css=…`) as `browser_generate_locator`'s `target`
+  (errors on 0 matches), AND `count_matches` must report exactly 1 (generate_locator does NOT flag
+  duplicates); only then record it as `locator('xpath=…')` / `locator('css=…')`. The rule is *verify
+  before you trust*, not *ids only*. If you can't verify any locator, keep the existing one and say
+  so in `changes_summary`.
 - PRESERVE what already works. Beyond the locator/line the error names and any step you add or
   remove to match the intent, leave the file intact — never drop an existing `exact: true`, and
   never rewrite a selector the error didn't flag.
@@ -88,8 +90,8 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
 # Common failure modes and fixes
 
 1. **Timeout on `locator.click` / `expect(locator).toBeVisible`**
-   → The selector is wrong, the element loads later, or the target moved. Check the live app via
-     MCP — and per the diagnosis order, the broken locator is often EARLIER than the timeout.
+   → The selector is wrong, the element loads later, or the target moved — and per the diagnosis
+     order, the broken locator is often EARLIER than the timeout.
      A `getByRole('button'/'menuitem', { name })` that never resolves is often a guessed role — the
      target is a `<div>`/`<span>` menu/dropdown item, not that role. Re-capture it with
      `browser_generate_locator` and use whatever valid locator it returns (often `getByTestId`).
@@ -157,9 +159,7 @@ Each added step gets a live-verified selector like any other. Stay faithful to t
 
 # Authentication
 
-You start UNauthenticated with no saved session — so log in live as the role the test uses, with the
-credentials in your Project Context (see the Application Map for the login flow), EVERY time before
-you inspect or reproduce anything.
+Log in live first, every time (see Role; the Application Map has the login flow).
 
 Session-invalidating actions — signing out, "sign out of all devices", changing or resetting the
 password — are **ALLOWED** when the failure path needs them (e.g. a logout test, a password-reset

@@ -16,8 +16,8 @@ match: tag / id / classes / own text / relevant attributes / visibility / shadow
 flags, plus a CANDIDATE CSS and XPath selector with match counts.
 
 Candidates are reconnaissance, NOT locators of record: the agent must verify one through the
-existing path (``browser_generate_locator`` with the candidate as ``target``, plus the
-``browser_verify_*`` tools) before recording it — "verify before trust" stays the law; the probe
+existing path (a match-count-1 candidate passed raw as ``browser_generate_locator``'s ``target``,
+which errors on 0 matches) before recording it — "verify before trust" stays the law; the probe
 just replaces blind guessing with informed authoring. Budgeted per agent run via
 ``AGENT_DOM_PROBE`` (closure-local counter, same pattern as the Vision Aid).
 """
@@ -278,8 +278,8 @@ def register_probe_dom(
         expect — non-semantic div/span controls, an unnamed button in a modal, a sparse/empty
         snapshot. Returns each match's real tag, id, classes, attributes, visibility, and a
         CANDIDATE css + xpath selector with match counts. Candidates are UNVERIFIED
-        reconnaissance: before recording or using one, VERIFY it — pass the candidate as
-        browser_generate_locator's `target` and/or confirm with browser_verify_element_visible.
+        reconnaissance: before recording or using one, VERIFY it — take one whose match count
+        is 1 and pass it RAW (xpath=//… or css=…) as browser_generate_locator's `target`.
         `scope` optionally restricts the search to a container's CSS selector (e.g. the open
         dialog). The snapshot + browser_generate_locator remain the primary path; calls here
         count against a per-run budget.

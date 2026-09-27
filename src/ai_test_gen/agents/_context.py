@@ -32,7 +32,7 @@ _VALID_REASONING_EFFORTS = ("low", "medium", "high")
 
 _MISSING_PLACEHOLDER = "(no project context provided)"
 
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_COMMENT_TOKEN_RE = re.compile(r"<!--|-->")
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 
 # Raw-text markers identifying a context file that is still an unfilled template.
@@ -48,6 +48,33 @@ _TEMPLATE_MARKERS = (
     "[FILL IN",
     "[CUSTOMIZE",
 )
+
+
+def _strip_html_comments(text: str) -> str:
+    """Remove HTML comments, counting nesting depth so an outer comment that quotes a
+    literal ``<!-- … -->`` example is removed whole (a non-greedy regex stops at the
+    inner ``-->`` and leaks the rest). A stray ``-->`` outside any comment is kept;
+    an unterminated comment strips to end-of-text (guidance must never leak)."""
+    kept: list[str] = []
+    depth = 0
+    pos = 0
+    for token in _COMMENT_TOKEN_RE.finditer(text):
+        if token.group() == "<!--":
+            if depth == 0:
+                kept.append(text[pos : token.start()])
+            depth += 1
+        elif depth:
+            depth -= 1
+            if depth == 0:
+                pos = token.end()
+    if depth == 0:
+        kept.append(text[pos:])
+    else:
+        logger.warning(
+            "Context file has an unterminated '<!--' comment — everything after it was "
+            "dropped from the agent prompt. Close the comment with '-->'."
+        )
+    return "".join(kept)
 
 
 def _load_context_file(path: Path) -> str:
@@ -72,7 +99,7 @@ def _load_context_file(path: Path) -> str:
             path.name,
             marker_count,
         )
-    stripped = _HTML_COMMENT_RE.sub("", raw)
+    stripped = _strip_html_comments(raw)
     return _EXCESS_BLANK_LINES_RE.sub("\n\n", stripped)
 
 

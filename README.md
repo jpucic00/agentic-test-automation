@@ -29,6 +29,9 @@ Jira/Xray key → fetch → Plan → Generate → Run → (Heal ↺) → open MR
   unnamed `div`/`span` elements: `probe_dom` searches the live DOM (read-only, one fixed function —
   the model never writes code) and reports an element's real attributes plus candidate CSS/XPath
   selectors, which the agent then verifies before use — enable it with `AGENT_DOM_PROBE=N`.
+- **Match counter** *(always on)*: `count_matches` reports how many elements a raw CSS/XPath
+  selector matches (read-only, one fixed function), so a hand-written selector is recorded only
+  when it is unique — `browser_generate_locator` alone does not flag duplicates.
 - **GitLab Client** opens a merge request labeled `ai-generated` + `qa-review-needed` (optional — can be
   skipped for local runs).
 
