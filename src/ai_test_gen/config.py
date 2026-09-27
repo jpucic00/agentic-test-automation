@@ -15,6 +15,7 @@ Implements AI_TEST_GENERATION_GUIDE.md §3.4 + §3.5b.
 """
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -343,6 +344,13 @@ class Config:
     staging_base_urls: tuple[str, ...] = ()
     staging_extra_urls: tuple[str, ...] = ()
 
+    # Per-model-request bounds applied to EVERY model the pipeline builds (llm.DeadlineModel):
+    # a total wall-clock deadline for ONE request (AGENT_REQUEST_TIMEOUT_S) and how many tries
+    # it gets (AGENT_REQUEST_ATTEMPTS: the first try + retries). httpx's read timeout is per
+    # chunk, so a gateway trickling keep-alive bytes could otherwise hang a run indefinitely.
+    agent_request_timeout_s: float = 180.0
+    agent_request_attempts: int = 2
+
     # Retrieval memory (optional, OFF by default — RETRIEVAL_MEMORY_PLAN.md). When
     # rag_enabled is False nothing below is consulted and no rag/ module (or qdrant)
     # is imported — the pipeline stays byte-identical. kb_path hosts the EMBEDDED
@@ -473,6 +481,8 @@ def load_config() -> Config:
         vision_model=os.environ.get("VISION_MODEL", "mistralai/devstral-small-2-2512"),
         vision_max_calls=_vision_max_calls(),
         dom_probe_max_calls=_dom_probe_max_calls(),
+        agent_request_timeout_s=_positive_float("AGENT_REQUEST_TIMEOUT_S", default=180.0),
+        agent_request_attempts=_positive_int("AGENT_REQUEST_ATTEMPTS", default=2),
         jira_base_url=_required_if("JIRA_BASE_URL", required=testcase_source == "xray"),
         jira_email=_required_if("JIRA_EMAIL", required=testcase_source == "xray"),
         jira_token=_required_if("JIRA_TOKEN", required=testcase_source == "xray"),
@@ -527,3 +537,19 @@ def _positive_int(name: str, *, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _positive_float(name: str, *, default: float) -> float:
+    """A positive-number env var (``name``), falling back to ``default``.
+
+    Same policy as ``_positive_int``: unset / non-numeric / non-positive / non-finite →
+    ``default``, so a typo'd bound keeps the shipped one instead of disabling it.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value > 0 else default

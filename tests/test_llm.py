@@ -1,14 +1,27 @@
 """Unit tests for the gateway model builder + mTLS/proxy config — offline."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.openai import OpenAIChatModel
 
 from ai_test_gen import mtls
 from ai_test_gen.config import Config
-from ai_test_gen.llm import build_openai_model, judge_reasoning_effort_support
+from ai_test_gen.llm import (
+    DeadlineModel,
+    ModelRequestTimeoutError,
+    build_openai_model,
+    judge_reasoning_effort_support,
+)
 
 
 def test_mtls_defaults_to_direct_connection(monkeypatch):
@@ -29,14 +42,33 @@ def test_verify_arg_points_at_corp_ca_when_set(monkeypatch):
     assert mtls.get_verify_arg() == "/etc/corp/ca.pem"
 
 
+def _gateway_cfg(api_key: str = "k", **overrides: object) -> Config:
+    fields: dict[str, object] = {
+        "llm_base_url": "https://gateway.internal/v1",
+        "llm_api_key": api_key,
+        "agent_request_timeout_s": 180.0,
+        "agent_request_attempts": 2,
+    }
+    fields.update(overrides)
+    return cast(Config, SimpleNamespace(**fields))
+
+
+def _inner(model: DeadlineModel) -> OpenAIChatModel:
+    assert isinstance(model.wrapped, OpenAIChatModel)
+    return model.wrapped
+
+
 def test_build_openai_model_offline(monkeypatch):
     for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
         monkeypatch.delenv(var, raising=False)
-    cfg = SimpleNamespace(llm_base_url="https://gateway.internal/v1", llm_api_key="k")
-    model = build_openai_model(cast(Config, cfg), "openai/gpt-oss-120b")
-    from pydantic_ai.models.openai import OpenAIChatModel
+    model = build_openai_model(_gateway_cfg(), "openai/gpt-oss-120b")
 
-    assert isinstance(model, OpenAIChatModel)
+    # Every built model is deadline-wrapped around the real OpenAIChatModel, which keeps
+    # its identity (name/system/profile) so model settings and agents are unaffected.
+    assert isinstance(model, DeadlineModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
+    assert model.model_name == "openai/gpt-oss-120b"
+    assert model.system == "openai"
 
 
 def test_build_openai_model_endpoint_override_and_shared_default(monkeypatch):
@@ -45,36 +77,126 @@ def test_build_openai_model_endpoint_override_and_shared_default(monkeypatch):
     # caller is unchanged. Introspected via the provider's OpenAI client — no network.
     for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
         monkeypatch.delenv(var, raising=False)
-    cfg = SimpleNamespace(llm_base_url="https://gateway.internal/v1", llm_api_key="shared-key")
+    cfg = _gateway_cfg(api_key="shared-key")
 
-    shared = build_openai_model(cast(Config, cfg), "m")
+    shared = _inner(build_openai_model(cfg, "m"))
     assert str(shared.client.base_url).rstrip("/") == "https://gateway.internal/v1"
     assert shared.client.api_key == "shared-key"
 
-    overridden = build_openai_model(
-        cast(Config, cfg), "m", base_url="https://planner.host/v1", api_key="planner-key"
+    overridden = _inner(
+        build_openai_model(cfg, "m", base_url="https://planner.host/v1", api_key="planner-key")
     )
     assert str(overridden.client.base_url).rstrip("/") == "https://planner.host/v1"
     assert overridden.client.api_key == "planner-key"
 
 
-def test_build_openai_model_timeout_bounds_requests_or_keeps_library_default(monkeypatch):
-    # timeout_s=240 must reach the underlying httpx client as read=240 with the connect
-    # phase capped at 30s; omitted, the client library's own default stands untouched
-    # (the browser agents' long turns rely on it).
+def test_build_openai_model_applies_request_deadline_from_config(monkeypatch):
+    # AGENT_REQUEST_TIMEOUT_S/ATTEMPTS reach the wrapper AND the httpx read timeout (connect
+    # capped at 30s), so a silent stall fails fast in the client too.
     for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
         monkeypatch.delenv(var, raising=False)
-    cfg = SimpleNamespace(llm_base_url="https://gateway.internal/v1", llm_api_key="k")
+    model = build_openai_model(
+        _gateway_cfg(agent_request_timeout_s=90.0, agent_request_attempts=3), "m"
+    )
+    assert model.deadline_s == 90.0
+    assert model.attempts == 3
+    timeout = _inner(model).client.timeout
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 90.0
+    assert timeout.connect == 30.0
 
-    bounded = build_openai_model(cast(Config, cfg), "m", timeout_s=240)
-    timeout = bounded.client.timeout
+
+def test_build_openai_model_explicit_timeout_overrides_the_knob(monkeypatch):
+    # An explicit timeout_s (the Distiller's 240s) wins over AGENT_REQUEST_TIMEOUT_S for
+    # that one model: it becomes both the deadline and the read timeout.
+    for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
+        monkeypatch.delenv(var, raising=False)
+    model = build_openai_model(_gateway_cfg(), "m", timeout_s=240)
+    assert model.deadline_s == 240
+    timeout = _inner(model).client.timeout
+    assert isinstance(timeout, httpx.Timeout)
     assert timeout.read == 240
     assert timeout.connect == 30.0
 
-    from openai import DefaultAsyncHttpxClient
 
-    unbounded = build_openai_model(cast(Config, cfg), "m")
-    assert unbounded.client.timeout == DefaultAsyncHttpxClient().timeout
+# --- DeadlineModel: total wall-clock bound per model request ------------------------
+
+
+def _slow_then_fast(delays: list[float], calls: list[int]) -> FunctionModel:
+    """Fake gateway model: call N sleeps delays[N] (last value repeats), then answers."""
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        index = len(calls)
+        calls.append(index)
+        await asyncio.sleep(delays[min(index, len(delays) - 1)])
+        return ModelResponse(parts=[TextPart(f"answer {index + 1}")])
+
+    return FunctionModel(respond)
+
+
+def _request(model: DeadlineModel) -> ModelResponse:
+    return asyncio.run(
+        model.request([ModelRequest.user_text_prompt("hi")], None, ModelRequestParameters())
+    )
+
+
+def test_deadline_model_retries_a_hung_request_then_raises(caplog):
+    calls: list[int] = []
+    model = DeadlineModel(_slow_then_fast([5.0], calls), deadline_s=0.05, attempts=2)
+
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.llm"):
+        with pytest.raises(ModelRequestTimeoutError, match=r"within 0\.05s on 2 attempt"):
+            _request(model)
+
+    assert len(calls) == 2  # the first try + exactly one retry, then give up
+    assert "no response within 0.05s — retrying (attempt 2/2)" in caplog.text
+    # The orchestrator's `except Exception` boundaries must catch it (run → status error).
+    assert issubclass(ModelRequestTimeoutError, Exception)
+
+
+def test_deadline_model_recovers_when_the_retry_answers():
+    calls: list[int] = []
+    model = DeadlineModel(_slow_then_fast([5.0, 0.0], calls), deadline_s=0.05, attempts=2)
+
+    response = _request(model)
+
+    assert len(calls) == 2
+    assert response.parts == [TextPart("answer 2")]
+
+
+def test_deadline_model_leaves_a_fast_model_untouched():
+    calls: list[int] = []
+    model = DeadlineModel(_slow_then_fast([0.0], calls), deadline_s=0.05, attempts=2)
+
+    response = _request(model)
+
+    assert len(calls) == 1
+    assert response.parts == [TextPart("answer 1")]
+
+
+def test_deadline_model_does_not_retry_an_inner_timeout_error():
+    # A TimeoutError raised BY the wrapped request (not our deadline) propagates unchanged.
+    calls: list[int] = []
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(len(calls))
+        raise TimeoutError("inner")
+
+    model = DeadlineModel(FunctionModel(respond), deadline_s=5.0, attempts=2)
+    with pytest.raises(TimeoutError, match="inner"):
+        _request(model)
+    assert len(calls) == 1
+
+
+def test_agent_runs_through_a_deadline_wrapped_model():
+    # Agents construct and run unchanged on the wrapper (settings pass straight through).
+    calls: list[int] = []
+    model = DeadlineModel(_slow_then_fast([0.0], calls), deadline_s=1.0, attempts=2)
+    agent: Agent[None, str] = Agent(model=model, output_type=str)
+
+    result = asyncio.run(agent.run("hi", model_settings={"parallel_tool_calls": False}))
+
+    assert result.output == "answer 1"
 
 
 # --- reasoning-effort support verdict (consumed by scripts/step0d_*) ---------------

@@ -62,6 +62,8 @@ _OPTIONAL_VARS = (
     "DISTILLER_EXTRA_BODY",
     "DISTILLER_REQUEST_LIMIT",
     "RAG_HINT_WORD_BUDGET",
+    "AGENT_REQUEST_TIMEOUT_S",
+    "AGENT_REQUEST_ATTEMPTS",
     "TEST_MARKER_REGEX",
     "STAGING_EXTRA_URLS",
 )
@@ -372,6 +374,7 @@ def test_invalid_distiller_mode_fails_fast(env):
     [
         ("RAG_HINT_WORD_BUDGET", "rag_hint_word_budget", 250),
         ("DISTILLER_REQUEST_LIMIT", "distiller_request_limit", 40),
+        ("AGENT_REQUEST_ATTEMPTS", "agent_request_attempts", 2),
     ],
 )
 def test_positive_int_knobs_parse_and_fall_back(env, var, attr, default):
@@ -384,6 +387,17 @@ def test_positive_int_knobs_parse_and_fall_back(env, var, attr, default):
     for bad in ("lots", "0", "-5"):
         env.setenv(var, bad)
         assert getattr(load_config(), attr) == default, bad
+
+
+def test_agent_request_timeout_parses_positive_float_and_falls_back(env):
+    # Same fallback contract as _positive_int, but fractional seconds are honored; a
+    # typo'd / zero / negative / infinite deadline keeps the shipped 180s bound.
+    assert load_config().agent_request_timeout_s == 180.0  # unset
+    env.setenv("AGENT_REQUEST_TIMEOUT_S", "42.5")
+    assert load_config().agent_request_timeout_s == 42.5
+    for bad in ("soon", "0", "-3", "inf", "nan"):
+        env.setenv("AGENT_REQUEST_TIMEOUT_S", bad)
+        assert load_config().agent_request_timeout_s == 180.0, bad
 
 
 def test_rag_enabled_parses_the_gitlab_truthy_set(env):

@@ -57,7 +57,8 @@ logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 # One distill turn is bounded work — a hung or queued gateway must surface as an
-# error within minutes, not dangle on the client library's 10-minute default.
+# error within minutes. Overrides AGENT_REQUEST_TIMEOUT_S for the Distiller only
+# (a whole-repo-context turn legitimately runs longer than a browser-agent turn).
 _DISTILL_TIMEOUT_S = 240.0
 
 # Degraded-mode caps: how many files call 1 may request and how much of their
