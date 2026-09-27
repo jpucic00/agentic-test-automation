@@ -10,12 +10,15 @@ lifecycle/conventions sections become kind=knowledge records.
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from ai_test_gen.config import PROJECT_ROOT, Config
 from ai_test_gen.rag.mapper import (
+    PROMPTS_DIR,
     CitedNote,
     CodeExample,
     HelperSummary,
@@ -116,6 +119,24 @@ def _build(cfg: Config, corpus: Path, *, refresh: bool = False, run_draft=None):
             run_draft=run_draft,
         )
     )
+
+
+# Cache corruptions: each takes a real, valid cache file and breaks it one way.
+def _write_invalid_json(cache_path: Path) -> None:
+    cache_path.write_text("{not json")
+
+
+def _write_garbage_draft(cache_path: Path) -> None:
+    # Valid JSON, right version — but "draft" no longer validates as a MapDraft.
+    data = json.loads(cache_path.read_text())
+    data["draft"] = "garbage"
+    cache_path.write_text(json.dumps(data))
+
+
+def _drop_draft_key(cache_path: Path) -> None:
+    data = json.loads(cache_path.read_text())
+    del data["draft"]
+    cache_path.write_text(json.dumps(data))
 
 
 class TestGeneration:
@@ -231,6 +252,50 @@ class TestPerSectionCache:
         }
         assert "clicks v2" in result.path.read_text()
 
+    def test_added_file_invalidates_every_section(self, cfg: Config, corpus: Path) -> None:
+        # A file appearing (or vanishing) changes the corpus STRUCTURE — the per-file
+        # section hashes can't see it, so the whole map regenerates.
+        stub = FakeMapper()
+        _build(cfg, corpus, run_draft=stub)
+        _write(corpus, "extra/NewHelper.java", "class NewHelper {}\n")
+        second = _build(cfg, corpus, run_draft=stub)
+
+        assert stub.calls == 2  # the Mapper ran again
+        assert not second.from_cache
+        assert set(second.stale_sections) == {
+            "suites",
+            "locator_idioms",
+            "core_helpers",
+            "lifecycle",
+            "data",
+            "conventions",
+            "unmapped",
+        }
+        assert "clicks v2" in second.path.read_text()
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            pytest.param(_write_invalid_json, id="invalid-json"),
+            pytest.param(_write_garbage_draft, id="garbage-draft"),
+            pytest.param(_drop_draft_key, id="missing-draft"),
+        ],
+    )
+    def test_corrupted_cache_is_a_miss_not_a_crash(
+        self, cfg: Config, corpus: Path, corrupt: Callable[[Path], None]
+    ) -> None:
+        # A truncated or hand-edited cache file must read as a cache MISS (regenerate)
+        # — never abort a seeding run with a JSON/validation error.
+        stub = FakeMapper()
+        first = _build(cfg, corpus, run_draft=stub)
+        cache_path = first.path.parent / "NOTE.suite_map.cache.json"
+        assert cache_path.exists()
+        corrupt(cache_path)
+
+        result = _build(cfg, corpus, run_draft=stub)  # must not raise
+        assert stub.calls == 2  # regenerated from the model, not from the bad cache
+        assert not result.from_cache
+
 
 class TestOverrides:
     def test_overrides_are_merged_and_survive_regeneration(self, cfg: Config, corpus: Path) -> None:
@@ -302,3 +367,15 @@ class TestDemoCorpus:
         # Citations pointed at real corpus files, so nothing is flagged unresolved.
         assert result.unresolved_citations == []
         assert len(result.knowledge_records) == 2
+
+
+class TestPromptContract:
+    def test_mapper_prompt_demands_citations_and_honest_unmapped(self) -> None:
+        # Locks the Mapper prompt contract offline (verbatim phrases, so a prompt rewrite
+        # that drops either demand fails CI): every claim cites a real file, snippets are
+        # copied not invented, and uncertainty goes to 'unmapped' instead of a guess.
+        prompt = (PROMPTS_DIR / "mapper.md").read_text()
+        assert "MUST cite a real file" in prompt
+        assert "never paraphrase a selector, never invent one" in prompt
+        assert "prefer flagging uncertainty here over guessing" in prompt
+        assert 'A wrong citation is worse than an honest "unmapped"' in prompt

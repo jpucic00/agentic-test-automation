@@ -132,9 +132,7 @@ def _response_meta(message: Any) -> str | None:
         if input_tokens is not None or output_tokens is not None:
             bits.append(f"usage in={input_tokens} out={output_tokens}")
     finish = getattr(message, "finish_reason", None)
-    details = getattr(message, "provider_details", None) or getattr(
-        message, "vendor_details", None
-    )
+    details = getattr(message, "provider_details", None)
     if not finish and isinstance(details, dict):
         finish = details.get("finish_reason")
     if finish:

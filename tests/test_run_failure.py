@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -154,3 +155,37 @@ def test_any_exception_logs_marker_and_evidence_backstop(caplog):
 
     assert "failure-evidence capture armed" in caplog.text
     assert "RuntimeError('connection dropped mid-turn')" in caplog.text
+
+
+class _RecordingAgent:
+    """Succeeds immediately, recording every run() call's kwargs."""
+
+    def __init__(self) -> None:
+        self.run_kwargs: list[dict[str, Any]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def run(self, *args: object, **kwargs: Any) -> object:
+        self.run_kwargs.append(kwargs)
+        return SimpleNamespace(output="done")
+
+
+def test_request_limit_override_and_shared_default_reach_usage_limits(monkeypatch):
+    # request_limit is the seeding agents' seam (Mapper/Distiller bound their exploration
+    # via DISTILLER_REQUEST_LIMIT): an explicit value must reach UsageLimits unchanged,
+    # and omitting it keeps every browser-agent caller on agent_request_limit().
+    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "44")
+    agent = _RecordingAgent()
+
+    out = asyncio.run(
+        run_agent_logged(cast(Any, agent), "go", agent_label="Distiller", request_limit=7)
+    )
+    assert out == "done"
+    assert agent.run_kwargs[0]["usage_limits"].request_limit == 7
+
+    asyncio.run(run_agent_logged(cast(Any, agent), "go", agent_label="Planner"))
+    assert agent.run_kwargs[1]["usage_limits"].request_limit == 44

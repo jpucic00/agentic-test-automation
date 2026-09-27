@@ -97,6 +97,45 @@ class TestJavaDiscovery:
         )
         assert [t.xray_key for t in result.tests] == ["ACME-7"]
 
+    def test_key_constrained_custom_regex_counts_parity_on_string_intact_text(
+        self, tmp_path: Path
+    ) -> None:
+        # The parity numerator is counted on comment-masked text with string CONTENTS
+        # intact (the same view the per-method zone search reads). A key pattern like
+        # (QA-\d+) can never match string-BLANKED text, which used to zero markers_seen
+        # for custom regexes and fake a parity anomaly.
+        _write(
+            tmp_path,
+            "T.java",
+            "public class T {\n"
+            '  @Xray(testCase = "QA-1")\n'
+            "  public void one() {}\n\n"
+            '  @Xray(testCase = "QA-2")\n'
+            "  public void two() {}\n"
+            "}\n",
+        )
+        result = discover_tests(
+            "QA", selenium_root=tmp_path, marker_regex=r'@Xray\(testCase = "(QA-\d+)"\)'
+        )
+        assert {t.xray_key for t in result.tests} == {"QA-1", "QA-2"}
+        assert result.markers_seen == 2
+        assert result.parity_gap == 0
+
+    def test_same_line_annotation_signature_is_discovered(self, tmp_path: Path) -> None:
+        # The decoration zone includes the signature's own first line, so the compact
+        # `@Xray(...) public void t() {` one-line form is a discovered test too.
+        _write(
+            tmp_path,
+            "S.java",
+            "public class S {\n"
+            '  @Xray(testCase = "QA-9") public void t() { click(); }\n'
+            "}\n",
+        )
+        result = discover_tests("QA", selenium_root=tmp_path)
+        assert [t.xray_key for t in result.tests] == ["QA-9"]
+        assert result.markers_seen == 1
+        assert result.parity_gap == 0
+
     def test_marker_regex_must_capture_a_group(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="group"):
             discover_tests("QA", selenium_root=tmp_path, marker_regex=r"@Xray")
@@ -133,6 +172,31 @@ class TestTextBlockRobustness:
         assert {t.xray_key for t in result.tests} == {"QA-DB", "QA-AFTER"}
         assert result.parity_gap == 0
         assert result.fallback_files == []
+
+    def test_marker_inside_text_block_does_not_inflate_parity(self, tmp_path: Path) -> None:
+        # A verbatim marker inside a text block (test DATA — needs no quote escapes, so
+        # the DEFAULT regex really matches it on string-intact text) must be dropped from
+        # the parity numerator by the string-span filter — and must not fake a test.
+        _write(
+            tmp_path,
+            "Doc.java",
+            '''
+            public class Doc {
+                @Xray(testCase = "QA-REAL")
+                public void stores() {
+                    String payload = """
+                        @Xray(testCase = "QA-FAKE")
+                        """;
+                    send(payload);
+                }
+            }
+            ''',
+        )
+        result = discover_tests("QA", selenium_root=tmp_path)
+
+        assert [t.xray_key for t in result.tests] == ["QA-REAL"]
+        assert result.markers_seen == 1
+        assert result.parity_gap == 0
 
 
 class TestVisibilityOfGaps:
@@ -189,6 +253,55 @@ class TestStableIds:
         # empty key ([^"]*) → the ref (path#symbol) drives the id
         (test,) = result.tests
         assert test.record_id == make_record_id("QA", "selenium-import", test.ref)
+
+
+class TestDuplicateKeys:
+    def test_duplicate_key_yields_distinct_ids_and_is_reported(self, tmp_path: Path) -> None:
+        # Two tests annotated with the SAME key (a copied/moved test) must never share a
+        # record_id — one upsert would silently overwrite the other. The first in walk
+        # order keeps the plain key-based id; later ones re-id off `key|ref`.
+        _write(
+            tmp_path,
+            "a/A.java",
+            'public class A {\n  @Xray(testCase = "QA-DUP")\n  public void one() {}\n}\n',
+        )
+        _write(
+            tmp_path,
+            "b/B.java",
+            'public class B {\n  @Xray(testCase = "QA-DUP")\n  public void two() {}\n}\n',
+        )
+        result = discover_tests("QA", selenium_root=tmp_path)
+
+        assert len(result.tests) == 2
+        first, second = result.tests  # sorted walk order: a/A.java before b/B.java
+        assert first.record_id != second.record_id
+        assert first.record_id == make_record_id("QA", "selenium-import", "QA-DUP")
+        assert second.record_id == make_record_id(
+            "QA", "selenium-import", f"QA-DUP|{second.ref}"
+        )
+        assert result.duplicate_keys == ["QA-DUP: a/A.java#one and b/B.java#two"]
+        assert "duplicate marker keys: 1" in render_discovery_summary(result)
+
+
+class TestCombinedRoots:
+    def test_java_and_playwright_roots_in_one_call(self, tmp_path: Path) -> None:
+        sel = tmp_path / "selenium"
+        pw = tmp_path / "playwright"
+        _write(sel, "LoginTest.java", _ONE_TEST_JAVA)  # QA-5
+        _write(
+            pw,
+            "note.spec.ts",
+            '// @Xray(testCase = "QA-7")\n' + "test('adds a note', () => {});\n",
+        )
+        result = discover_tests("QA", selenium_root=sel, playwright_dir=pw)
+
+        assert result.discovered == 2
+        by_lang = {t.language: t for t in result.tests}
+        assert by_lang["java"].xray_key == "QA-5"
+        assert by_lang["ts"].xray_key == "QA-7"
+        # Parity is a JAVA account: the spec's comment marker never enters the numerator.
+        assert result.markers_seen == 1
+        assert result.parity_gap == 0
 
 
 class TestPlaywrightDiscovery:

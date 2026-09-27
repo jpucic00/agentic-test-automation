@@ -86,6 +86,7 @@ class DiscoveryResult:
     java_files: int = 0
     spec_files: int = 0
     fallback_files: list[str] = field(default_factory=list)  # files that needed whole-file scan
+    duplicate_keys: list[str] = field(default_factory=list)  # "KEY: refA and refB" collisions
     skeleton: str = ""  # tree/suite outline (browsable artifact)
 
     @property
@@ -98,7 +99,8 @@ class DiscoveryResult:
 
     @property
     def parity_gap(self) -> int:
-        """Java markers seen minus Java tests discovered — >0 means tests were lost."""
+        """Java markers seen minus Java tests discovered — >0 means tests were
+        lost; <0 means the parity counter itself misfired. Both are reported."""
         return self.markers_seen - self.java_discovered
 
 
@@ -139,6 +141,7 @@ def discover_tests(
     if playwright_dir is not None:
         _discover_playwright(result, project, playwright_dir, marker)
 
+    _disambiguate_duplicate_keys(result, project)
     result.skeleton = _render_skeleton(result, selenium_root, playwright_dir)
     if result.parity_gap > 0:
         logger.warning(
@@ -148,7 +151,40 @@ def discover_tests(
             result.java_discovered,
             result.parity_gap,
         )
+    elif result.parity_gap < 0:
+        logger.warning(
+            ":: PARITY ANOMALY — %d Java test(s) discovered but only %d marker(s) "
+            "counted; the marker regex and the parity counter disagree",
+            result.java_discovered,
+            result.markers_seen,
+        )
+    if result.duplicate_keys:
+        logger.warning(
+            ":: DUPLICATE MARKER KEY(S) — %d key(s) annotate more than one test: %s",
+            len(result.duplicate_keys),
+            "; ".join(result.duplicate_keys),
+        )
     return result
+
+
+def _disambiguate_duplicate_keys(result: DiscoveryResult, project: str) -> None:
+    """Re-id 2nd+ occurrences of a marker key so records never silently collide.
+
+    Two tests annotated with the SAME key (a copied/moved test — common in real
+    corpora) would share a record_id: both get distilled, then one upsert
+    overwrites the other, nondeterministically. The first occurrence (sorted
+    walk order) keeps the plain key-based id — stable across refactors — and
+    later ones get ``key|ref`` ids; the collision is reported, never silent.
+    """
+    first_by_id: dict[str, DiscoveredTest] = {}
+    for test in result.tests:
+        prior = first_by_id.get(test.record_id)
+        if prior is None:
+            first_by_id[test.record_id] = test
+            continue
+        result.duplicate_keys.append(f"{test.xray_key or test.ref}: {prior.ref} and {test.ref}")
+        test.record_id = make_record_id(project, test.source, f"{test.xray_key}|{test.ref}")
+        first_by_id[test.record_id] = test
 
 
 def _discover_java(
@@ -161,12 +197,17 @@ def _discover_java(
         declscan = _mask_strings(masked)  # + string contents blanked, for decl scans
         rel = str(path.relative_to(root))
 
-        # Count markers on the string-BLANKED text: a real @Xray annotation is code
-        # (its position + structure survive), but a marker sitting inside a string
-        # literal is not a test and must not inflate the parity numerator. The
-        # per-method key capture below still runs on comment-masked text (strings
-        # intact) so the KEY literal survives.
-        marker_starts = [m.start() for m in marker.finditer(declscan)]
+        # Count markers on the SAME text the per-method zone search reads
+        # (comments blanked, string contents intact) so a custom key pattern
+        # (e.g. `"(QA-\d+)"`) counts identically in both places — counting on
+        # string-BLANKED text undercounted the numerator and disarmed the
+        # whole-file fallback net for any regex whose key group can't match
+        # blanks. A match STARTING inside a string literal is dropped: a marker
+        # in test data is not a test and must not inflate the parity numerator.
+        spans = _string_spans(masked)
+        marker_starts = [
+            m.start() for m in marker.finditer(masked) if not _in_string(m.start(), spans)
+        ]
         result.markers_seen += len(marker_starts)
 
         decls = _class_decls(declscan)
@@ -238,9 +279,17 @@ def _discover_playwright(
 
 def render_discovery_summary(result: DiscoveryResult) -> str:
     """The parity/inventory block for the seeding summary (§5.1 — always written)."""
-    gap_note = " — **DISCOVERY GAP, investigate**" if result.parity_gap > 0 else ""
+    if result.parity_gap > 0:
+        gap_note = " — **DISCOVERY GAP, investigate**"
+    elif result.parity_gap < 0:
+        gap_note = " — **PARITY ANOMALY, investigate**"
+    else:
+        gap_note = ""
     fallback = (
         "; ".join(result.fallback_files) if result.fallback_files else "(none)"
+    )
+    duplicates = (
+        " — " + "; ".join(result.duplicate_keys) if result.duplicate_keys else ""
     )
     return "\n".join(
         [
@@ -250,6 +299,7 @@ def render_discovery_summary(result: DiscoveryResult) -> str:
             f"(Java tests discovered: {result.java_discovered}){gap_note}",
             f"- total tests discovered: {result.discovered}",
             f"- whole-file fallback files: {len(result.fallback_files)} — {fallback}",
+            f"- duplicate marker keys: {len(result.duplicate_keys)}{duplicates}",
         ]
     )
 
@@ -316,6 +366,41 @@ def _mask_comments(text: str) -> str:
         else:
             i += 1
     return "".join(out)
+
+
+def _string_spans(masked: str) -> list[tuple[int, int]]:
+    """``(start, end)`` spans of string/char literal CONTENTS in comment-masked
+    text, text blocks included — mirrors the ``_mask_strings`` walk without
+    copying, so a marker match can be tested for sitting inside a literal."""
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(masked)
+    while i < n:
+        char = masked[i]
+        if char == '"' and masked[i + 1 : i + 3] == '""':
+            close = _text_block_end(masked, i + 3)
+            content_end = close - 3 if masked[close - 3 : close] == '"""' else close
+            spans.append((i + 3, content_end))
+            i = close
+        elif char in ('"', "'"):
+            quote = char
+            start = i + 1
+            i += 1
+            while i < n:
+                if masked[i] == "\\":
+                    i += 2
+                    continue
+                if masked[i] == quote:
+                    break
+                i += 1
+            spans.append((start, min(i, n)))
+            i += 1
+        else:
+            i += 1
+    return spans
+
+
+def _in_string(at: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= at < end for start, end in spans)
 
 
 def _mask_strings(masked: str) -> str:

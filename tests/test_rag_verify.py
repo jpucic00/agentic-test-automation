@@ -161,6 +161,51 @@ class TestVerifyPlan:
         outcome = verify_plan(_plan(step), tools)
         assert outcome.verified == 1
 
+    def test_multi_home_auto_fix_rehomes_to_first_sorted_file_deterministically(
+        self, tmp_path: Path
+    ) -> None:
+        # When the fragment lives in SEVERAL files, the auto-fix must pick the first
+        # sorted inventory address — reproducibly, so a re-seed never churns provenance.
+        root = tmp_path / "corpus"
+        _write(root, "a/One.java", 'class One {\n  By X = By.id("dup-anchor");\n}\n')
+        _write(root, "b/Two.java", 'class Two {\n  By X = By.id("dup-anchor");\n}\n')
+        _write(root, "c/Three.java", "class Three {}\n")  # cited, but contains nothing
+
+        def run_once() -> tuple[str, list[str], int, int]:
+            step = ReconstructedStep(
+                action="click the duplicated anchor",
+                selector=_selector('By.id("dup-anchor")', "c/Three.java#X"),
+            )
+            outcome = verify_plan(_plan(step), RepoTools([root]))
+            assert step.selector is not None
+            return step.selector.provenance, outcome.auto_fixed, outcome.cited, outcome.verified
+
+        first = run_once()
+        assert first == run_once()  # identical output on a re-run
+        provenance, auto_fixed, cited, verified = first
+        assert provenance == "a/One.java"  # FIRST sorted inventory address wins
+        assert cited == 1 and verified == 1
+        assert len(auto_fixed) == 1 and "a/One.java" in auto_fixed[0]
+
+    @pytest.mark.parametrize("value", ["", "   "], ids=["empty", "whitespace"])
+    def test_empty_value_claim_is_counted_and_flagged_unverified(
+        self, corpus: Path, value: str
+    ) -> None:
+        # A blank locator value has no checkable fragment: it stays cited, ships
+        # verified=False, and joins the unverified list so it reaches the bounce round.
+        tools = RepoTools([corpus])
+        step = ReconstructedStep(
+            action="click nothing",
+            selector=_selector(value, "pages/LoginPage.java#EMAIL"),
+        )
+        outcome = verify_plan(_plan(step), tools)
+
+        assert outcome.cited == 1
+        assert outcome.verified == 0
+        assert len(outcome.unverified) == 1
+        assert step.selector is not None and not step.selector.verified
+        assert "step 1 selector" in build_revalidation_message(outcome.unverified)
+
     def test_text_cache_is_shared_across_calls(self, corpus: Path) -> None:
         tools = RepoTools([corpus])
         cache: dict[str, str] = {}

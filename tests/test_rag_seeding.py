@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from ai_test_gen.config import PROJECT_ROOT, Config
-from ai_test_gen.models import ManualStep
+from ai_test_gen.models import ManualStep, ManualTestCase
+from ai_test_gen.rag import seeding
 from ai_test_gen.rag.discover import DiscoveredTest
 from ai_test_gen.rag.distiller import DistillOutput
 from ai_test_gen.rag.mapper import CitedNote, LifecycleNote, MapDraft, SuiteNote
@@ -289,7 +290,8 @@ class TestReviewArtifacts:
     ):
         stats = _run(cfg, corpus, cases_dir=cases_dir)
         assert stats.review_dir is not None
-        good = (stats.review_dir / "tc-1-logintest-loginworks.md").read_text()
+        # filename carries a record_id[:8] suffix so same-named tests can't collide
+        good = next(stats.review_dir.glob("tc-1-logintest-loginworks-*.md")).read_text()
         assert "- Data: demo / pw" in good
         assert "- Expected: Notes list shown" in good
         assert "✓" in good
@@ -297,7 +299,7 @@ class TestReviewArtifacts:
         assert "files opened (1): suite/pages/LoginPage.java" in good
         assert "```java" in good
 
-        bad = (stats.review_dir / "tc-2-deletetest-deleteworks.md").read_text()
+        bad = next(stats.review_dir.glob("tc-2-deletetest-deleteworks-*.md")).read_text()
         assert "⚠" in bad and "UNVERIFIED" in bad
         assert "NOT LOADED" in bad  # the case miss is visible where it matters
         assert "1 claim(s) sent to one revalidation round" in bad
@@ -384,6 +386,98 @@ class TestFaultContainment:
         assert stats.distilled == 2  # …but the review loop ran in full
         assert stats.review_dir is not None
         assert (stats.review_dir / "summary.md").exists()
+
+    def test_crash_between_flushes_keeps_the_already_flushed_record(
+        self, cfg: Config, corpus: Path, monkeypatch
+    ):
+        # Incremental-flush money shot: an infra failure (here: the embed step dying on
+        # the SECOND flush) aborts the run LOUDLY, but everything flushed before it is
+        # already in the store — a crash mid-corpus never burns the model spend of the
+        # records that completed.
+        monkeypatch.setattr(seeding, "_FLUSH_EVERY", 1)
+        flushes = {"n": 0}
+
+        def exploding_embed(config: Config, texts) -> list[list[float]]:
+            batch = list(texts)
+            # With _FLUSH_EVERY=1 every flush batch has exactly one text; the map's
+            # core-knowledge batch (2 texts) passes through untouched.
+            if len(batch) == 1:
+                flushes["n"] += 1
+                if flushes["n"] == 2:
+                    raise RuntimeError("embedding gateway down")
+            return [VEC for _ in batch]
+
+        with pytest.raises(RuntimeError, match="embedding gateway down"):
+            asyncio.run(
+                run_seeding(
+                    cfg,
+                    project="TC",
+                    selenium_root=corpus,
+                    no_fetch=True,
+                    run_draft=StubMapper(),
+                    turns_factory=_factory(_default_outputs()),
+                    embed=exploding_embed,
+                )
+            )
+        assert flushes["n"] == 2  # the second flush died; no third was attempted
+        # Which test distilled first is scheduling-dependent (asyncio.as_completed), but
+        # exactly the one record flushed BEFORE the crash must already be in the store.
+        distilled_ids = {
+            make_record_id("TC", "selenium-import", "TC-1"),
+            make_record_id("TC", "selenium-import", "TC-2"),
+        }
+        assert len(distilled_ids & set(_records(cfg))) == 1
+
+
+class TestExplicitCaseKeys:
+    def test_fetch_by_keys_is_per_key_tolerant_and_never_sinks_the_run(
+        self, cfg: Config, corpus: Path, monkeypatch
+    ):
+        # --cases with issue KEYS (no directory) fetches each live; one key failing to
+        # fetch is a counted miss with its reason — the corpus distillation still runs
+        # for every discovered test. The Xray client is faked at its import site, so
+        # nothing touches a network.
+        fetched: list[str] = []
+
+        class FakeXrayClient:
+            def __init__(self, config: Config) -> None:
+                pass
+
+            def fetch(self, key: str) -> ManualTestCase:
+                fetched.append(key)
+                if key == "TC-2":
+                    raise RuntimeError("Xray said 404")
+                return ManualTestCase(
+                    key=key,
+                    title="Login works",
+                    steps=[
+                        ManualStep(action="Log in", data="demo / pw", expected="Notes shown")
+                    ],
+                )
+
+        monkeypatch.setattr("ai_test_gen.xray_client.XrayClient", FakeXrayClient)
+
+        def fake_embed(config: Config, texts) -> list[list[float]]:
+            return [VEC for _ in texts]
+
+        stats = asyncio.run(
+            run_seeding(
+                cfg,
+                project="TC",
+                selenium_root=corpus,
+                cases=["TC-1", "TC-2"],
+                run_draft=StubMapper(),
+                turns_factory=_factory(_default_outputs()),
+                embed=fake_embed,
+            )
+        )
+        assert fetched == ["TC-1", "TC-2"]
+        assert stats.cases_loaded == 1
+        assert "fetch failed" in stats.case_misses["TC-2"]
+        assert "Xray said 404" in stats.case_misses["TC-2"]
+        assert stats.distilled == 2  # the miss cost the case, never the record
+        by_id = _records(cfg)
+        assert by_id[make_record_id("TC", "selenium-import", "TC-1")].title == "Login works"
 
 
 class TestResumeForceLimit:

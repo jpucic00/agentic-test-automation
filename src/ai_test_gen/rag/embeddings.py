@@ -6,8 +6,9 @@ back in; optional private CA / mTLS via ``mtls.py``) — the same policy as the
 Xray/GitLab clients, because an env-configured proxy silently drops the gateway
 connection.
 
-The reranker is the fixed cross-encoder ``bge-reranker-v2-m3`` on ``/rerank``
-(``Config.rerank_endpoint`` overrides the location, never the choice). Response
+The reranker model comes from ``Config.reranker_model`` (default
+``zeroentropy/zerank-1-small``; ``bge-reranker-v2-m3`` is the measured A/B
+alternative) and ``Config.rerank_endpoint`` overrides only the location. Response
 parsing tolerates the three shapes seen on real gateways — Cohere-style
 ``results[]``, TEI-style ``data[]``, and a bare list — the logic proven live by
 ``scripts/step0b_verify_embeddings.py``.
@@ -128,11 +129,19 @@ def rerank(
             raise RagGatewayError(
                 f"/rerank result item lacks index/score: {_excerpt(item)}"
             )
-        if not 0 <= int(index) < len(documents):
+        try:
+            idx, val = int(index), float(score)
+        except (TypeError, ValueError):
+            # Shape errors surface as RagGatewayError (module contract), never
+            # as a bare ValueError from coercing a garbage gateway field.
+            raise RagGatewayError(
+                f"/rerank result item has a non-numeric index/score: {_excerpt(item)}"
+            ) from None
+        if not 0 <= idx < len(documents):
             raise RagGatewayError(
                 f"/rerank returned index {index} outside the {len(documents)} documents sent"
             )
-        scored.append((int(index), float(score)))
+        scored.append((idx, val))
     scored.sort(key=lambda pair: pair[1], reverse=True)
     return scored[:top_n]
 

@@ -40,7 +40,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, AgentRetries
 
 from ..agents._context import agent_output_retries, agent_retries
@@ -405,7 +405,15 @@ def _load_cache(path: Path) -> dict | None:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) and data.get("version") == _CACHE_VERSION else None
+    if not isinstance(data, dict) or data.get("version") != _CACHE_VERSION:
+        return None
+    try:
+        MapDraft.model_validate(data["draft"])
+    except (KeyError, ValidationError):
+        # A truncated or hand-edited cache is a cache miss, never an aborted
+        # seeding run — every consumer re-validates data["draft"] downstream.
+        return None
+    return data
 
 
 def _save_cache(

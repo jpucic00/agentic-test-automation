@@ -1,7 +1,7 @@
 """Smoke test for the Xray client — fetch one test case and print it as JSON.
 
 RUNTIME check (needs Jira/Xray access): run on the company laptop, not the
-private PC. Confirms steps and expected_results populate from the live tenant.
+private PC. Confirms steps (action/data/expected) populate from the live tenant.
 
     uv run python scripts/test_xray.py --issue-key QA-1234
     uv run python scripts/test_xray.py --issue-key QA-1234 --raw   # diagnose empty steps

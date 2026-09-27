@@ -65,6 +65,33 @@ class TestSandbox:
         tools = RepoTools([corpus])
         assert "looks binary" in tools.read_file("blob.bin")
 
+    def test_symlink_escape_is_rejected(self, corpus: Path, tmp_path: Path) -> None:
+        # A symlink INSIDE the root pointing OUTSIDE it resolves past the boundary —
+        # .resolve() follows it first, so the read is refused like any other escape.
+        (tmp_path / "outside.txt").write_text("TOP-SECRET")
+        (corpus / "leak.txt").symlink_to(tmp_path / "outside.txt")
+        tools = RepoTools([corpus])
+        out = tools.read_file("leak.txt")
+        assert "no such file" in out
+        assert "TOP-SECRET" not in out
+        assert tools.files_opened == set()
+
+    def test_nul_byte_path_is_a_not_found_reply_not_an_exception(self, corpus: Path) -> None:
+        # A garbage model-supplied path (embedded NUL makes .resolve() raise) must yield
+        # the normal not-found tool reply, never an exception up the agent run.
+        tools = RepoTools([corpus])
+        out = tools.read_file("a\x00b.java")
+        assert "no such file" in out
+        assert tools.files_opened == set()
+
+    def test_read_file_is_capped_with_a_truncation_marker(self, corpus: Path) -> None:
+        line = "// filler " + "x" * 54 + "\n"  # 65 chars
+        _write(corpus, "big/Big.java", line * 300)  # ~19.5k chars, past the 16k cap
+        tools = RepoTools([corpus])
+        out = tools.read_file("big/Big.java")
+        assert out.endswith("[truncated — narrow the range with start/end]")
+        assert len(out) < 16_200  # header + capped text + marker, nothing more
+
 
 class TestSearch:
     def test_search_finds_matches_with_locations(self, corpus: Path) -> None:
@@ -92,6 +119,16 @@ class TestSearch:
     def test_ignored_dirs_are_not_searched(self, corpus: Path) -> None:
         tools = RepoTools([corpus])
         assert "no matches" in tools.search("should be ignored")
+
+    def test_search_caps_matches_and_reports_total_vs_shown(self, corpus: Path) -> None:
+        # Recon must inform the model, never bury it: past the cap the header still
+        # carries the honest total so the model knows to narrow the pattern.
+        _write(corpus, "many/Many.java", "\n".join(f"needle line {i}" for i in range(70)) + "\n")
+        tools = RepoTools([corpus])
+        out = tools.search("needle")
+        lines = out.splitlines()
+        assert lines[0] == "# 70 match(es) for 'needle' (showing first 60)"
+        assert len(lines) == 61  # the header + exactly 60 match lines
 
 
 class TestListingAndInventory:

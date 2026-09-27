@@ -136,7 +136,12 @@ class RepoTools:
                     rel = raw[len(label) + 1 :]
                 else:
                     continue
-            candidate = (root / rel).resolve()
+            try:
+                candidate = (root / rel).resolve()
+            except (ValueError, OSError):
+                # A garbage model-supplied path (embedded NUL, …) must yield the
+                # normal not-found tool reply, never an exception up the agent run.
+                continue
             if candidate == root or candidate.is_relative_to(root):
                 return candidate
         return None

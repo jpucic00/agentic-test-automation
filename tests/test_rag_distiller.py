@@ -8,6 +8,7 @@ pinned with injected structured-call fakes: file request → code reads → dist
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from pathlib import Path
 
@@ -17,6 +18,9 @@ from ai_test_gen.config import Config
 from ai_test_gen.models import ManualStep, ManualTestCase
 from ai_test_gen.rag.discover import DiscoveredTest
 from ai_test_gen.rag.distiller import (
+    _TWO_CALL_MAX_FILES,
+    PROMPTS_DIR,
+    AgenticTurns,
     DistillDraft,
     DistillOutput,
     DraftPlan,
@@ -25,6 +29,7 @@ from ai_test_gen.rag.distiller import (
     FileRequestList,
     TwoCallTurns,
     build_distill_message,
+    build_turns,
     distill_test,
     draft_to_output,
     render_manual_triplets,
@@ -274,6 +279,34 @@ class TestDraftSchema:
         assert "kept the first" in output.plan.notes  # not silently dropped
 
 
+class TestBuildTurns:
+    def test_mode_dispatches_agentic_default_and_two_call(
+        self, cfg: Config, corpus: Path
+    ) -> None:
+        # Both constructors are offline-safe: they build the model/agent objects but
+        # never contact a gateway, so the dispatch itself is pinnable hermetically.
+        tools = RepoTools([corpus])
+        assert isinstance(build_turns(cfg, tools), AgenticTurns)  # default mode
+        two_call = dataclasses.replace(cfg, distiller_mode="two-call")
+        assert isinstance(build_turns(two_call, tools), TwoCallTurns)
+
+
+class TestDistillerPrompt:
+    def test_prompt_demands_verbatim_selectors_and_mandatory_citations(self) -> None:
+        # Prompt-contract pin (same style as tests/test_agents.py): the Distiller must
+        # copy locators verbatim, cite provenance for every claim, and prefer an honest
+        # selector-less step over a guess — a reworded prompt that drops these would
+        # silently unravel the string-verification loop.
+        prompt = (PROMPTS_DIR / "distiller.md").read_text()
+        assert "Selectors: copy, never invent." in prompt
+        assert "is the locator EXACTLY as the source" in prompt  # wraps after "source"
+        assert "carries `provenance` = `path#symbol`" in prompt
+        assert "WITHOUT a selector rather than guessing" in prompt
+        # The model-facing schema carries the same demand where the model reads it.
+        provenance = DraftSelector.model_fields["provenance"].description
+        assert provenance is not None and "a citation is mandatory" in provenance
+
+
 class TestTwoCallMode:
     def test_request_read_distill_and_revalidate(self, cfg: Config, corpus: Path) -> None:
         distill_messages: list[str] = []
@@ -297,3 +330,53 @@ class TestTwoCallMode:
         asyncio.run(turns.revalidate("these failed"))
         assert "these failed" in distill_messages[1]
         assert 'By.id("login-email")' in distill_messages[1]  # same sources re-supplied
+
+    def test_budgets_cap_requested_files_and_total_chars(
+        self, cfg: Config, tmp_path: Path
+    ) -> None:
+        # Degraded-mode caps: call 2 carries at most _TWO_CALL_MAX_FILES file blocks no
+        # matter how many paths call 1 requested, and stops with an explicit omission
+        # marker once the combined text would exceed the char budget — a greedy request
+        # list must never flood the distill message.
+        root = tmp_path / "big-corpus"
+        for i in range(14):
+            _write(root, f"files/f{i:02d}.java", f"// CONTENT_{i:02d}\n")
+        for i in range(4):
+            _write(root, f"big/b{i}.java", f"// BIG_{i}\n" + "x" * 15_890)
+
+        async def distill(message: str) -> DistillOutput:
+            messages.append(message)
+            return _output()
+
+        # 14 requested paths → only the first _TWO_CALL_MAX_FILES (12) are read.
+        many = [f"files/f{i:02d}.java" for i in range(14)]
+
+        async def request_many(message: str) -> FileRequestList:
+            assert f"at most {_TWO_CALL_MAX_FILES}" in message  # the model is told the cap
+            return FileRequestList(paths=many)
+
+        messages: list[str] = []
+        turns = TwoCallTurns(
+            cfg, RepoTools([root]), run_request=request_many, run_distill=distill
+        )
+        asyncio.run(turns.first("distill this"))
+        message = messages[0]
+        assert message.count("# files/") == _TWO_CALL_MAX_FILES
+        assert "CONTENT_11" in message  # the 12th requested file made it in …
+        assert "CONTENT_12" not in message and "CONTENT_13" not in message  # … 13/14 didn't
+        assert "file budget reached" not in message  # small files never trip the char cap
+
+        # Four ~16K files → the char budget trips mid-list: the survivor blocks stay,
+        # the file that would overflow is named in the omission marker, nothing after.
+        async def request_big(message: str) -> FileRequestList:
+            return FileRequestList(paths=[f"big/b{i}.java" for i in range(4)])
+
+        messages = []
+        turns = TwoCallTurns(
+            cfg, RepoTools([root]), run_request=request_big, run_distill=distill
+        )
+        asyncio.run(turns.first("distill this"))
+        message = messages[0]
+        assert "BIG_0" in message and "BIG_1" in message and "BIG_2" in message
+        assert "BIG_3" not in message
+        assert "…[big/b3.java: omitted — file budget reached]" in message

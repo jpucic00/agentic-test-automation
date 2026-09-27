@@ -621,7 +621,9 @@ Unverified survivors (flagged, kept):
 {record.source_code}
 ```
 """
-    name = _slug(f"{record.xray_key or test.symbol}-{test.symbol}") + ".md"
+    # record_id suffix: two modules with the same class+method (or a duplicated
+    # key) must not overwrite each other's review file.
+    name = _slug(f"{record.xray_key or test.symbol}-{test.symbol}-{record.record_id[:8]}") + ".md"
     (review_dir / name).write_text(body)
 
 

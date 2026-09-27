@@ -150,6 +150,16 @@ class TestRerankErrors:
         with pytest.raises(RagGatewayError, match="outside"):
             _rerank_with_body(cfg, {"results": [{"index": 9, "score": 0.5}]})
 
+    def test_non_numeric_index_raises_gateway_error(self, cfg) -> None:
+        # Coercing a garbage gateway field must surface as the module's error
+        # type — pytest.raises here would reject a bare ValueError escaping.
+        with pytest.raises(RagGatewayError, match="non-numeric"):
+            _rerank_with_body(cfg, {"results": [{"index": "x", "score": 0.5}]})
+
+    def test_non_numeric_score_raises_gateway_error(self, cfg) -> None:
+        with pytest.raises(RagGatewayError, match="non-numeric"):
+            _rerank_with_body(cfg, {"results": [{"index": 0, "score": "n/a"}]})
+
 
 # --- error hygiene + client policy ---------------------------------------------
 

@@ -39,6 +39,44 @@ def test_build_openai_model_offline(monkeypatch):
     assert isinstance(model, OpenAIChatModel)
 
 
+def test_build_openai_model_endpoint_override_and_shared_default(monkeypatch):
+    # base_url/api_key override the shared gateway for ONE agent (the Planner's
+    # PLANNER_LLM_* path); omitted → cfg.llm_base_url/llm_api_key, so every other
+    # caller is unchanged. Introspected via the provider's OpenAI client — no network.
+    for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = SimpleNamespace(llm_base_url="https://gateway.internal/v1", llm_api_key="shared-key")
+
+    shared = build_openai_model(cast(Config, cfg), "m")
+    assert str(shared.client.base_url).rstrip("/") == "https://gateway.internal/v1"
+    assert shared.client.api_key == "shared-key"
+
+    overridden = build_openai_model(
+        cast(Config, cfg), "m", base_url="https://planner.host/v1", api_key="planner-key"
+    )
+    assert str(overridden.client.base_url).rstrip("/") == "https://planner.host/v1"
+    assert overridden.client.api_key == "planner-key"
+
+
+def test_build_openai_model_timeout_bounds_requests_or_keeps_library_default(monkeypatch):
+    # timeout_s=240 must reach the underlying httpx client as read=240 with the connect
+    # phase capped at 30s; omitted, the client library's own default stands untouched
+    # (the browser agents' long turns rely on it).
+    for var in ("USE_HTTP_PROXY", "SSL_CERT_FILE", "MTLS_PKCS12_FILE", "MTLS_CERT_FILE"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = SimpleNamespace(llm_base_url="https://gateway.internal/v1", llm_api_key="k")
+
+    bounded = build_openai_model(cast(Config, cfg), "m", timeout_s=240)
+    timeout = bounded.client.timeout
+    assert timeout.read == 240
+    assert timeout.connect == 30.0
+
+    from openai import DefaultAsyncHttpxClient
+
+    unbounded = build_openai_model(cast(Config, cfg), "m")
+    assert unbounded.client.timeout == DefaultAsyncHttpxClient().timeout
+
+
 # --- reasoning-effort support verdict (consumed by scripts/step0d_*) ---------------
 
 
