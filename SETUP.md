@@ -271,7 +271,8 @@ cd packages/demo-notes-app && npm install && npm run dev
 #      STAGING_BASE_URL=http://localhost:3000
 #      GITLAB_ENABLED=false
 
-# 3. Generate a test for a bundled case (NOTE-1 .. NOTE-4):
+# 3. Generate a test for a bundled case (NOTE-1 .. NOTE-6). NOTE-6 follows the navbar's
+#    external Wikipedia link, so it also needs STAGING_EXTRA_URLS=https://en.wikipedia.org:
 uv run python scripts/run_one.py NOTE-2 --verbose
 ```
 

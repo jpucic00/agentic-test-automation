@@ -29,6 +29,11 @@ export default function NavBar() {
         Demo Notes
       </Link>
       <div className="nav-links">
+        {/* External link (same tab) to a third-party host — exercises the pipeline's
+            navigation allow-list (STAGING_EXTRA_URLS). */}
+        <a id="nav-about-notes" href="https://en.wikipedia.org/wiki/Note-taking">
+          About note-taking
+        </a>
         {user ? (
           <>
             <span className="user-menu">{user}</span>

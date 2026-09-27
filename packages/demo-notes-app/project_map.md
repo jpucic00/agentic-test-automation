@@ -16,6 +16,7 @@ id > accessible > CSS > XPath). This map describes routes, flows, and quirks onl
 | Brand "Demo Notes"         | `/` (which redirects to `/login`)       | everyone   |
 | Login                      | `/login`                                | logged-out |
 | Register                   | `/register`                             | logged-out |
+| About note-taking          | the Wikipedia "Note-taking" article (external, same tab) | everyone |
 | Logged-in email            | shows the current user's email          | logged-in  |
 | Log out                    | clears the session, returns to `/login` | logged-in  |
 
@@ -33,6 +34,11 @@ id > accessible > CSS > XPath). This map describes routes, flows, and quirks onl
   `/notes`.
 - Failure: an error appears (passwords do not match, or the email already exists). Use a unique
   email per run.
+
+## External hosts
+- `https://en.wikipedia.org` — the "About note-taking" navbar link opens the Wikipedia article
+  "Note-taking" in the same tab. It is a third-party site, not part of the app: it is reachable only
+  when listed in `STAGING_EXTRA_URLS`.
 
 ## Routes & access by role
 | Route       | Purpose                       | Auth                                     |

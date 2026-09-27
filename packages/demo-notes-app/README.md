@@ -91,6 +91,14 @@ uv run python scripts/run_one.py NOTE-2 --verbose
 The test cases live in [`test-cases/`](test-cases/) as raw-Xray-shaped JSON — see
 [`project_context.md`](project_context.md) for conventions.
 
+NOTE-6 clicks the navbar's "About note-taking" link, which leaves the app for
+`https://en.wikipedia.org`. The pipeline only lets agents and tests reach hosts on its allow-list,
+so run it with `STAGING_EXTRA_URLS=https://en.wikipedia.org`; without it, the navigation is
+refused and the run reports that instead.
+
+To run one spec against several environments, list them in `STAGING_BASE_URL`, e.g.
+`STAGING_BASE_URL=http://localhost:3000,http://127.0.0.1:3000` (the same app on two origins).
+
 ## Legacy suite (KB-seeding demo corpus)
 
 [`legacy-suite/`](legacy-suite/) is a miniature "existing test repository" for trying the

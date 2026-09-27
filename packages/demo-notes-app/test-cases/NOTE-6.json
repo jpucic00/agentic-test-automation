@@ -1,0 +1,24 @@
+{
+  "key": "NOTE-6",
+  "fields": {
+    "summary": "Open the note-taking article from the navbar",
+    "description": "The navbar's About note-taking link takes the user to the Wikipedia article about note-taking.",
+    "labels": ["navigation", "external"]
+  },
+  "steps": [
+    {
+      "id": 60001,
+      "index": 1,
+      "step": { "raw": "Open the app.", "rendered": "<p>Open the app.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The login page is shown with the navbar at the top.", "rendered": "<p>The login page is shown with the navbar at the top.</p>" }
+    },
+    {
+      "id": 60002,
+      "index": 2,
+      "step": { "raw": "Click the About note-taking link in the navbar.", "rendered": "<p>Click the About note-taking link in the navbar.</p>" },
+      "data": { "raw": "", "rendered": "" },
+      "result": { "raw": "The Wikipedia article titled Note-taking is displayed.", "rendered": "<p>The Wikipedia article titled Note-taking is displayed.</p>" }
+    }
+  ]
+}
