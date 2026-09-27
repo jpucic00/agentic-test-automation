@@ -81,6 +81,7 @@ class GitLabClient:
         heal_summaries: list[str] | None = None,
         heal_attempts: int = 0,
         final_status: str | None = None,
+        heal_verdict: str | None = None,
         trace_path: str | None = None,
         environment_results: list[EnvironmentRunResult] | None = None,
     ) -> str:
@@ -97,6 +98,9 @@ class GitLabClient:
         ``plan_json`` is the serialized plan to commit (the orchestrator passes the
         context-hash-enriched JSON so the committed copy matches the local one); falls
         back to ``plan.model_dump_json`` when omitted.
+
+        ``heal_verdict`` is the orchestrator's one-line reason healing stopped without a pass
+        (the Healer found no fix, or the run errored and was not healed); rendered prominently.
 
         ``environment_results`` (multi-environment runs only) is rendered as a per-environment
         outcome list in the description; empty/``None`` leaves the description unchanged.
@@ -129,6 +133,7 @@ class GitLabClient:
                         heal_summaries=heal_summaries,
                         heal_attempts=heal_attempts,
                         final_status=final_status,
+                        heal_verdict=heal_verdict,
                         trace_path=trace_path,
                         environment_results=environment_results,
                     ),
@@ -217,6 +222,7 @@ def _build_mr_description(
     heal_summaries: list[str] | None,
     heal_attempts: int,
     final_status: str | None,
+    heal_verdict: str | None = None,
     trace_path: str | None = None,
     environment_results: list[EnvironmentRunResult] | None = None,
 ) -> str:
@@ -240,16 +246,19 @@ def _build_mr_description(
             + "\n"
         )
 
+    verdict_line = f"\n**Heal verdict:** {heal_verdict}" if heal_verdict else ""
+
     # The trace is a local artifact on the machine that ran the pipeline (not committed);
     # pointing at it saves the reviewer of a red MR from re-running to get a trace.
     trace_line = ""
     if trace_path:
         trace_line = f"\n**Playwright trace (local artifact on the runner):** `{trace_path}`"
+    details = verdict_line + trace_line
 
     return f"""## AI-Generated Playwright Test
 
 **Source Jira ticket:** `{key}`
-**Final run status:** `{final_status or "unknown"}` · **Heal attempts:** {heal_attempts}{trace_line}
+**Final run status:** `{final_status or "unknown"}` · **Heal attempts:** {heal_attempts}{details}
 
 ### What this test does
 {test.description}

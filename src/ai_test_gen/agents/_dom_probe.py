@@ -233,7 +233,7 @@ def _result_text(result: Any) -> str:
     if isinstance(result, list):
         texts = []
         for item in result:
-            text = getattr(item, "text", None)
+            text = item if isinstance(item, str) else getattr(item, "text", None)
             if text is None and isinstance(item, dict):
                 text = item.get("text")
             if text:

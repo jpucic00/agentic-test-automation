@@ -206,3 +206,8 @@ def test_probe_tool_docstring_demands_verification(cfg):
     assert "UNVERIFIED" in doc
     assert "browser_verify_element_visible" not in doc
     assert "RAW" in doc
+
+
+def test_result_text_keeps_plain_string_items_in_a_list():
+    # pydantic-ai returns a list of plain strings when a tool result has several text items.
+    assert dom_probe_mod._result_text(["### Result", '"[]"']) == '### Result\n"[]"'

@@ -42,6 +42,7 @@ from ._run_failure import run_agent_logged
 from ._vision_aid import (  # noqa: F401
     _DEFAULT_STALE_AFTER_S,
     SCREENSHOT_TOOL,
+    VisionStats,
     _latest_png,
     _make_screenshot_capture,
     _stale_after_s,
@@ -75,8 +76,15 @@ __all__ = [
 ]
 
 
-def build_planner(config: Config, storage_state: Path | None = None) -> Agent[None, TestPlan]:
-    """Build the Planner agent (Playwright MCP toolset attached, output_type=TestPlan)."""
+def build_planner(
+    config: Config,
+    storage_state: Path | None = None,
+    vision_stats: VisionStats | None = None,
+) -> Agent[None, TestPlan]:
+    """Build the Planner agent (Playwright MCP toolset attached, output_type=TestPlan).
+
+    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary.
+    """
     # Planner may run on a separate endpoint (config.planner_base_url/api_key); when the
     # PLANNER_LLM_* overrides are unset these equal the shared gateway, so nothing changes.
     model = build_openai_model(
@@ -133,7 +141,13 @@ def build_planner(config: Config, storage_state: Path | None = None) -> Agent[No
     # so a disabled run's toolset — and behaviour — is identical to before. The capture handle
     # drives browser_take_screenshot on this same live MCP so inspect_screen sees the current page.
     if config.vision_max_calls > 0:
-        _register_inspect_screen(agent, config, capture=_make_screenshot_capture(mcp))
+        _register_inspect_screen(
+            agent,
+            config,
+            capture=_make_screenshot_capture(mcp),
+            on_spent=guard.disable_vision,
+            stats=vision_stats,
+        )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
     if config.dom_probe_max_calls > 0:
@@ -148,9 +162,13 @@ async def plan_test_case(
     config: Config,
     test_case: ManualTestCase,
     storage_state: Path | None = None,
+    vision_stats: VisionStats | None = None,
 ) -> TestPlan:
-    """Run the Planner on a single test case and return its TestPlan."""
-    agent = build_planner(config, storage_state=storage_state)
+    """Run the Planner on a single test case and return its TestPlan.
+
+    ``vision_stats`` (optional) collects the Vision Aid's check counts for the run summary.
+    """
+    agent = build_planner(config, storage_state=storage_state, vision_stats=vision_stats)
 
     # Extra allowed hosts (STAGING_EXTRA_URLS — SSO, mail-catcher) are named only when
     # configured, so a default run's message is unchanged; navigation anywhere else is refused.

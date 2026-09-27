@@ -42,6 +42,26 @@ def _healed():
     )
 
 
+def _healer():
+    """Healer double whose every completed heal CHANGES the code: "// healed", "// healed 2", …
+
+    (A heal that returns its input unchanged stops the loop, so multi-attempt tests need this.)
+    """
+    calls = 0
+
+    def heal(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        suffix = "" if calls == 1 else f" {calls}"
+        return models.HealedTest(
+            file_name="QA-1-login.spec.ts",
+            code=f"// healed{suffix}",
+            changes_summary="fixed selector",
+        )
+
+    return AsyncMock(side_effect=heal)
+
+
 def _result(status, did_run=True):
     return models.TestRunResult(status=status, did_run=did_run, stdout="", stderr="")
 
@@ -58,7 +78,7 @@ def _wire(monkeypatch, cfg, run_results):
     monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=_plan()))
     monkeypatch.setattr(orchestrator, "generate_test", AsyncMock(return_value=_generated()))
     monkeypatch.setattr(orchestrator, "run_test", AsyncMock(side_effect=list(run_results)))
-    monkeypatch.setattr(orchestrator, "heal_test", AsyncMock(return_value=_healed()))
+    monkeypatch.setattr(orchestrator, "heal_test", _healer())
 
     gl = MagicMock()
     gl.open_mr.return_value = "https://gitlab/mr/1"
@@ -151,8 +171,11 @@ def test_nonconsecutive_heal_crashes_do_not_stop_healing(cfg, monkeypatch):
     # crash, heal, crash, heal: the abort counter resets on every completed attempt, so
     # scattered crashes never trip the consecutive-abort cap.
     _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("passed")])
+    healed_again = models.HealedTest(
+        file_name="QA-1-login.spec.ts", code="// healed 2", changes_summary="fixed again"
+    )
     heal = AsyncMock(
-        side_effect=[RuntimeError("boom 1"), _healed(), RuntimeError("boom 2"), _healed()]
+        side_effect=[RuntimeError("boom 1"), _healed(), RuntimeError("boom 2"), healed_again]
     )
     monkeypatch.setattr(orchestrator, "heal_test", heal)
     out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=6))
@@ -211,7 +234,7 @@ def test_two_round_heal_accumulates_summaries(cfg, monkeypatch):
     out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
     assert out["heal_attempts"] == 2
     assert out["status"] == "passed"
-    # _healed() returns the same summary each call -> one entry per heal attempt.
+    # The healer double returns the same summary each call -> one entry per heal attempt.
     assert gl.open_mr.call_args.kwargs["heal_summaries"] == ["fixed selector", "fixed selector"]
 
 
@@ -491,26 +514,70 @@ def test_xray_source_uses_xray_client_not_local_loader(cfg, monkeypatch):
     loader.assert_not_called()
 
 
-def _failed(error_message, failed_test="QA-1: login"):
+def _failed(error_message, failed_test="QA-1: login", error_line=None):
     return models.TestRunResult(
-        status="failed", stdout="", stderr="", failed_test=failed_test, error_message=error_message
+        status="failed", stdout="", stderr="", failed_test=failed_test,
+        error_message=error_message, error_line=error_line,
     )
 
 
+_NOT_FOUND = (
+    "Error: Save visible before click\n\nexpect(locator).toBeVisible() failed\n\n"
+    "Locator: {loc}\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n"
+)
+_DISABLED = (
+    "Error: expect(locator).toBeDisabled() failed\n\nLocator:  getByTestId('save')\n"
+    "Expected: disabled\nReceived: enabled\nTimeout:  5000ms\n"
+)
+_STEPPED_SPEC = """test('QA-1: login', async ({ page }) => {
+  await test.step('Open the login page', async () => {
+    await page.goto('/');
+  });
+  await test.step('Click "Save"', async () => {
+    await expect(page.getByTestId('save'), 'Save visible before click').toBeVisible();
+    await page.getByTestId('save').click();
+  });
+  await test.step('Verify the note is listed', async () => {
+    await expect(page.getByTestId('note')).toBeVisible();
+  });
+});"""
+
+
 def test_failure_signature_is_selector_agnostic():
-    # Two timeouts on the SAME test but DIFFERENT selectors are the same recurring failure —
-    # this is what makes a heal that swapped the selector (and still timed out) trigger escalation.
-    a = _failed("locator.click: Timeout 30000ms exceeded waiting for getByTestId('x')")
-    b = _failed("locator.click: Timeout 5000ms exceeded waiting for locator('xpath=//y')")
+    # Two locator failures on the SAME test but DIFFERENT selectors are the same recurring
+    # failure — this is what makes a heal that swapped the selector (and still failed) escalate.
+    a = _failed(
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByTestId('x')"
+    )
+    b = _failed(_NOT_FOUND.format(loc="locator('xpath=//y')"))
     assert orchestrator._failure_signature(a) == orchestrator._failure_signature(b)
 
 
-def test_failure_signature_differs_by_category_and_test():
-    timeout = _failed("Timeout exceeded")
-    strict = _failed("strict mode violation: resolved 2 elements")
-    other_test = _failed("Timeout exceeded", failed_test="QA-1: logout")
-    assert orchestrator._failure_signature(timeout) != orchestrator._failure_signature(strict)
-    assert orchestrator._failure_signature(timeout) != orchestrator._failure_signature(other_test)
+def test_failure_signature_differs_by_kind_and_test():
+    locator = _failed(_NOT_FOUND.format(loc="getByTestId('save')"))
+    assertion = _failed(_DISABLED)
+    other_test = _failed(_NOT_FOUND.format(loc="getByTestId('save')"), failed_test="QA-1: logout")
+    sig = orchestrator._failure_signature
+    assert sig(locator) != sig(assertion)
+    assert sig(locator) != sig(other_test)
+
+
+def test_failure_signature_keys_on_the_enclosing_step_not_the_line():
+    sig = orchestrator._failure_signature
+    in_save = _failed(_NOT_FOUND.format(loc="getByTestId('save')"), error_line=6)
+    # A heal that inserts a line above shifts the line number but not the step: still a repeat.
+    shifted_code = _STEPPED_SPEC.replace("await page.goto('/');", "await page.goto('/');\n    //")
+    in_save_shifted = _failed(_NOT_FOUND.format(loc="getByTestId('save2')"), error_line=7)
+    assert sig(in_save, _STEPPED_SPEC) == sig(in_save_shifted, shifted_code)
+    # The failure moved on to a LATER step: not a repeat.
+    in_verify = _failed(_NOT_FOUND.format(loc="getByTestId('note')"), error_line=10)
+    assert sig(in_save, _STEPPED_SPEC) != sig(in_verify, _STEPPED_SPEC)
+
+
+def test_failing_step_finds_the_enclosing_step_title():
+    assert orchestrator._failing_step(_STEPPED_SPEC, 6) == 'click "save"'
+    assert orchestrator._failing_step(_STEPPED_SPEC, 1) == ""  # before any step
+    assert orchestrator._failing_step(_STEPPED_SPEC, None) == ""
 
 
 def test_consecutive_repeats_counts_trailing_matches():
@@ -521,18 +588,122 @@ def test_consecutive_repeats_counts_trailing_matches():
     assert orchestrator._consecutive_repeats(["b", "a"], "a") == 1
 
 
-def test_recurring_failure_escalates_locator_kind(cfg, monkeypatch):
-    # A failure that recurs the SAME way across attempts must raise the Healer's
-    # locator_escalation: 0 on the first sighting, then 1, 2 as it persists.
+def test_recurring_failure_raises_the_repeat_count(cfg, monkeypatch):
+    # A failure that recurs the SAME way across completed heals raises failure_repeats:
+    # 0 on the first sighting, then 1, 2 as it persists.
     _wire(
         monkeypatch, cfg,
         [_result("failed"), _result("failed"), _result("failed"), _result("failed")],
     )
-    heal = AsyncMock(return_value=_healed())
+    heal = _healer()
     monkeypatch.setattr(orchestrator, "heal_test", heal)
     asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
-    escalations = [c.kwargs["locator_escalation"] for c in heal.call_args_list]
-    assert escalations == [0, 1, 2]
+    assert [c.kwargs["failure_repeats"] for c in heal.call_args_list] == [0, 1, 2]
+
+
+def test_failure_that_moved_to_a_later_step_is_not_a_repeat(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [])
+    stepped = models.GeneratedTest(
+        file_name="QA-1-login.spec.ts", code=_STEPPED_SPEC, description="x"
+    )
+    monkeypatch.setattr(orchestrator, "generate_test", AsyncMock(return_value=stepped))
+    run = AsyncMock(side_effect=[
+        _failed(_NOT_FOUND.format(loc="getByTestId('save')"), error_line=6),
+        _failed(_NOT_FOUND.format(loc="getByTestId('note')"), error_line=10),
+        _result("passed"),
+    ])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    heal = AsyncMock(side_effect=[
+        models.HealedTest(file_name="x", code=_STEPPED_SPEC + "\n// fix 1", changes_summary="a"),
+        models.HealedTest(file_name="x", code=_STEPPED_SPEC + "\n// fix 2", changes_summary="b"),
+    ])
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    assert out["status"] == "passed"
+    assert [c.kwargs["failure_repeats"] for c in heal.call_args_list] == [0, 0]
+
+
+def test_crashed_attempt_neither_escalates_nor_enters_heal_history(cfg, monkeypatch):
+    # Attempt 1 crashes: no fix was tried, so attempt 2 must NOT be told the failure persisted,
+    # and the crash note must stay out of the "code already contains these changes" history.
+    # Attempt 3 follows a COMPLETED heal that didn't fix it — that one is a real repeat.
+    gl = _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("failed")])
+    heal = AsyncMock(side_effect=[
+        RuntimeError("gateway 502"),
+        _healed(),
+        models.HealedTest(file_name="x", code="// healed 2", changes_summary="escalated"),
+    ])
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    assert out["heal_attempts"] == 3
+    calls = heal.call_args_list
+    assert [c.kwargs["failure_repeats"] for c in calls] == [0, 0, 1]
+    assert calls[1].kwargs["heal_history"] == []
+    assert calls[2].kwargs["heal_history"] == ["fixed selector"]
+    # The reviewer still sees the crash in the MR.
+    summaries = gl.open_mr.call_args.kwargs["heal_summaries"]
+    assert "aborted" in summaries[0] and "gateway 502" in summaries[0]
+
+
+def test_unchanged_heal_stops_the_loop_with_a_verdict(cfg, monkeypatch):
+    # The Healer returns its input unchanged (modulo trailing whitespace / CRLF) = "no fix: app bug
+    # or spec divergence". Re-running identical code is pointless: stop, write no attempt file,
+    # add no MR revision, and surface the verdict + the Healer's explanation.
+    gl = _wire(monkeypatch, cfg, [])
+    run = AsyncMock(side_effect=[_failed(_DISABLED)])
+    monkeypatch.setattr(orchestrator, "run_test", run)
+    heal = AsyncMock(return_value=models.HealedTest(
+        file_name="QA-1-login.spec.ts",
+        code="// spec  \r\n\n",
+        changes_summary="Save stays enabled for an empty title; the case expects it disabled.",
+    ))
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    assert heal.call_count == 1
+    assert run.call_count == 1  # no re-run, so no healer-attempt-1 file either
+    assert out["status"] == "failed"
+    assert out["heal_attempts"] == 1
+    assert out["heal_verdict"].startswith(orchestrator.NO_FIX_VERDICT)
+    assert "stays enabled" in out["heal_verdict"]
+    kwargs = gl.open_mr.call_args.kwargs
+    assert [r.message.splitlines()[0] for r in kwargs["revisions"]] == [
+        "[AI] QA-1: initial generated test"
+    ]
+    assert kwargs["heal_verdict"] == out["heal_verdict"]
+    assert kwargs["final_status"] == "failed"
+
+
+def test_error_status_is_never_healed(cfg, monkeypatch):
+    # status "error" = the run itself broke (whole-run timeout, Playwright failed to launch):
+    # nothing the Healer can fix. No heal call; the MR still opens and carries the error.
+    timed_out = models.TestRunResult(
+        status="error", stdout="", stderr="", error_message="Playwright run timed out after 300s"
+    )
+    gl = _wire(monkeypatch, cfg, [timed_out])
+    heal = AsyncMock(return_value=_healed())
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    heal.assert_not_called()
+    assert out["status"] == "error"
+    assert out["heal_attempts"] == 0
+    assert "timed out after 300s" in out["heal_verdict"]
+    gl.open_mr.assert_called_once()
+    kwargs = gl.open_mr.call_args.kwargs
+    assert kwargs["final_status"] == "error"
+    assert "timed out after 300s" in kwargs["heal_verdict"]
+
+
+def test_error_on_a_rerun_stops_healing(cfg, monkeypatch):
+    crashed = models.TestRunResult(
+        status="error", stdout="", stderr="", error_message="Could not launch Playwright: npx"
+    )
+    gl = _wire(monkeypatch, cfg, [_result("failed"), crashed])
+    heal = _healer()
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=3))
+    assert heal.call_count == 1
+    assert out["status"] == "error"
+    gl.open_mr.assert_called_once()
 
 
 # --- multi-environment runs + blocked runs -------------------------------------------
@@ -615,6 +786,7 @@ def test_blocked_run_is_not_healed(cfg, monkeypatch):
     assert gen.await_count == 1  # no compile-retry regeneration either
     assert out["status"] == "error"
     assert out["heal_attempts"] == 0
+    assert "navigation allow-list" in out["heal_verdict"]
     gl.open_mr.assert_called_once()  # still surfaced to a human
 
 
@@ -624,3 +796,45 @@ def test_runs_pass_the_plan_for_the_preflight_check(cfg, monkeypatch):
     monkeypatch.setattr(orchestrator, "run_test", run)
     asyncio.run(orchestrator.process_test_case("QA-1"))
     assert run.call_args.kwargs["plan"] == _plan()
+
+
+# --- Vision Aid line in the run summary ----------------------------------------
+
+
+def test_summary_has_no_vision_line_when_vision_is_off(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [_result("passed")])
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert "vision" not in out
+
+
+def test_summary_reports_vision_gaps_per_agent(cfg, monkeypatch, caplog):
+    vcfg = dataclasses.replace(cfg, vision_max_calls=3)
+    _wire(monkeypatch, vcfg, [_result("failed"), _result("failed"), _result("passed")])
+
+    async def plan(config, test_case, *, vision_stats):
+        vision_stats.checks, vision_stats.no_screenshot = 3, 3  # every check lacked a screenshot
+        return _plan()
+
+    heals = _healer()
+
+    async def heal(*args, vision_stats, **kwargs):
+        vision_stats.checks += 1  # pooled across heal attempts
+        return await heals(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "plan_test_case", plan)
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+    with caplog.at_level("WARNING", logger="ai_test_gen.orchestrator"):
+        out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    expected = "Planner: 3 of 3 checks had no screenshot; Healer: 2 checks, all captured"
+    assert out["vision"] == expected
+    assert any(expected in r.getMessage() for r in caplog.records)  # WARNING: degraded
+
+
+def test_summary_vision_line_on_early_refusal(cfg, monkeypatch):
+    vcfg = dataclasses.replace(cfg, vision_max_calls=2)
+    _wire(monkeypatch, vcfg, [])
+    refusal = models.TestPlan(test_case_key="QA-1", title="t", target_url="https://x", steps=[])
+    monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=refusal))
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "refused"
+    assert out["vision"] == "Planner: no checks; Healer: no checks"

@@ -32,6 +32,7 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 from .allowlist import preflight_violations
 from .config import Config
@@ -172,6 +173,45 @@ async def run_test(
     )
 
 
+FailureKind = Literal["locator", "assertion", "navigation", "other"]
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_MATCHER_RE = re.compile(r"expect\(|\.(?:tobe|tohave|tocontain|tomatch|toequal)\w*\(")
+_WAITING_FOR_LOCATOR_RE = re.compile(r"waiting for (?:locator\(|getby|frame)")
+
+
+def classify_failure(error_message: str | None) -> FailureKind:
+    """Coarse kind of a Playwright failure, from its error text.
+
+    - ``locator``: the target element was never found or never unique — a strict-mode
+      violation, any ``expect(locator)`` whose element was not found (``element(s) not
+      found``, e.g. a step's pre-action ``toBeVisible()`` guard), or an action timeout while
+      waiting for a locator (``locator.click: Timeout 30000ms exceeded``).
+    - ``assertion``: an ``expect(...)`` on a FOUND element / the page whose value or state
+      differs (``toHaveText``, ``toHaveValue``, ``toBeDisabled``, ``toHaveURL``, counts…).
+    - ``navigation``: ``page.goto`` / ``waitForURL`` failures and ``net::ERR_*``.
+    - ``other``: anything else (JS errors, a bare test timeout with no call log), and an
+      element that was found but is HIDDEN (``Received: hidden``). That is ambiguous — a
+      wrong locator matching a hidden duplicate, or a missing prior step such as opening a
+      menu — so it gets neither locator escalation nor divergence guidance; the Healer
+      replays the flow live and decides.
+    """
+    msg = _ANSI_RE.sub("", error_message or "").lower()
+    if "strict mode violation" in msg or "element(s) not found" in msg:
+        return "locator"
+    if "net::err_" in msg or "page.goto:" in msg or "waitforurl" in msg:
+        return "navigation"
+    if "received: hidden" in msg:
+        return "other"
+    if _MATCHER_RE.search(msg):
+        return "assertion"
+    if "timeout" in msg and "exceeded" in msg and (
+        "locator." in msg or _WAITING_FOR_LOCATOR_RE.search(msg)
+    ):
+        return "locator"
+    return "other"
+
+
 def _load_report(stdout: str) -> dict | None:
     """The Playwright JSON report on stdout, or ``None`` when stdout is not one."""
     try:
@@ -234,7 +274,12 @@ def _parse_failure(
             for run in test_entry.get("results", []):
                 if run.get("status") in ("failed", "timedOut"):
                     error = run.get("error") or {}
-                    return spec.get("title"), error.get("message"), _error_line(error, file_name)
+                    # A per-test timeout's first error can be a bare "Test timeout … exceeded";
+                    # the locator call log sits in a later entry, so join them all.
+                    messages = [e.get("message") for e in run.get("errors") or []]
+                    messages.append(error.get("message"))
+                    message = "\n\n".join(dict.fromkeys(m for m in messages if m)) or None
+                    return spec.get("title"), message, _error_line(error, file_name)
     return None, None, None
 
 

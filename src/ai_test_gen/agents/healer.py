@@ -1,8 +1,9 @@
 """The Healer agent: failed test + error trace -> fixed Playwright test.
 
-The Healer is intentionally narrow: it only fixes a failing test, it never plans
-or restructures. It gets the Playwright MCP toolset so it can inspect the live app
-when an error indicates a selector issue. If it cannot fix the test within the
+The Healer is intentionally narrow: it only fixes the one failing test. It may add a
+skipped step, remove a hallucinated one or reorder steps, but stays faithful to the
+test case's intent and never invents a selector. It gets the Playwright MCP toolset
+so it can reproduce the failure on the live app. If it cannot fix the test within the
 orchestrator's attempt budget, the failure is surfaced to humans.
 
 Implements AI_TEST_GENERATION_GUIDE.md §3.10 (+ §3.5b context loading). The Healer
@@ -23,6 +24,7 @@ from ..config import Config
 from ..llm import build_openai_model
 from ..models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
 from ..playwright_mcp import build_playwright_mcp
+from ..test_runner import classify_failure
 from ._context import (
     agent_output_retries,
     agent_retries,
@@ -34,15 +36,22 @@ from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
 from ._match_count import register_count_matches
 from ._run_failure import run_agent_logged
-from ._vision_aid import _make_screenshot_capture, register_inspect_screen
+from ._vision_aid import VisionStats, _make_screenshot_capture, register_inspect_screen
 
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
-def build_healer(config: Config, storage_state: Path | None = None) -> Agent[None, HealedTest]:
-    """Build the Healer agent (Playwright MCP toolset attached, output_type=HealedTest)."""
+def build_healer(
+    config: Config,
+    storage_state: Path | None = None,
+    vision_stats: VisionStats | None = None,
+) -> Agent[None, HealedTest]:
+    """Build the Healer agent (Playwright MCP toolset attached, output_type=HealedTest).
+
+    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary.
+    """
     model = build_openai_model(config, config.healer_model)
 
     base_prompt = (PROMPTS_DIR / "healer.md").read_text()
@@ -92,7 +101,12 @@ def build_healer(config: Config, storage_state: Path | None = None) -> Agent[Non
     # only when enabled so a disabled run's toolset — and behaviour — is identical to before.
     if config.vision_max_calls > 0:
         register_inspect_screen(
-            agent, config, capture=_make_screenshot_capture(mcp), agent_label="Healer"
+            agent,
+            config,
+            capture=_make_screenshot_capture(mcp),
+            agent_label="Healer",
+            on_spent=guard.disable_vision,
+            stats=vision_stats,
         )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
@@ -165,13 +179,45 @@ earlier locators live, starting from the top, before trusting them.
 """
 
 
+def _repeat_block(failure: TestRunResult, repeats: int) -> str:
+    """Guidance for a failure that survived ``repeats`` completed heals ("" on first sighting)."""
+    if repeats < 1:
+        return ""
+    kind = classify_failure(failure.error_message)
+    if kind == "locator":
+        return f"""
+## ⚠ This locator failure has PERSISTED across {repeats} earlier heal attempt(s)
+The same step keeps failing to find/resolve its element, so re-trying the SAME KIND of locator is
+not working — the locator kind itself is the problem. ESCALATE: go to the live element and capture
+a DIFFERENT kind of locator by descending the resilience ladder (id → accessible → CSS → XPath). If
+the element is inaccessible (no id, no usable role/name), use a VERIFIED `locator('xpath=...')`
+anchored on stable text/attributes — that is the correct fix, not a hack. Do NOT re-emit a tweaked
+version of the locator that already failed, and never re-emit a hallucinated id. See "Locator-kind
+escalation".
+"""
+    if kind == "assertion":
+        return f"""
+## ⚠ This assertion failure has PERSISTED across {repeats} earlier heal attempt(s)
+The element was FOUND, but its value/state still differs from what the test expects — changing the
+locator will not fix that. The app may genuinely differ from the test case. Reproduce the step live
+and re-read the case's intent: if the assertion is faithful to the case, keep it, return the code
+unchanged, and explain the divergence in `changes_summary`. Only change the assertion if it checks
+something the case never asked for.
+"""
+    return f"""
+## ⚠ This failure has PERSISTED across {repeats} earlier heal attempt(s)
+The previous fix did not work. Re-diagnose from the top (replay the flow live) instead of
+re-applying a variant of it.
+"""
+
+
 def _build_heal_message(
     test: GeneratedTest,
     failure: TestRunResult,
     plan: TestPlan,
     test_case: ManualTestCase,
     heal_history: list[str] | None = None,
-    locator_escalation: int = 0,
+    failure_repeats: int = 0,
 ) -> str:
     """Assemble the Healer's user message: intent + plan + failing code + failure.
 
@@ -180,15 +226,15 @@ def _build_heal_message(
     against what the test is meant to do (add a skipped step, drop a hallucinated one), not just
     react to the error text.
 
-    ``heal_history`` carries the ``changes_summary`` of every earlier heal attempt in this
-    run. The Healer rewrites the whole file, so without that history attempt 2 can silently
+    ``heal_history`` carries the ``changes_summary`` of every earlier COMPLETED heal attempt in
+    this run. The Healer rewrites the whole file, so without that history attempt 2 can silently
     undo attempt 1's fix and ping-pong between two wrong versions.
 
-    ``locator_escalation`` is how many times this same failure has already recurred (the
-    orchestrator counts consecutive identical failures). When >= 1 the message pushes the
-    Healer to stop re-trying the same locator KIND and descend the resilience ladder
-    (id → accessible → CSS → XPath), so a persistently-failing step on an inaccessible
-    element finally rolls over to a verified XPath instead of re-hallucinating an id.
+    ``failure_repeats`` is how many completed heals this same failure has already survived (the
+    orchestrator counts consecutive identical failures). When >= 1 the guidance depends on the
+    failure kind (``classify_failure``): a locator failure pushes the Healer down the resilience
+    ladder (id → accessible → CSS → XPath) instead of re-emitting the locator that failed; an
+    assertion failure on a found element points at a possible spec-vs-app divergence instead.
     """
     planner_notes = plan.notes.strip() or "(none)"
 
@@ -204,17 +250,6 @@ error below. Do NOT undo a previous attempt's change unless the current error sh
 change itself was wrong — build on it or fix something else.
 """
 
-    escalation_block = ""
-    if locator_escalation >= 1:
-        escalation_block = f"""
-## ⚠ This failure has PERSISTED across {locator_escalation} earlier heal attempt(s)
-The same step keeps failing the same way, so re-trying the SAME KIND of locator is not working —
-the locator kind itself is the problem. ESCALATE: go to the live element and capture a DIFFERENT
-kind of locator by descending the resilience ladder (id → accessible → CSS → XPath). If the element
-is inaccessible (no id, no usable role/name), use a VERIFIED `locator('xpath=...')` anchored on
-stable text/attributes — that is the correct fix, not a hack. Do NOT re-emit a tweaked version of
-the locator that already failed, and never re-emit a hallucinated id. See "Locator-kind escalation".
-"""
     return f"""Fix this failing Playwright test.
 
 Diagnose first: compare the ORIGINAL INTENT and the PLAN below against the failing code and the
@@ -242,7 +277,7 @@ Planned steps (selectors here were verified live by the Planner):
 ```typescript
 {test.code}
 ```
-{history_block}{escalation_block}
+{history_block}{_repeat_block(failure, failure_repeats)}
 **Failure:**
 - Status: {failure.status}
 - Error: {failure.error_message}
@@ -255,7 +290,8 @@ Planned steps (selectors here were verified live by the Planner):
 
 You may navigate the staging app and call browser_generate_locator on an element's ref to capture a
 VERIFIED locator — for any selector you fix AND any step you add, don't hand-write it. Prefer a
-Planner-verified selector (above) over the one in the failing code, and honor the Planner's notes.
+Planner-verified selector (above) over the one in the failing code — unless the failing line already
+uses it; then re-capture it live. Honor the Planner's notes.
 Make the change needed to reconcile the test with the intent and make it pass; prefer the smallest
 such change. Do not add unrelated test cases or assertions the test case didn't ask for.
 """
@@ -269,20 +305,23 @@ async def heal_test(
     test_case: ManualTestCase,
     storage_state: Path | None = None,
     heal_history: list[str] | None = None,
-    locator_escalation: int = 0,
+    failure_repeats: int = 0,
+    vision_stats: VisionStats | None = None,
 ) -> HealedTest:
     """Run the Healer on a failing test + its failure result and return the fix.
 
     ``heal_history`` is the list of earlier attempts' ``changes_summary`` for this
     run, so a later attempt builds on (rather than undoes) the previous fix.
 
-    ``locator_escalation`` is the consecutive-recurrence count of the current failure
-    (from the orchestrator); when >= 1 the Healer is pushed to escalate the locator KIND
-    down the resilience ladder rather than re-trying the same one.
+    ``failure_repeats`` is how many completed heals the current failure already survived
+    (from the orchestrator); when >= 1 the message adds kind-specific guidance — escalate the
+    locator KIND for a locator failure, suspect a spec divergence for an assertion failure.
+
+    ``vision_stats`` (optional) collects the Vision Aid's check counts for the run summary.
     """
-    agent = build_healer(config, storage_state=storage_state)
+    agent = build_healer(config, storage_state=storage_state, vision_stats=vision_stats)
     user_message = _build_heal_message(
-        test, failure, plan, test_case, heal_history, locator_escalation
+        test, failure, plan, test_case, heal_history, failure_repeats
     )
     # run_agent_logged enters the agent (MCP subprocess start/stop around the run) and logs
     # the captured failure evidence on retry exhaustion before re-raising.

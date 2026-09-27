@@ -145,12 +145,14 @@ def test_inspect_screen_degrades_when_vision_backend_fails(cfg, monkeypatch, cap
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", failing_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
-    tool = _register_inspect_screen(agent, vcfg)
+    spent: list[bool] = []
+    tool = _register_inspect_screen(agent, vcfg, on_spent=lambda: spent.append(True))
     with caplog.at_level(logging.WARNING, logger=_VISION_LOGGER):
         out = asyncio.run(tool("is a modal open?"))
 
     assert "unavailable" in out
     assert "accessibility snapshot" in out
+    assert spent  # the locator guard stops steering to a dead backend
     assert any("Vision Aid call failed" in r.getMessage() for r in caplog.records)
 
 
@@ -182,10 +184,30 @@ def test_inspect_screen_enforces_per_run_budget(cfg, monkeypatch):
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
     agent = Agent(model=TestModel(), output_type=models.TestPlan)
-    tool = _register_inspect_screen(agent, vcfg)
-    assert asyncio.run(tool("q1")) == "VISION_OK"  # within budget
+    spent: list[bool] = []
+    tool = _register_inspect_screen(agent, vcfg, on_spent=lambda: spent.append(True))
+    assert asyncio.run(tool("q1")) == "VISION_OK"  # within budget — and the last one
+    assert spent == [True]  # guard told BEFORE the agent can bounce off the spent budget
     out = asyncio.run(tool("q2"))  # exceeds budget of 1
     assert "budget" in out.lower()
+    assert "do not call inspect_screen again this run" in out  # mirrors the backend-error reply
+
+
+def test_inspect_screen_on_spent_waits_for_last_budgeted_call(cfg, monkeypatch):
+    vcfg = _vision_cfg(cfg, max_calls=2)
+    (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
+
+    async def fake_ask(config, question, png):
+        return "VISION_OK"
+
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    spent: list[bool] = []
+    tool = _register_inspect_screen(agent, vcfg, on_spent=lambda: spent.append(True))
+    asyncio.run(tool("q1"))
+    assert spent == []  # budget remains → the guard may still steer to vision
+    asyncio.run(tool("q2"))
+    assert spent == [True]
 
 
 def test_inspect_screen_logs_each_trigger(cfg, monkeypatch, caplog):
@@ -274,8 +296,8 @@ def test_inspect_screen_self_captures_current_page(cfg, monkeypatch):
 
 
 def test_inspect_screen_self_capture_failure_degrades(cfg, monkeypatch, caplog):
-    # If the live screenshot fails, the call degrades to the newest existing PNG (and logs a
-    # warning) instead of aborting the planning run.
+    # If the live screenshot fails, the call degrades to the newest existing PNG (and logs LOUDLY,
+    # at ERROR) instead of aborting the planning run.
     vcfg = _vision_cfg(cfg)
     (vcfg.snapshots_dir / "old.png").write_bytes(b"prev")  # fresh-on-disk fallback
 
@@ -291,7 +313,148 @@ def test_inspect_screen_self_capture_failure_degrades(cfg, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=_VISION_LOGGER):
         out = asyncio.run(tool("q"))
     assert out == "FELL_BACK"
-    assert any("self-capture" in r.getMessage().lower() for r in caplog.records)
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors == [
+        "Planner Vision Aid is not working in this run: screenshot capture failed (browser closed)"
+    ]
+
+
+# --- inspect_screen reads the exact file browser_take_screenshot saved ----------
+
+# Shape of @playwright/mcp 0.0.75's browser_take_screenshot text result (imageResponses "omit").
+_SCREENSHOT_RESULT = """### Result
+- [Screenshot of viewport](./page-2026-09-27T10-00-00-000Z.png)
+### Ran Playwright code
+```js
+// Screenshot viewport and save it as ./page-2026-09-27T10-00-00-000Z.png
+await page.screenshot({
+  path: './page-2026-09-27T10-00-00-000Z.png',
+  scale: 'css',
+  type: 'png'
+});
+```
+### Page
+- Page URL: https://staging.example.internal/notes
+- Page Title: Demo Notes"""
+
+
+def _capture_tool(cfg, monkeypatch, capture, *, stats=None):
+    """inspect_screen with ``capture`` wired and a fake vision model that echoes the PNG bytes."""
+    vcfg = _vision_cfg(cfg)
+
+    async def fake_ask(config, question, png):
+        return png.decode()
+
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    return vcfg, _register_inspect_screen(agent, vcfg, capture=capture, stats=stats)
+
+
+def test_saved_screenshot_path_parses_the_mcp_result(cfg):
+    d = cfg.snapshots_dir
+    assert vision_aid_mod._saved_screenshot_path(_SCREENSHOT_RESULT, d) == (
+        d / "page-2026-09-27T10-00-00-000Z.png"
+    ).resolve()
+    # pydantic-ai hands back a list when the result has several content items.
+    assert vision_aid_mod._saved_screenshot_path(["x", _SCREENSHOT_RESULT], d) is not None
+    assert vision_aid_mod._saved_screenshot_path("### Result\nok", d) is None
+    assert vision_aid_mod._saved_screenshot_path(None, d) is None
+    # Only the MCP output folder is ever read.
+    escape = "- [Screenshot of viewport](../../secret.png)"
+    assert vision_aid_mod._saved_screenshot_path(escape, d) is None
+
+
+def test_inspect_screen_uses_the_reported_file_over_a_newer_png(cfg, monkeypatch):
+    vcfg = _vision_cfg(cfg)
+    reported = vcfg.snapshots_dir / "page-2026-09-27T10-00-00-000Z.png"
+    newer = vcfg.snapshots_dir / "unrelated.png"
+
+    async def capture():
+        reported.write_bytes(b"reported")
+        newer.write_bytes(b"newer")
+        os.utime(newer, (2_000_000_000, 2_000_000_000))  # newest by mtime
+        return _SCREENSHOT_RESULT
+
+    _, tool = _capture_tool(cfg, monkeypatch, capture)
+    assert asyncio.run(tool("what page is this?")) == "reported"
+
+
+def test_inspect_screen_unparsable_result_falls_back_to_newest_png(cfg, monkeypatch, caplog):
+    vcfg = _vision_cfg(cfg)
+
+    async def capture():
+        (vcfg.snapshots_dir / "live.png").write_bytes(b"newest")
+        return "### Result\nsomething else"
+
+    _, tool = _capture_tool(cfg, monkeypatch, capture)
+    with caplog.at_level(logging.WARNING, logger=_VISION_LOGGER):
+        assert asyncio.run(tool("q")) == "newest"
+    assert any("falling back" in r.getMessage() for r in caplog.records)
+    assert not any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_inspect_screen_capture_without_file_logs_error_with_folder(cfg, monkeypatch, caplog):
+    stats = vision_aid_mod.VisionStats()
+
+    async def capture():
+        return _SCREENSHOT_RESULT  # claims a file that was never written
+
+    vcfg, tool = _capture_tool(cfg, monkeypatch, capture, stats=stats)
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
+        out = asyncio.run(tool("q"))
+    assert "could not capture" in out
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "Vision Aid is not working in this run" in errors[0]
+    assert "browser_take_screenshot produced no usable file" in errors[0]
+    assert str(vcfg.snapshots_dir) in errors[0]
+    assert (stats.checks, stats.no_screenshot) == (1, 1)
+
+
+def test_inspect_screen_capture_with_only_stale_png_logs_error(cfg, monkeypatch, caplog):
+    vcfg = _vision_cfg(cfg)
+    old = vcfg.snapshots_dir / "old.png"
+    old.write_bytes(b"old")
+    os.utime(old, (1000, 1000))
+
+    async def capture():
+        return None
+
+    _, tool = _capture_tool(cfg, monkeypatch, capture)
+    with caplog.at_level(logging.INFO, logger=_VISION_LOGGER):
+        assert "could not capture" in asyncio.run(tool("q"))
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1 and "old" in errors[0]
+
+
+def test_vision_stats_count_checks_gaps_and_backend_errors(cfg, monkeypatch):
+    stats = vision_aid_mod.VisionStats()
+    vcfg = _vision_cfg(cfg, max_calls=3)
+    calls = {"n": 0}
+
+    async def ask(config, question, png):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("502")
+        return "ok"
+
+    monkeypatch.setattr(vision_aid_mod, "ask_vision", ask)
+    agent = Agent(model=TestModel(), output_type=models.TestPlan)
+    tool = _register_inspect_screen(agent, vcfg, stats=stats)
+    asyncio.run(tool("q"))  # no PNG yet -> no screenshot
+    (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
+    asyncio.run(tool("q"))  # vision ok
+    asyncio.run(tool("q"))  # vision backend error
+    assert (stats.checks, stats.no_screenshot, stats.backend_errors) == (3, 1, 1)
+    assert stats.describe() == "1 of 3 checks had no screenshot, 1 vision backend error(s)"
+    assert stats.degraded
+
+
+def test_vision_stats_describe_clean_and_idle():
+    assert vision_aid_mod.VisionStats().describe() == "no checks"
+    clean = vision_aid_mod.VisionStats(checks=2)
+    assert clean.describe() == "2 checks, all captured"
+    assert not clean.degraded
 
 
 def test_make_screenshot_capture_drives_browser_take_screenshot():
@@ -300,10 +463,11 @@ def test_make_screenshot_capture_drives_browser_take_screenshot():
     class _Raw:
         async def direct_call_tool(self, name, args):
             calls.append((name, args))
+            return "RESULT"
 
     capture = planner_mod._make_screenshot_capture(_Raw())
     assert capture is not None
-    asyncio.run(capture())
+    assert asyncio.run(capture()) == "RESULT"  # the raw result names the saved file
     assert calls == [("browser_take_screenshot", {})]
     # A toolset with no direct tool-call path -> None (callers then run passively, no crash).
     assert planner_mod._make_screenshot_capture(object()) is None
@@ -329,9 +493,10 @@ def test_planner_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = planner_mod._register_inspect_screen
 
-    def spy(agent, config, capture=None):
+    def spy(agent, config, capture=None, on_spent=None, stats=None):
         seen.append(config.vision_max_calls)
-        return real(agent, config, capture)
+        assert on_spent is not None  # wired to the locator guard's disable_vision
+        return real(agent, config, capture, on_spent=on_spent, stats=stats)
 
     monkeypatch.setattr(planner_mod, "_register_inspect_screen", spy)
     build_planner(cfg)  # vision off (vision_max_calls == 0)
@@ -417,9 +582,10 @@ def test_healer_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = healer_mod.register_inspect_screen
 
-    def spy(agent, config, capture=None, agent_label="Planner"):
+    def spy(agent, config, capture=None, agent_label="Planner", on_spent=None, stats=None):
         seen.append(config.vision_max_calls)
-        return real(agent, config, capture, agent_label)
+        assert on_spent is not None  # wired to the locator guard's disable_vision
+        return real(agent, config, capture, agent_label, on_spent, stats)
 
     monkeypatch.setattr(healer_mod, "register_inspect_screen", spy)
     healer_mod.build_healer(cfg)  # vision off (vision_max_calls == 0)

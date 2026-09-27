@@ -131,6 +131,23 @@ def test_mr_description_no_summary_recorded_when_heals_but_empty_summaries(cfg, 
     assert "- (no summary recorded)" in desc
 
 
+def test_mr_description_renders_heal_verdict_when_present(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    verdict = "Healer found no fix — probable app bug or spec divergence. Healer: stays enabled"
+    client.open_mr(
+        _generated(), _plan(), "QA-1", heal_attempts=1, final_status="failed", heal_verdict=verdict
+    )
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert f"**Heal verdict:** {verdict}" in desc
+
+
+def test_mr_description_omits_heal_verdict_without_one(cfg, monkeypatch):
+    client, project = _client(monkeypatch, cfg)
+    client.open_mr(_generated(), _plan(), "QA-1", final_status="passed")
+    desc = project.mergerequests.create.call_args[0][0]["description"]
+    assert "Heal verdict" not in desc
+
+
 def test_mr_description_renders_trace_path_when_present(cfg, monkeypatch):
     client, project = _client(monkeypatch, cfg)
     client.open_mr(

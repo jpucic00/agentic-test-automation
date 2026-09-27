@@ -129,6 +129,28 @@ def test_run_test_timedout_status_is_parsed(cfg, monkeypatch):
     assert "30000ms" in (result.error_message or "")
 
 
+def test_run_test_timeout_joins_all_errors_so_the_locator_log_is_kept(cfg, monkeypatch):
+    bare = {"message": "Test timeout of 30000ms exceeded."}
+    call_log = {
+        "message": "Error: locator.click: Test timeout of 30000ms exceeded.\n"
+        "Call log:\n  - waiting for getByTestId('logout')"
+    }
+    timed_out = {"status": "timedOut", "error": bare, "errors": [bare, call_log]}
+    report = {
+        "suites": [
+            {"title": "slow.spec.ts", "specs": [
+                {"title": "QA-1: slow path", "tests": [{"results": [timed_out]}]}
+            ]}
+        ]
+    }
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    message = result.error_message or ""
+    assert message.count("Test timeout of 30000ms exceeded.") == 2  # bare + call-log line, no dupes
+    assert "waiting for getByTestId('logout')" in message
+    assert runner.classify_failure(message) == "locator"
+
+
 def test_run_test_failed_empty_output_uses_default_message(cfg, monkeypatch):
     # returncode != 0, unparseable stdout, empty stderr -> the default failure message.
     _patch_proc(monkeypatch, _FakeProc(1, stdout=b"not json", stderr=b""))
@@ -347,3 +369,158 @@ def test_offlist_plan_url_blocks_the_run(cfg, monkeypatch):
     result = asyncio.run(runner.run_test(cfg, _generated(code="await page.goto('/');"), plan=plan))
     spawn.assert_not_called()
     assert result.blocked and "plan target_url" in (result.error_message or "")
+
+
+# --- classify_failure: realistic Playwright error text ----------------------------------------
+
+_NOT_FOUND_GUARD = """Error: Add note button visible before click
+
+expect(locator).toBeVisible() failed
+
+Locator: getByTestId('add-note')
+Expected: visible
+Timeout: 5000ms
+Error: element(s) not found
+
+Call log:
+  - Expect "toBeVisible" with timeout 5000ms
+  - waiting for getByTestId('add-note')
+"""
+
+_NOT_FOUND_LEGACY = """Error: Timed out 5000ms waiting for expect(locator).toBeVisible()
+
+Locator: getByRole('button', { name: 'Save', exact: true })
+Expected: visible
+Received: <element(s) not found>
+Call log:
+  - expect.toBeVisible with timeout 5000ms
+  - waiting for getByRole('button', { name: 'Save', exact: true })
+"""
+
+_ACTION_TIMEOUT = """Error: locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for getByRole('menuitem', { name: 'Log out', exact: true })
+"""
+
+_TEST_TIMEOUT_ACTION = """Error: locator.fill: Test timeout of 30000ms exceeded.
+Call log:
+  - waiting for locator('xpath=//input[@name="title"]')
+"""
+
+_STRICT = """Error: locator.click: Error: strict mode violation: \
+getByRole('button', { name: 'Add' }) resolved to 2 elements:
+    1) <button id="add-note">Add</button> aka getByTestId('add-note')
+    2) <button>Add admin</button> aka getByRole('button', { name: 'Add admin' })
+"""
+
+_TO_HAVE_TEXT = """Error: expect(locator).toHaveText(expected) failed
+
+Locator:  getByTestId('note-title')
+Expected: "Groceries"
+Received: "Untitled"
+Timeout:  5000ms
+
+Call log:
+  - Expect "toHaveText" with timeout 5000ms
+  - waiting for getByTestId('note-title')
+    9 × locator resolved to <h2 data-testid="note-title">Untitled</h2>
+      - unexpected value "Untitled"
+"""
+
+_TO_BE_DISABLED = """Error: Save stays disabled for an empty title
+
+expect(locator).toBeDisabled() failed
+
+Locator:  getByTestId('save-note')
+Expected: disabled
+Received: enabled
+Timeout:  5000ms
+
+Call log:
+  - Expect "toBeDisabled" with timeout 5000ms
+  - waiting for getByTestId('save-note')
+    9 × locator resolved to <button data-testid="save-note">Save</button>
+      - unexpected value "enabled"
+"""
+
+_TO_HAVE_URL = """Error: expect(page).toHaveURL(expected) failed
+
+Expected: "http://localhost:3000/notes"
+Received: "http://localhost:3000/login"
+Timeout:  5000ms
+"""
+
+_TO_HAVE_COUNT = """Error: expect(locator).toHaveCount(expected) failed
+
+Locator:  getByTestId('note-card')
+Expected: 3
+Received: 2
+Timeout:  5000ms
+"""
+
+_LEGACY_TO_HAVE_VALUE = """Error: Timed out 5000ms waiting for expect(locator).toHaveValue(expected)
+
+Locator: getByLabel('Email', { exact: true })
+Expected string: "demo@demo.test"
+Received string: ""
+"""
+
+
+def test_classify_failure_locator_kinds():
+    for message in (
+        _NOT_FOUND_GUARD,
+        _NOT_FOUND_LEGACY,
+        _ACTION_TIMEOUT,
+        _TEST_TIMEOUT_ACTION,
+        _STRICT,
+        "TimeoutError: page.click: Timeout 5000ms exceeded.\n"
+        "Call log:\n  - waiting for locator('#x')",
+    ):
+        assert runner.classify_failure(message) == "locator", message
+
+
+def test_classify_failure_assertion_on_found_element():
+    for message in (
+        _TO_HAVE_TEXT, _TO_BE_DISABLED, _TO_HAVE_URL, _TO_HAVE_COUNT, _LEGACY_TO_HAVE_VALUE
+    ):
+        assert runner.classify_failure(message) == "assertion", message
+
+
+def test_classify_failure_navigation_and_other():
+    assert (
+        runner.classify_failure("Error: page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3000/")
+        == "navigation"
+    )
+    assert (
+        runner.classify_failure(
+            'page.waitForURL: Timeout 30000ms exceeded.\nwaiting for navigation to "/notes"'
+        )
+        == "navigation"
+    )
+    assert runner.classify_failure("Test timeout of 30000ms exceeded.") == "other"
+    assert runner.classify_failure("TypeError: Cannot read properties of undefined") == "other"
+    assert runner.classify_failure(None) == "other"
+
+
+def test_classify_failure_ignores_ansi_colors():
+    colored = (
+        "Error: \x1b[2mexpect(\x1b[22m\x1b[31mlocator\x1b[39m\x1b[2m).\x1b[22mtoBeVisible"
+        "\x1b[2m()\x1b[22m failed\n\nLocator: getByTestId('x')\nExpected: visible\n"
+        "Timeout: 5000ms\nError: element(s) not found\n"
+    )
+    assert runner.classify_failure(colored) == "locator"
+    hidden = colored.replace("Error: element(s) not found", "Received: hidden")
+    # Found but hidden is ambiguous (wrong locator vs missing prior step): no kind-specific push.
+    assert runner.classify_failure(hidden) == "other"
+
+
+def test_per_test_timeout_is_a_healable_failure_not_an_error(cfg, monkeypatch):
+    # A test hitting Playwright's own per-test timeout is a normal failure (healable); only the
+    # runner's whole-run RUN_TIMEOUT_S kill, a launch failure, or a blocked run is "error".
+    timed_out = {"status": "timedOut", "error": {"message": _TEST_TIMEOUT_ACTION}}
+    spec = {"title": "t", "tests": [{"results": [timed_out]}]}
+    report = {"suites": [{"title": "x", "specs": [spec]}]}
+    _patch_proc(monkeypatch, _FakeProc(1, stdout=json.dumps(report).encode()))
+    result = asyncio.run(runner.run_test(cfg, _generated()))
+    assert result.status == "failed"
+    assert runner.classify_failure(result.error_message) == "locator"

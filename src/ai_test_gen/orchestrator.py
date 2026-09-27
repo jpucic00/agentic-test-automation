@@ -17,6 +17,9 @@ Improvements over the guide's template:
 - **Heal resilience.** A heal attempt that crashes (agent/gateway/MCP exception) consumes
   its attempt and healing continues with a fresh Healer; only
   ``MAX_CONSECUTIVE_ABORTED_HEALS`` back-to-back crashes end the loop early.
+- **Heal stop rules.** Only a ``failed`` run is healed (``error`` = infrastructure/blocked,
+  surfaced as the ``heal_verdict``); a heal that returns the code unchanged ends the loop with
+  the "no fix — probable app bug or spec divergence" verdict instead of re-running it.
 - **Per-iteration artifacts + per-attempt MR commits.** The first generated spec keeps its
   filename; the compile retry and each heal attempt are written to their own sibling files
   (``<name>.healer-attempt-N.spec.ts``) so no iteration overwrites another and the full
@@ -43,6 +46,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from .agents._vision_aid import VisionStats
 from .agents.generator import generate_test
 from .agents.healer import heal_test
 from .agents.planner import plan_test_case
@@ -56,7 +60,7 @@ from .models import (
     TestPlan,
     TestRunResult,
 )
-from .test_runner import run_test
+from .test_runner import classify_failure, run_test
 from .xray_client import XrayClient
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,10 @@ MAX_HEAL_ATTEMPTS = 3
 # something environmental (gateway down, browser broken) that more attempts won't heal. Without
 # this, one crashed attempt used to abandon the entire remaining MAX_HEAL_ATTEMPTS budget.
 MAX_CONSECUTIVE_ABORTED_HEALS = 2
+
+# Verdict recorded (run summary + MR description) when a completed heal returns the code
+# unchanged — healer.md's signal for a genuine app bug or a spec-vs-app divergence.
+NO_FIX_VERDICT = "Healer found no fix — probable app bug or spec divergence"
 
 
 def _load_test_case(config: Config, issue_key: str) -> ManualTestCase:
@@ -95,6 +103,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         max_heal_attempts = _resolve_max_heal_attempts()
 
     _clear_snapshots_dir(config)
+    # Vision Aid counts per agent (all heal attempts pooled under "Healer"); reported in the
+    # summary when vision is on, so a run whose screenshots never arrived is visible at a glance.
+    vision = {"Planner": VisionStats(), "Healer": VisionStats()}
     logger.info(
         "[%s] Environments (primary first): %s; extra allowed hosts: %s",
         issue_key,
@@ -110,7 +121,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
 
     logger.info("[%s] Planning", issue_key)
     try:
-        plan = await plan_test_case(config, test_case)
+        plan = await plan_test_case(config, test_case, vision_stats=vision["Planner"])
         plan_json = plan_json_with_context_hash(plan, config)
         (config.plans_dir / f"{issue_key}.json").write_text(plan_json)
 
@@ -125,13 +136,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 issue_key,
                 plan.notes or "(none)",
             )
-            return {
-                "issue_key": issue_key,
-                "status": "refused",
-                "heal_attempts": 0,
-                "mr_url": None,
-                "notes": plan.notes,
-            }
+            return _with_vision(
+                {
+                    "issue_key": issue_key,
+                    "status": "refused",
+                    "heal_attempts": 0,
+                    "mr_url": None,
+                    "notes": plan.notes,
+                },
+                config,
+                vision,
+            )
 
         logger.info("[%s] Generating Playwright code", issue_key)
         test = await generate_test(config, plan)
@@ -140,13 +155,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         # (e.g. an MCP tool exceeding its retry budget) must fail cleanly, not dump a stack
         # trace — there's no partial artifact to salvage here.
         logger.error("[%s] Planning/generation failed: %s", issue_key, exc)
-        return {
-            "issue_key": issue_key,
-            "status": "error",
-            "heal_attempts": 0,
-            "mr_url": None,
-            "error": f"Planning/generation failed: {exc}",
-        }
+        return _with_vision(
+            {
+                "issue_key": issue_key,
+                "status": "error",
+                "heal_attempts": 0,
+                "mr_url": None,
+                "error": f"Planning/generation failed: {exc}",
+            },
+            config,
+            vision,
+        )
 
     # The Generator owns the canonical filename. Every later iteration (the compile-retry
     # regeneration, each heal attempt) is written to its OWN sibling file so nothing
@@ -203,26 +222,36 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             # original failure and let the normal heal/MR path handle it.
             logger.warning("[%s] Generator retry failed: %s", issue_key, exc)
 
+    # heal_summaries feeds the MR (every attempt, crashes included); heal_history feeds the
+    # Healer and holds only COMPLETED heals — its block says "the code already contains these
+    # changes", which a crashed attempt never made.
     heal_summaries: list[str] = []
+    heal_history: list[str] = []
+    # Signatures of the failures that COMPLETED heals were given (appended after the re-run).
+    # A crashed attempt adds none, so it can't fake a "the failure persisted" escalation.
     failure_signatures: list[str] = []
+    heal_verdict: str | None = None
     heal_attempts = 0
     consecutive_aborts = 0
-    # A run blocked by the pre-run navigation check is a safety stop, not a healable failure.
-    while result.status != "passed" and not result.blocked and heal_attempts < max_heal_attempts:
+    # Only a test failure is healable. status "error" — a run blocked by the pre-run navigation
+    # check, Playwright failing to launch, the whole-run timeout — is an infrastructure/safety
+    # stop the Healer cannot fix; it is surfaced in the MR instead (see below).
+    while result.status == "failed" and heal_attempts < max_heal_attempts:
         heal_attempts += 1
-        # How many times in a row this exact failure has already recurred. When the SAME
-        # step keeps failing the same way, re-trying the same locator kind isn't working —
-        # tell the Healer to escalate down the resilience ladder (→ CSS → XPath) instead of
-        # re-emitting (and often re-hallucinating) the locator that already failed.
-        signature = _failure_signature(result)
-        escalation = _consecutive_repeats(failure_signatures, signature)
-        failure_signatures.append(signature)
-        escalation_note = (
-            f" — same failure recurred {escalation}×, escalating locator kind" if escalation else ""
+        # How many completed heals in a row this same failure (test + step + kind) survived.
+        # The Healer turns it into kind-specific guidance: descend the locator ladder for a
+        # locator failure, suspect a spec-vs-app divergence for an assertion failure.
+        signature = _failure_signature(result, test.code)
+        repeats = _consecutive_repeats(failure_signatures, signature)
+        repeat_note = (
+            f" — same {classify_failure(result.error_message)} failure survived "
+            f"{repeats} heal(s)"
+            if repeats
+            else ""
         )
         logger.info(
             "[%s] Test %s — healing (attempt %d/%d)%s",
-            issue_key, result.status, heal_attempts, max_heal_attempts, escalation_note,
+            issue_key, result.status, heal_attempts, max_heal_attempts, repeat_note,
         )
         try:
             # Pass a snapshot of the summaries so far: the Healer rewrites the whole
@@ -233,8 +262,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 result,
                 plan=plan,
                 test_case=test_case,
-                heal_history=list(heal_summaries),
-                locator_escalation=escalation,
+                heal_history=list(heal_history),
+                failure_repeats=repeats,
+                vision_stats=vision["Healer"],
             )
         except Exception as exc:
             # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not discard
@@ -259,6 +289,17 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             continue
         consecutive_aborts = 0
         heal_summaries.append(healed.changes_summary)
+        if _normalized_code(healed.code) == _normalized_code(test.code):
+            # healer.md: on a genuine app bug / spec divergence the Healer returns the code
+            # unchanged. Re-running identical code can only fail the same way, so stop here —
+            # no no-op attempt file, no empty MR revision — and flag the verdict for review.
+            heal_verdict = f"{NO_FIX_VERDICT}. Healer: {healed.changes_summary}"
+            logger.warning(
+                "[%s] Heal attempt %d returned the code unchanged — stopping healing: %s",
+                issue_key, heal_attempts, heal_verdict,
+            )
+            break
+        heal_history.append(healed.changes_summary)
         # Each heal lands in its OWN file (<name>.healer-attempt-N.spec.ts). The Healer's
         # returned file_name is deliberately ignored so an attempt can never overwrite an
         # earlier iteration; the MR commits this code under base_file_name as its own commit.
@@ -277,10 +318,15 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         )
         logger.info("[%s] Re-running test", issue_key)
         result = await run_test(config, test, plan=plan)
+        failure_signatures.append(signature)
 
-    if result.blocked:
-        logger.error("[%s] %s — not healed", issue_key, result.error_message)
-    elif result.status != "passed":
+    if result.status == "error":
+        reason = (
+            "run blocked by the navigation allow-list" if result.blocked else "infrastructure error"
+        )
+        heal_verdict = f"Not healed — {reason}, not a test failure: {result.error_message}"
+        logger.error("[%s] %s", issue_key, heal_verdict)
+    elif result.status != "passed" and heal_verdict is None:
         logger.warning(
             "[%s] Still %s after %d heal attempt(s); opening MR for review anyway",
             issue_key, result.status, heal_attempts,
@@ -301,9 +347,11 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             "heal_attempts": heal_attempts,
             "mr_url": None,
         }
+        if heal_verdict:
+            summary["heal_verdict"] = heal_verdict
         if result.trace_path:
             summary["trace_path"] = result.trace_path
-        return _with_environments(summary, env_results)
+        return _with_vision(_with_environments(summary, env_results), config, vision)
 
     logger.info("[%s] Opening GitLab MR", issue_key)
     # The MR carries ONE file path (the original first-iteration filename) but one commit
@@ -323,6 +371,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             heal_summaries=heal_summaries,
             heal_attempts=heal_attempts,
             final_status=result.status,
+            heal_verdict=heal_verdict,
             trace_path=result.trace_path,
             environment_results=env_results,
         )
@@ -336,16 +385,16 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             config.tests_dir / test.file_name,
             config.plans_dir / f"{issue_key}.json",
         )
-        return _with_environments(
-            {
-                "issue_key": issue_key,
-                "status": result.status,
-                "heal_attempts": heal_attempts,
-                "mr_url": None,
-                "error": f"MR creation failed: {exc}",
-            },
-            env_results,
-        )
+        summary = {
+            "issue_key": issue_key,
+            "status": result.status,
+            "heal_attempts": heal_attempts,
+            "mr_url": None,
+            "error": f"MR creation failed: {exc}",
+        }
+        if heal_verdict:
+            summary["heal_verdict"] = heal_verdict
+        return _with_vision(_with_environments(summary, env_results), config, vision)
     logger.info("[%s] MR opened: %s", issue_key, mr_url)
 
     summary = {
@@ -354,9 +403,11 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         "heal_attempts": heal_attempts,
         "mr_url": mr_url,
     }
+    if heal_verdict:
+        summary["heal_verdict"] = heal_verdict
     if result.trace_path:
         summary["trace_path"] = result.trace_path
-    return _with_environments(summary, env_results)
+    return _with_vision(_with_environments(summary, env_results), config, vision)
 
 
 async def _run_other_environments(
@@ -412,6 +463,21 @@ def _with_environments(summary: dict, env_results: list[EnvironmentRunResult]) -
     """Add the per-environment results to a run summary (multi-environment runs only)."""
     if env_results:
         summary["environments"] = [r.model_dump() for r in env_results]
+    return summary
+
+
+def _with_vision(summary: dict, config: Config, vision: dict[str, VisionStats]) -> dict:
+    """Add the per-agent Vision Aid line to a run summary (only when vision is enabled)."""
+    if config.vision_max_calls > 0:
+        line = "; ".join(f"{agent}: {stats.describe()}" for agent, stats in vision.items())
+        summary["vision"] = line
+        degraded = any(stats.degraded for stats in vision.values())
+        logger.log(
+            logging.WARNING if degraded else logging.INFO,
+            "[%s] Vision Aid — %s",
+            summary["issue_key"],
+            line,
+        )
     return summary
 
 
@@ -480,30 +546,43 @@ def _commit_message(issue_key: str, label: str, detail: str | None = None) -> st
     return f"{subject}\n\n{detail}" if detail else subject
 
 
-def _failure_signature(result: TestRunResult) -> str:
+def _failure_signature(result: TestRunResult, code: str = "") -> str:
     """A selector-AGNOSTIC fingerprint of a run failure, used to detect a recurring failure.
 
-    Keys on the failing test title + a coarse failure *category* (timeout / strict-mode /
-    navigation / assertion / other). Deliberately ignores the specific locator text so that a
-    heal which swaps the selector but STILL fails the same way (e.g. timeout → timeout) is
-    recognized as the SAME failure recurring — which is what should trigger locator-kind
-    escalation. Digits are stripped from the fallback head so timeouts/line numbers don't
-    fragment otherwise-identical failures.
+    Keys on the failing test title + the enclosing ``test.step`` title + the failure KIND
+    (``classify_failure``: locator / assertion / navigation / other). Deliberately ignores the
+    specific locator text so that a heal which swaps the selector but STILL fails the same way
+    is recognized as the SAME failure recurring. The step title (not the line number, which
+    shifts when a heal adds or removes a step) keeps a failure that moved on to a later step
+    from counting as a repeat. For ``other``, a digit-stripped head of the message is used so
+    timeouts/line numbers don't fragment otherwise-identical failures.
     """
-    msg = (result.error_message or "").lower()
-    test = (result.failed_test or "").strip().lower()
-    if "strict mode" in msg or ("resolved" in msg and "element" in msg):
-        category = "strict-mode"
-    elif "timeout" in msg or "exceeded" in msg or "waiting for" in msg:
-        category = "timeout"
-    elif "err_" in msg or "net::" in msg or "tohaveurl" in msg:
-        category = "navigation"
-    elif "expect(" in msg or "assertion" in msg or "to be" in msg:
-        category = "assertion"
-    else:
+    kind = classify_failure(result.error_message)
+    if kind == "other":
+        msg = (result.error_message or "").lower()
         head = re.sub(r"\s+", " ", re.sub(r"\d+", "", msg)).strip()[:80]
-        category = head or "unknown"
-    return f"{test}|{category}"
+        kind = head or "unknown"
+    test = (result.failed_test or "").strip().lower()
+    return f"{test}|{_failing_step(code, result.error_line)}|{kind}"
+
+
+_STEP_TITLE_RE = re.compile(r"""test\.step\(\s*(['"`])(.*?)\1""")
+
+
+def _failing_step(code: str, error_line: int | None) -> str:
+    """Title of the last ``test.step('…')`` opened at or before ``error_line`` ("" if none)."""
+    if not error_line:
+        return ""
+    for line in reversed(code.splitlines()[:error_line]):
+        match = _STEP_TITLE_RE.search(line)
+        if match:
+            return match.group(2).strip().lower()
+    return ""
+
+
+def _normalized_code(code: str) -> str:
+    """``code`` with line endings and trailing whitespace normalized, for no-op detection."""
+    return "\n".join(line.rstrip() for line in code.splitlines()).rstrip()
 
 
 def _consecutive_repeats(history: list[str], signature: str) -> int:

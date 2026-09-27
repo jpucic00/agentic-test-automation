@@ -66,8 +66,9 @@ def test_steers_on_third_consecutive_locator_failure():
     with pytest.raises(ModelRetry) as ei:
         asyncio.run(guard(None, _fail, LOCATOR_TOOL, {}))
     msg = ei.value.message
-    assert "browser_take_screenshot" in msg
     assert "inspect_screen" in msg
+    # inspect_screen self-captures — a screenshot-first instruction would waste a turn.
+    assert "browser_take_screenshot" not in msg
     assert msg != "ref e7 not found"
 
 
@@ -101,15 +102,38 @@ def test_no_steer_when_vision_off_but_exhaustion_still_soft_lands():
     assert "inspect_screen" not in out  # vision off -> no vision advice
 
 
-def test_exhaustion_keeps_soft_landing_on_further_failures():
-    # Once exhausted, every further failure returns guidance too — the streak only resets on a
-    # real success, so the fatal raise can never sneak back in.
-    guard = LocatorFailureGuard(ceiling=2, vision_on=False)
-    with pytest.raises(ModelRetry):
-        asyncio.run(guard(None, _fail, LOCATOR_TOOL, {}))
-    for _ in range(3):
-        out = asyncio.run(guard(None, _fail, LOCATOR_TOOL, {}))
-        assert isinstance(out, str) and "STOP calling it" in out
+def test_give_up_resets_streak_so_next_element_gets_normal_retries():
+    # Element A exhausts the budget → give-up text (a clean return, which also resets
+    # pydantic-ai's own retry counter). Element B's first failure must then get the ORIGINAL
+    # error back (a normal retry), not "failed N times in a row — STOP".
+    guard = LocatorFailureGuard(ceiling=5, vision_on=True)
+    for _ in range(4):
+        with pytest.raises(ModelRetry):
+            asyncio.run(guard(None, _fail, LOCATOR_TOOL, {"target": "e7"}))
+    out = asyncio.run(guard(None, _fail, LOCATOR_TOOL, {"target": "e7"}))
+    assert isinstance(out, str) and "STOP calling it" in out
+
+    for _ in range(2):  # element B: fresh streak, below the steer threshold
+        with pytest.raises(ModelRetry) as ei:
+            asyncio.run(guard(None, _fail, LOCATOR_TOOL, {"target": "e9"}))
+        assert ei.value.message == "ref e7 not found"
+    with pytest.raises(ModelRetry) as ei:  # ...and it can still reach the steer stage again
+        asyncio.run(guard(None, _fail, LOCATOR_TOOL, {"target": "e9"}))
+    assert "inspect_screen" in ei.value.message
+
+
+# --- vision budget spent: the guard stops sending the agent to inspect_screen ----
+
+
+def test_disable_vision_drops_steer_and_vision_hint():
+    guard = LocatorFailureGuard(ceiling=3, vision_on=True)
+    guard.disable_vision()  # what inspect_screen's on_spent triggers
+    for _ in range(2):  # would have steered at 2 (ceiling 3 → steer_after clamps to 2)
+        with pytest.raises(ModelRetry) as ei:
+            asyncio.run(guard(None, _fail, LOCATOR_TOOL, {}))
+        assert ei.value.message == "ref e7 not found"
+    out = asyncio.run(guard(None, _fail, LOCATOR_TOOL, {}))
+    assert "inspect_screen" not in out
 
 
 def test_exhaust_message_mentions_probe_only_when_probe_on():
@@ -153,6 +177,7 @@ def test_steer_message_never_contains_a_selector():
         assert forbidden not in msg
     assert "browser_generate_locator" in msg  # the locator still comes from the tool
     assert "NEVER returns a selector" in msg
+    assert "browser_take_screenshot" not in msg  # inspect_screen self-captures
 
 
 def test_exhaust_message_never_contains_a_concrete_selector():

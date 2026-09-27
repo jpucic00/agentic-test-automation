@@ -163,16 +163,70 @@ def test_healer_prompt_is_full_browser_agent():
     assert "Recovery steps" in healer_md
 
 
-def test_heal_message_escalation_block_present_when_recurring():
-    msg = healer_mod._build_heal_message(*_heal_message_fixtures(), locator_escalation=2)
-    assert "PERSISTED across 2" in msg
+_NOT_FOUND_GUARD = (
+    "Error: Save visible before click\n\nexpect(locator).toBeVisible() failed\n\n"
+    "Locator: getByTestId('save')\nExpected: visible\nTimeout: 5000ms\n"
+    "Error: element(s) not found\n\nCall log:\n  - waiting for getByTestId('save')\n"
+)
+_DISABLED = (
+    "Error: expect(locator).toBeDisabled() failed\n\nLocator:  getByTestId('save')\n"
+    "Expected: disabled\nReceived: enabled\nTimeout:  5000ms\n"
+)
+
+
+def _with_error(error_message):
+    test, failure, plan, case = _heal_message_fixtures()
+    return test, failure.model_copy(update={"error_message": error_message}), plan, case
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _NOT_FOUND_GUARD,
+        "Error: locator.click: Timeout 30000ms exceeded.\n"
+        "Call log:\n  - waiting for getByTestId('x')",
+        "Error: strict mode violation: getByRole('button', { name: 'Add' }) resolved to 2 elements",
+    ],
+)
+def test_heal_message_escalates_locator_kind_on_repeated_locator_failure(error):
+    msg = healer_mod._build_heal_message(*_with_error(error), failure_repeats=2)
+    assert "locator failure has PERSISTED across 2" in msg
+    assert "ESCALATE" in msg
     assert "ladder" in msg.lower()
     assert "xpath" in msg.lower()
 
 
-def test_heal_message_no_escalation_block_on_first_failure():
-    msg = healer_mod._build_heal_message(*_heal_message_fixtures(), locator_escalation=0)
-    assert "PERSISTED" not in msg
+def test_heal_message_repeated_assertion_failure_suggests_divergence_not_escalation():
+    msg = healer_mod._build_heal_message(*_with_error(_DISABLED), failure_repeats=1)
+    assert "assertion failure has PERSISTED across 1" in msg
+    assert "ESCALATE" not in msg
+    assert "locator kind itself is the problem" not in msg
+    assert "divergence" in msg
+    assert "return the code\nunchanged" in msg or "return the code unchanged" in msg
+
+
+def test_heal_message_repeated_other_failure_gets_generic_guidance():
+    msg = healer_mod._build_heal_message(
+        *_with_error("Test timeout of 30000ms exceeded."), failure_repeats=1
+    )
+    assert "PERSISTED across 1" in msg
+    assert "ESCALATE" not in msg and "divergence" not in msg
+
+
+def test_heal_message_no_repeat_block_on_first_failure():
+    for error in (_NOT_FOUND_GUARD, _DISABLED):
+        msg = healer_mod._build_heal_message(*_with_error(error), failure_repeats=0)
+        assert "PERSISTED" not in msg
+
+
+def test_heal_message_planner_selector_preference_has_recapture_exception():
+    msg = healer_mod._build_heal_message(*_heal_message_fixtures())
+    assert "unless the failing line already\nuses it; then re-capture it live" in msg
+
+
+def test_healer_prompt_planner_selector_preference_has_recapture_exception():
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "unless the failing line already uses it" in " ".join(healer_md.split())
 
 
 def test_prompts_carry_page_context_contract():
@@ -587,7 +641,7 @@ def test_planner_message_names_extra_hosts_only_when_configured(
         captured["msg"] = message
         return None
 
-    monkeypatch.setattr(planner_mod, "build_planner", lambda config, storage_state=None: None)
+    monkeypatch.setattr(planner_mod, "build_planner", lambda config, **_kwargs: None)
     monkeypatch.setattr(planner_mod, "run_agent_logged", fake_run)
     case = models.ManualTestCase(key="QA-1", title="t")
     asyncio.run(

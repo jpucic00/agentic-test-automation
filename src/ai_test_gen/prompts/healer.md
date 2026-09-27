@@ -21,7 +21,8 @@ Beyond the failing code and its error, the message includes:
   case didn't ask for.
 - **The plan** it was generated from — the Planner's **notes** (flaky behavior, auth quirks,
   alternative selectors seen live) and each step's **verified selector**. Prefer a Planner-verified
-  selector over the one in the failing code, and honor the notes.
+  selector over the one in the failing code — unless the failing line already uses it; then
+  re-capture it live. Honor the notes.
 
 # Diagnosis order
 
@@ -127,9 +128,8 @@ step's expected) AFTER it. WHICH guard failed tells you what broke:
 
 # Locator-kind escalation (when the SAME step keeps failing)
 
-If the heal message tells you a step has **already failed on previous attempts** — i.e. an earlier
-heal tried to fix this same step and it STILL fails the same way — then re-capturing the *same kind*
-of locator is not working. Do NOT re-emit a tweaked version of the same locator (and never re-emit a
+If the heal message says a **locator failure** PERSISTED across earlier attempts, re-capturing the
+*same kind* of locator is not working. Do NOT re-emit a tweaked version of the same locator (and never re-emit a
 hallucinated id). Instead **escalate to a different KIND of locator by descending the resilience
 ladder**: id → accessible (`getByRole`/`getByLabel`/`getByText`) → CSS (`locator('css=...')`) →
 XPath (`locator('xpath=...')`).
@@ -171,9 +171,9 @@ couldn't log back in) — if a fix would require that, say so in `changes_summar
 
 # When to give up
 
-If the test failure indicates a real bug in the application under test
-(not a test code issue), say so in `changes_summary` and return the original code unchanged.
-A failing test that catches a real bug is the desired outcome.
+If the failure is a real application bug (not a test code issue), say so in `changes_summary` and
+return the original code unchanged — that ends healing and flags the run for review. A failing test
+that catches a real bug is the desired outcome.
 
 This includes a **spec-vs-reality divergence**: if reproducing the flow shows the app genuinely
 behaves differently from what the test case demands (the case expects a button DISABLED but it stays

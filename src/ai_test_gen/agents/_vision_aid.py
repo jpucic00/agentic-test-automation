@@ -12,14 +12,20 @@ budget is a closure-local counter seeded from ``config.vision_max_calls``, so ea
 (one Planner run; each Healer heal attempt) gets its own ``N`` — a single shared *knob*, per-run
 counters, intentionally not one global pool (that would need an orchestrator-threaded counter).
 
+The screenshot described is the exact file ``browser_take_screenshot`` reports saving (parsed from
+its result), falling back to the newest ``*.png`` under the staleness guard. Capture failures log
+at ERROR and are counted in an optional ``VisionStats`` the orchestrator puts in the run summary.
+
 ``planner.py`` re-exports these names for back-compat with existing imports/monkeypatch targets.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +41,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_DEFAULT_STALE_AFTER_S",
     "SCREENSHOT_TOOL",
+    "VisionStats",
+    "_saved_screenshot_path",
     "_stale_after_s",
     "_latest_png",
     "_underlying_mcp",
@@ -52,6 +60,41 @@ _DEFAULT_STALE_AFTER_S = 45.0
 # The Playwright MCP tool inspect_screen drives itself (via direct_call_tool) to capture the live
 # page before describing it — see _make_screenshot_capture and inspect_screen.
 SCREENSHOT_TOOL = "browser_take_screenshot"
+
+# browser_take_screenshot reports the file it saved as a markdown link under "### Result", e.g.
+# "- [Screenshot of viewport](./page-2026-09-27T10-00-00-000Z.png)" — relative to the MCP server's
+# cwd (output/snapshots/, see playwright_mcp.build_playwright_mcp). It writes the file even with
+# imageResponses "omit" (that only drops the inline image from the response).
+_SAVED_SCREENSHOT_RE = re.compile(r"\[Screenshot of [^\]]*\]\(([^)]+)\)")
+
+
+@dataclass
+class VisionStats:
+    """Per-agent inspect_screen counters surfaced in the run summary.
+
+    ``checks`` = calls within budget; ``no_screenshot`` = those that never reached the vision model
+    because no usable screenshot existed; ``backend_errors`` = vision-model calls that failed.
+    """
+
+    checks: int = 0
+    no_screenshot: int = 0
+    backend_errors: int = 0
+
+    def describe(self) -> str:
+        """One summary phrase, e.g. ``"3 of 3 checks had no screenshot"``."""
+        if self.checks == 0:
+            return "no checks"
+        if self.no_screenshot:
+            text = f"{self.no_screenshot} of {self.checks} checks had no screenshot"
+        else:
+            text = f"{self.checks} checks, all captured"
+        if self.backend_errors:
+            text += f", {self.backend_errors} vision backend error(s)"
+        return text
+
+    @property
+    def degraded(self) -> bool:
+        return self.no_screenshot > 0 or self.backend_errors > 0
 
 
 def _stale_after_s() -> float:
@@ -78,6 +121,43 @@ def _latest_png(directory: Path) -> Path | None:
     return max(pngs, key=lambda p: p.stat().st_mtime)
 
 
+def _result_text(raw: object) -> str:
+    """Text of a ``direct_call_tool`` result: a plain string, or the text items of a list."""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts = [item if isinstance(item, str) else getattr(item, "text", None) for item in raw]
+        return "\n".join(p for p in parts if isinstance(p, str))
+    return ""
+
+
+def _saved_screenshot_path(raw: object, base_dir: Path) -> Path | None:
+    """The file ``browser_take_screenshot`` says it saved, resolved against ``base_dir``, or None.
+
+    ``base_dir`` is the MCP server's cwd (relative links are relative to it). None when the result
+    carries no parsable screenshot link (e.g. a test double, or an upstream format change) or the
+    link points outside ``base_dir`` — only the server's own output folder is ever read.
+    """
+    found = _SAVED_SCREENSHOT_RE.search(_result_text(raw))
+    if found is None:
+        return None
+    root = base_dir.resolve()
+    path = (root / found.group(1).strip()).resolve()
+    return path if path.is_relative_to(root) else None
+
+
+def _fresh_fallback_png(directory: Path) -> tuple[Path | None, float | None]:
+    """(newest ``*.png`` under ``directory``, None) if within the staleness window.
+
+    Otherwise (None, age of the stale newest PNG in seconds), or (None, None) when there is none.
+    """
+    png = _latest_png(directory)
+    if png is None:
+        return None, None
+    age = time.time() - png.stat().st_mtime
+    return (None, age) if age > _stale_after_s() else (png, None)
+
+
 def _underlying_mcp(toolset: Any) -> Any | None:
     """Walk a toolset's wrapper chain to the object exposing ``direct_call_tool``.
 
@@ -94,19 +174,20 @@ def _underlying_mcp(toolset: Any) -> Any | None:
 
 def _make_screenshot_capture(
     toolset: Any,
-) -> Callable[[], Coroutine[Any, Any, None]] | None:
+) -> Callable[[], Coroutine[Any, Any, object]] | None:
     """Build the async fn inspect_screen calls to capture the CURRENT page, or None if impossible.
 
     Drives ``browser_take_screenshot`` directly on the live MCP toolset (not through the model), so
     the PNG inspect_screen reads always reflects the page as it is NOW — removing the reliance on
     the model remembering to screenshot first (the cause of stale, previous-page vision answers).
+    Returns the raw tool result, which names the saved file (see ``_saved_screenshot_path``).
     """
     target = _underlying_mcp(toolset)
     if target is None:
         return None
 
-    async def capture() -> None:
-        await target.direct_call_tool(SCREENSHOT_TOOL, {})
+    async def capture() -> object:
+        return await target.direct_call_tool(SCREENSHOT_TOOL, {})
 
     return capture
 
@@ -114,23 +195,32 @@ def _make_screenshot_capture(
 def register_inspect_screen(
     agent: Agent[None, Any],
     config: Config,
-    capture: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    capture: Callable[[], Awaitable[object]] | None = None,
     agent_label: str = "Planner",
+    on_spent: Callable[[], None] | None = None,
+    stats: VisionStats | None = None,
 ) -> Callable[[str], Coroutine[Any, Any, str]]:
     """Attach the optional ``inspect_screen`` Vision Aid tool to a browser agent.
 
     The reasoning model stays the MCP driver; this tool just turns a fresh screenshot into a short
     text answer (via ``ask_vision``) so the text-only agent can "see". When ``capture`` is supplied
     (the live-browser screenshot fn from ``_make_screenshot_capture``), inspect_screen takes the
-    screenshot ITSELF immediately before describing it, so the image always reflects the current
-    page — not a stale, previous-page shot the model forgot to refresh. ``capture=None`` keeps the
-    old passive behaviour (read whatever PNG is newest on disk) for unit tests. Per-run call budget
+    screenshot ITSELF immediately before describing it and reads the exact file the capture
+    reports, so the image always reflects the current page — not a stale, previous-page shot. If
+    that file can't be located it falls back to the newest PNG under the staleness guard; a capture
+    that yields no usable screenshot logs at ERROR. ``capture=None`` keeps the old passive
+    behaviour (read whatever PNG is newest on disk) for unit tests. Per-run call budget
     = ``config.vision_max_calls``. Advisory only — it never returns a selector. ``agent_label``
     (e.g. ``"Planner"`` / ``"Healer"``) only tags the log lines so a run shows which agent is
-    looking. Also returns the tool function (the registration target), which unit tests call.
+    looking. ``on_spent`` fires once inspect_screen can no longer help this run (last budgeted
+    call made, or the vision backend failed) — the builders pass the locator guard's
+    ``disable_vision`` so its steer stops sending the agent here. ``stats`` (optional) collects
+    this run's check / no-screenshot / backend-error counts for the run summary. Also returns the
+    tool function (the registration target), which unit tests call.
     """
     max_calls = config.vision_max_calls
     calls_made = 0
+    counts = stats if stats is not None else VisionStats()
 
     async def inspect_screen(question: str) -> str:
         """Look at the CURRENT page and answer a question about what is visible.
@@ -154,59 +244,95 @@ def register_inspect_screen(
             )
             return (
                 f"Vision budget reached ({max_calls} calls this run). Proceed using the "
-                "accessibility snapshot."
+                "accessibility snapshot and do not call inspect_screen again this run."
             )
+        counts.checks += 1
         # Capture the page as it is NOW so the description can't be of a page the agent has already
-        # navigated away from. On failure, degrade to the newest existing PNG (the staleness guard
-        # below still protects against describing an ancient leftover as current).
+        # navigated away from, and read the exact file the capture saved. When that file can't be
+        # located, degrade to the newest existing PNG (the staleness guard below still protects
+        # against describing an ancient leftover as current).
+        png: Path | None = None
+        stale_age: float | None = None
+        captured = False
         if capture is not None:
             try:
-                await capture()
+                raw = await capture()
             except Exception as exc:  # noqa: BLE001 — any capture failure must degrade, not abort
-                logger.warning(
-                    "%s vision: self-capture via %s failed (%s) — falling back to the newest "
-                    "existing screenshot under the staleness guard",
+                logger.error(
+                    "%s Vision Aid is not working in this run: screenshot capture failed (%s)",
                     agent_label,
-                    SCREENSHOT_TOOL,
                     exc,
                 )
-        png = _latest_png(config.snapshots_dir)
+            else:
+                captured = True
+                saved = _saved_screenshot_path(raw, config.snapshots_dir)
+                if saved is not None and saved.is_file():
+                    png = saved
+                else:
+                    logger.warning(
+                        "%s vision: %s did not report an existing file (%s) — falling back to "
+                        "the newest PNG in %s",
+                        agent_label,
+                        SCREENSHOT_TOOL,
+                        saved or "no file link in its result",
+                        config.snapshots_dir,
+                    )
         if png is None:
-            logger.info(
-                "%s vision: inspect_screen called but no screenshot in %s yet — asked the model to "
-                "browser_take_screenshot first",
-                agent_label,
-                config.snapshots_dir,
+            png, stale_age = _fresh_fallback_png(config.snapshots_dir)
+        if png is None:
+            counts.no_screenshot += 1
+            stale_after = _stale_after_s()
+            problem = (
+                "no PNG there"
+                if stale_age is None
+                else f"newest PNG is {stale_age:.0f}s old, > {stale_after:.0f}s — raise "
+                "PLANNER_VISION_STALE_S if the gateway round-trip is the cause"
             )
+            if captured:
+                logger.error(
+                    "%s Vision Aid is not working in this run: %s produced no usable file in "
+                    "%s (%s) — check the MCP server's --output-dir/cwd",
+                    agent_label,
+                    SCREENSHOT_TOOL,
+                    config.snapshots_dir,
+                    problem,
+                )
+            else:
+                logger.info(
+                    "%s vision: inspect_screen had no screenshot to use in %s (%s)",
+                    agent_label,
+                    config.snapshots_dir,
+                    problem,
+                )
+            if capture is not None:
+                return (
+                    "Vision Aid could not capture the screen. Proceed using the "
+                    "accessibility snapshot."
+                )
+            if stale_age is not None:
+                return (
+                    f"The latest screenshot is stale (older than {stale_after:.0f}s). Call "
+                    "browser_take_screenshot first, then retry inspect_screen."
+                )
             return (
                 "No screenshot is available yet. Call browser_take_screenshot first, then retry "
                 "inspect_screen."
             )
-        stale_after = _stale_after_s()
-        age = time.time() - png.stat().st_mtime
-        if age > stale_after:
-            logger.info(
-                "%s vision: inspect_screen called but the latest screenshot is %.0fs old "
-                "(> %.0fs) — asked the model to recapture; raise PLANNER_VISION_STALE_S if the "
-                "gateway round-trip is the cause",
-                agent_label,
-                age,
-                stale_after,
-            )
-            return (
-                f"The latest screenshot is stale (older than {stale_after:.0f}s). Call "
-                "browser_take_screenshot first, then retry inspect_screen."
-            )
         calls_made += 1
         logger.info("%s vision check %d/%d: %s", agent_label, calls_made, max_calls, question)
+        if calls_made >= max_calls and on_spent is not None:
+            on_spent()
         try:
             answer = await ask_vision(config, question, png.read_bytes())
         except Exception as exc:  # noqa: BLE001 — a sensor failure must degrade, never abort the run
+            counts.backend_errors += 1
             logger.warning(
                 "%s vision: Vision Aid call failed (%r) — continuing without vision",
                 agent_label,
                 exc,
             )
+            if on_spent is not None:
+                on_spent()
             return (
                 "Vision Aid is unavailable right now (backend error). Proceed using the "
                 "accessibility snapshot and do not call inspect_screen again this run."
@@ -217,7 +343,7 @@ def register_inspect_screen(
     agent.tool_plain(inspect_screen)
     logger.info(
         "%s vision sensor ENABLED: up to %d inspect_screen call(s)/run via %s "
-        "(staleness window %.0fs); reads the newest *.png from %s",
+        "(staleness window %.0fs); reads screenshots saved under %s",
         agent_label,
         max_calls,
         config.vision_model,
