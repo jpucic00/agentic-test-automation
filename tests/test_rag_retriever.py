@@ -511,6 +511,20 @@ class TestRankingIsolation:
         assert "Pipeline solve" in context.same_ticket_block
         assert "Legacy solve" not in context.same_ticket_block + context.planner_hints
 
+    @pytest.mark.parametrize("order", ["selenium-first", "playwright-first"])
+    def test_same_ticket_prefers_playwright_import_over_selenium_regardless_of_order(
+        self, cfg, no_embed, rerank_calls, order
+    ) -> None:
+        # With no pipeline record, the pick must not depend on the store's scroll order.
+        selenium = _record("QA-77", "Selenium solve", source="selenium-import")
+        playwright = _record("QA-77", "Playwright solve", source="playwright-import")
+        pair = [(selenium, 0.9), (playwright, 0.8)]
+        store = FakeStore(pair if order == "selenium-first" else pair[::-1])
+
+        context = retrieve(cfg, _case("QA-77"), store=store)
+
+        assert "Playwright solve" in context.same_ticket_block
+
     def test_knowledge_and_ui_quotas_are_independent(
         self, cfg, no_embed, rerank_calls
     ) -> None:

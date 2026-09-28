@@ -139,6 +139,16 @@ def test_parse_count_result_returns_none_on_garbage():
     assert parse_count_result("### Error\nsomething broke") is None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [{"count": None, "visible": 0}, {"count": "3", "visible": 1}, {"count": 1}, {"count": True}],
+)
+def test_parse_count_result_rejects_non_integer_counts(payload):
+    # A page script can patch the builtins the count uses; a bad payload must degrade to
+    # "unreadable", never raise out of the tool and abort the agent run.
+    assert parse_count_result(_evaluate_result(payload)) is None
+
+
 def test_format_count_verdicts():
     assert "exactly 1 element" in format_count("css=a", {"count": 1, "visible": 1})
     assert "unique" in format_count("css=a", {"count": 1, "visible": 0})

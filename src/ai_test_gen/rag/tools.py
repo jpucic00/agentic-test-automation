@@ -71,6 +71,18 @@ def _is_text_file(path: Path) -> bool:
     return path.suffix.lower() in _TEXT_EXTENSIONS
 
 
+def _stays_inside(path: Path, root: Path) -> bool:
+    """Whether ``path`` still lies under ``root`` once symlinks are followed.
+
+    The walkers below reach files via ``rglob`` rather than :meth:`RepoTools._resolve`, so
+    a symlinked file inside the corpus would otherwise be read from wherever it points.
+    """
+    try:
+        return path.resolve().is_relative_to(root)
+    except OSError:
+        return False
+
+
 class RepoTools:
     """Sandboxed, read-only file access over one or more corpus roots.
 
@@ -182,6 +194,8 @@ class RepoTools:
                     continue
                 if any(part in _IGNORE_DIRS for part in path.relative_to(root).parts):
                     continue
+                if not _stays_inside(path, root):
+                    continue
                 found.append(self._address(path))
         return found
 
@@ -251,6 +265,8 @@ class RepoTools:
                     continue
                 rel_parts = path.relative_to(root).parts
                 if any(part in _IGNORE_DIRS for part in rel_parts):
+                    continue
+                if not _stays_inside(path, root):
                     continue
                 address = self._address(path)
                 if glob and not _glob_matches(glob, address):

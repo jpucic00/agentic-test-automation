@@ -160,6 +160,29 @@ class TestRerankErrors:
         with pytest.raises(RagGatewayError, match="non-numeric"):
             _rerank_with_body(cfg, {"results": [{"index": 0, "score": "n/a"}]})
 
+    @pytest.mark.parametrize(
+        "item",
+        [
+            {"index": 0, "score": float("nan")},
+            {"index": 0, "score": float("inf")},
+            {"index": 0.5, "score": 0.9},
+        ],
+    )
+    def test_non_finite_score_or_fractional_index_raises(self, cfg, item) -> None:
+        # A NaN score passes every `score < min_score` gate; a fractional index would be
+        # truncated onto the wrong document.
+        # Sent as raw text: a real gateway can emit the NaN/Infinity tokens Python's json
+        # parses, which httpx's own encoder would refuse to produce.
+        body = json.dumps({"results": [item]}).encode()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+        with _client(handler) as http, pytest.raises(
+            RagGatewayError, match="non-finite or fractional"
+        ):
+            rerank(cfg, "user login", _DOCS, top_n=2, client=http)
+
 
 # --- error hygiene + client policy ---------------------------------------------
 

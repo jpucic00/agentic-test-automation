@@ -18,6 +18,7 @@ headers — the API key stays out of logs (house rule from the run-log work).
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -130,13 +131,21 @@ def rerank(
                 f"/rerank result item lacks index/score: {_excerpt(item)}"
             )
         try:
-            idx, val = int(index), float(score)
+            idx_f, val = float(index), float(score)
         except (TypeError, ValueError):
             # Shape errors surface as RagGatewayError (module contract), never
             # as a bare ValueError from coercing a garbage gateway field.
             raise RagGatewayError(
                 f"/rerank result item has a non-numeric index/score: {_excerpt(item)}"
             ) from None
+        # json accepts NaN/Infinity: a NaN score slips past every `score < cutoff` gate
+        # and scrambles the sort, and int(2.9) would silently pick the wrong document.
+        if not (math.isfinite(idx_f) and idx_f.is_integer() and math.isfinite(val)):
+            raise RagGatewayError(
+                f"/rerank result item has a non-finite or fractional index/score: "
+                f"{_excerpt(item)}"
+            )
+        idx = int(idx_f)
         if not 0 <= idx < len(documents):
             raise RagGatewayError(
                 f"/rerank returned index {index} outside the {len(documents)} documents sent"

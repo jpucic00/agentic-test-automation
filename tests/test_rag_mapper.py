@@ -139,6 +139,13 @@ def _drop_draft_key(cache_path: Path) -> None:
     cache_path.write_text(json.dumps(data))
 
 
+def _garble_section_hashes(cache_path: Path) -> None:
+    data = json.loads(cache_path.read_text())
+    data["section_hashes"] = []
+    data["corpus_files"] = 5
+    cache_path.write_text(json.dumps(data))
+
+
 class TestGeneration:
     def test_produces_a_cited_sectioned_map(self, cfg: Config, corpus: Path) -> None:
         stub = FakeMapper()
@@ -279,6 +286,7 @@ class TestPerSectionCache:
             pytest.param(_write_invalid_json, id="invalid-json"),
             pytest.param(_write_garbage_draft, id="garbage-draft"),
             pytest.param(_drop_draft_key, id="missing-draft"),
+            pytest.param(_garble_section_hashes, id="non-mapping-bookkeeping"),
         ],
     )
     def test_corrupted_cache_is_a_miss_not_a_crash(
@@ -379,3 +387,21 @@ class TestPromptContract:
         assert "never paraphrase a selector, never invent one" in prompt
         assert "prefer flagging uncertainty here over guessing" in prompt
         assert 'A wrong citation is worse than an honest "unmapped"' in prompt
+
+
+def test_mapper_uses_the_distill_request_deadline(cfg: Config, corpus: Path, monkeypatch) -> None:
+    # A whole-corpus MapDraft turn is as long as a distill turn; the browser agents'
+    # 180s default would cut a healthy Mapper turn off and pay for it twice on retry.
+    from ai_test_gen.rag import mapper as mapper_mod
+    from ai_test_gen.rag.distiller import _DISTILL_TIMEOUT_S
+
+    seen: dict[str, float | None] = {}
+    real = mapper_mod.build_openai_model
+
+    def spy(config, model_name, **kwargs):
+        seen["timeout_s"] = kwargs.get("timeout_s")
+        return real(config, model_name, **kwargs)
+
+    monkeypatch.setattr(mapper_mod, "build_openai_model", spy)
+    mapper_mod.build_mapper(cfg, RepoTools([corpus]))
+    assert seen["timeout_s"] == _DISTILL_TIMEOUT_S

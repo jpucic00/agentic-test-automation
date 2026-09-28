@@ -218,6 +218,25 @@ def test_protocol_relative_and_non_http_gotos_are_violations():
     assert _check("await page.goto('data:text/html,hi');")
 
 
+@pytest.mark.parametrize(
+    "goto",
+    [
+        r"await page.goto('/\\evil.com');",  # JS value /\evil.com — WHATWG reads //evil.com
+        r"await page.goto('\/\/evil.com');",  # JS value //evil.com
+        r"await page.goto('\x68ttps://evil.com');",  # JS value https://evil.com
+        "await page.goto('/\t/evil.com');",  # URL parsing drops the tab
+    ],
+)
+def test_escaped_or_control_char_goto_is_a_violation(goto):
+    # The check reads source text, the browser reads the decoded string: anything that
+    # makes those differ must be refused, or a "relative" path lands on another host.
+    assert _check(goto)
+
+
+def test_whitespace_before_goto_paren_is_still_checked():
+    assert _check("await page.goto ('https://evil.com/');")
+
+
 def test_primary_origin_hard_coded_is_blocked_on_a_secondary_environment():
     code = f"await page.goto('{STAGING}/');"
     assert _check(code) == []  # fine on the primary

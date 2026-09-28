@@ -46,8 +46,9 @@ available even though each test run starts with an empty browser.
   inputs are label-only (`getByLabel`, no id) and the New-note/Save/Cancel/Edit/Delete/Log-out
   controls plus the delete dialog are non-semantic `<div>`s with no role/id — those resolve to a
   verified CSS/XPath/text locator. So expect the full ladder, not `getByTestId` everywhere.)
-- Capture with Playwright MCP (`browser_generate_locator`, plus the `browser_verify_*` tools to
-  confirm an authored CSS/XPath). Record only a locator you verified resolves; never invent one.
+- Capture with Playwright MCP (`browser_generate_locator`; for an authored CSS/XPath, pass it as a
+  raw `xpath=`/`css=` target and confirm `count_matches` reports exactly 1). Record only a locator
+  you verified resolves; never invent one.
 - Per-note controls are generated per row at run time. Locate a specific note by its visible
   title, then act on the edit/delete control in that same row — don't rely on a fixed per-note id.
 

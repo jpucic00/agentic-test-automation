@@ -195,9 +195,14 @@ class SuiteMapResult:
 # --- the agent ---------------------------------------------------------------
 def build_mapper(config: Config, tools: RepoTools) -> Agent[None, MapDraft]:
     """Build the Mapper agent: DISTILLER_MODEL + the shared read-only repo tools."""
-    from .distiller import seeding_model_settings  # local: avoid a module-load cycle
+    from .distiller import (  # local: avoid a module-load cycle
+        _DISTILL_TIMEOUT_S,
+        seeding_model_settings,
+    )
 
-    model = build_openai_model(config, config.distiller_model)
+    # A whole-corpus MapDraft turn runs as long as a distill turn, so it gets the
+    # Distiller's request deadline rather than the browser agents' AGENT_REQUEST_TIMEOUT_S.
+    model = build_openai_model(config, config.distiller_model, timeout_s=_DISTILL_TIMEOUT_S)
     system_prompt = (PROMPTS_DIR / "mapper.md").read_text()
     agent = Agent(
         model=model,
@@ -413,6 +418,10 @@ def _load_cache(path: Path) -> dict | None:
         # A truncated or hand-edited cache is a cache miss, never an aborted
         # seeding run — every consumer re-validates data["draft"] downstream.
         return None
+    if not isinstance(data.get("corpus_files"), dict) or not isinstance(
+        data.get("section_hashes"), dict
+    ):
+        return None  # _stale_sections reads both as mappings
     return data
 
 

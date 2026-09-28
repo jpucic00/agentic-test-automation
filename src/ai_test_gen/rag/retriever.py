@@ -52,6 +52,8 @@ _KNOWLEDGE_WORD_BUDGET = 100
 
 # Sources whose specs may be shown to the Generator as style examples (§1.6).
 _EXAMPLE_SOURCES = ("pipeline", "playwright-import")
+# Which record wins the same-ticket slot when a key has several (lower = preferred).
+_SAME_TICKET_PREFERENCE = {"pipeline": 0, "playwright-import": 1, "manual": 2, "selenium-import": 3}
 
 
 class RetrievedContext(BaseModel):
@@ -148,7 +150,11 @@ def _retrieve(
 
     # Same-ticket prior solve (§1.19): fetched by key, not ranked; the pipeline
     # record wins over its legacy twin. Its key is kept out of the hint pool.
-    same_ticket = next(iter(_supersede_legacy_twins(ticket_records)), None)
+    # When only legacy records exist, a Playwright spec beats a Selenium one (it can also
+    # feed generator_examples), and record_id breaks ties so the pick never depends on
+    # the store's scroll order.
+    ranked_ticket = sorted(_supersede_legacy_twins(ticket_records), key=_same_ticket_rank)
+    same_ticket = ranked_ticket[0] if ranked_ticket else None
     ui_pool = _supersede_legacy_twins(
         [record for record, _ in ui_hits if record.xray_key != case.key]
     )
@@ -199,6 +205,10 @@ def _retrieve(
             for record in injected.values()
         ],
     )
+
+
+def _same_ticket_rank(record: KBRecord) -> tuple[int, str]:
+    return _SAME_TICKET_PREFERENCE.get(record.source, 9), record.record_id
 
 
 def _supersede_legacy_twins(records: list[KBRecord]) -> list[KBRecord]:

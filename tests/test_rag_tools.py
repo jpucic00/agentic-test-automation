@@ -76,6 +76,17 @@ class TestSandbox:
         assert "TOP-SECRET" not in out
         assert tools.files_opened == set()
 
+    def test_symlink_escape_is_skipped_by_search_and_inventory(
+        self, corpus: Path, tmp_path: Path
+    ) -> None:
+        # search/inventory walk the tree with rglob instead of _resolve, so they need
+        # their own containment check or the model reads the link target via a regex.
+        (tmp_path / "outside.txt").write_text("TOP-SECRET")
+        (corpus / "leak.txt").symlink_to(tmp_path / "outside.txt")
+        tools = RepoTools([corpus])
+        assert "TOP-SECRET" not in tools.search("TOP")
+        assert "leak.txt" not in tools.inventory()
+
     def test_nul_byte_path_is_a_not_found_reply_not_an_exception(self, corpus: Path) -> None:
         # A garbage model-supplied path (embedded NUL makes .resolve() raise) must yield
         # the normal not-found tool reply, never an exception up the agent run.

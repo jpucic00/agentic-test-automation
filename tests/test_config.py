@@ -29,7 +29,7 @@ _BASE_ENV = {
     "GITLAB_PROJECT_ID": "qa/playwright-tests",
 }
 
-# Staging creds are optional (legacy — only save_auth_state.py consumes them).
+# Staging creds are optional (unused by the pipeline; logins come from project_context.md).
 _LEGACY_OPTIONAL_VARS = ("STAGING_USERNAME", "STAGING_PASSWORD")
 
 # Every env var that must trigger a clear error when missing.
@@ -125,8 +125,7 @@ def test_missing_required_var_raises_clear_message(env, missing):
 
 
 def test_staging_creds_are_optional(env):
-    """STAGING_USERNAME/PASSWORD are legacy (save_auth_state.py only) — the pipeline
-    must load without them."""
+    """STAGING_USERNAME/PASSWORD are unused by the pipeline — it must load without them."""
     for var in _LEGACY_OPTIONAL_VARS:
         env.delenv(var, raising=False)
     cfg = load_config()
@@ -193,6 +192,21 @@ def test_env_marker_override_allows_custom_non_prod_host(env):
     env.setenv("STAGING_BASE_URL", "https://uat.acme.com")
     env.setenv("NON_PROD_URL_MARKERS", "uat, sandbox")
     assert load_config().staging_base_url == "https://uat.acme.com"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # urllib reads host staging.example.com; the browser resolves prod.example.com.
+        "https://prod.example.com\\@staging.example.com",
+        # A non-http(s) entry would pass the marker check but drop out of the allow-list.
+        "ftp://staging.example.com",
+    ],
+)
+def test_base_url_must_parse_as_the_browser_sees_it(env, url):
+    env.setenv("STAGING_BASE_URL", f"https://staging.example.com,{url}")
+    with pytest.raises(ProductionURLError, match="not a full http"):
+        load_config()
 
 
 def test_url_without_host_raises(env):

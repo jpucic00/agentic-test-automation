@@ -203,7 +203,19 @@ def parse_count_result(raw: Any) -> dict[str, Any] | None:
             value = json.loads(value)
     except (json.JSONDecodeError, TypeError):
         return None
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return None
+    if "error" in value:
+        return value
+    # The payload comes from the page context, where scripts can patch JSON/Array
+    # builtins; a non-integer count must read as unreadable, not crash format_count.
+    if not all(_is_count(value.get(key)) for key in ("count", "visible")):
+        return None
+    return value
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def format_count(selector: str, payload: dict[str, Any]) -> str:

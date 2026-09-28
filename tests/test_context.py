@@ -20,6 +20,9 @@ from ai_test_gen.agents._context import (
     build_model_settings,
     reasoning_effort,
 )
+from ai_test_gen.agents.generator import build_generator
+from ai_test_gen.agents.healer import build_healer
+from ai_test_gen.agents.planner import build_planner
 
 _BASE_PROMPT = "# Base agent prompt"
 _CONTEXT_TEXT = "PROJECT-CONTEXT-MARKER conventions go here."
@@ -230,3 +233,19 @@ def test_agent_output_retries_default_env_and_invalid(monkeypatch):
     assert agent_output_retries() == 25
     monkeypatch.setenv("AGENT_OUTPUT_RETRIES", "bogus")
     assert agent_output_retries() == 15
+
+
+@pytest.mark.parametrize("raw", ["0", "-3"])
+def test_agent_output_retries_floors_at_one(monkeypatch, raw):
+    # Zero output retries would kill a run on the first empty/malformed turn.
+    monkeypatch.setenv("AGENT_OUTPUT_RETRIES", raw)
+    assert agent_output_retries() == 1
+
+
+@pytest.mark.parametrize("build", [build_planner, build_healer, build_generator])
+def test_every_agent_builds_with_the_output_retry_budget(cfg, monkeypatch, build):
+    # The knob only helps if each agent actually receives it: without an explicit output
+    # budget pydantic-ai falls back to the tool budget, which is what killed long runs.
+    # _max_output_retries is pydantic-ai's store for AgentRetries(output=...).
+    monkeypatch.setenv("AGENT_OUTPUT_RETRIES", "7")
+    assert build(cfg)._max_output_retries == 7

@@ -29,7 +29,12 @@ _INERT_PAGE_PREFIXES = (BLANK_PAGE, "chrome-error:")
 # A URL that starts with a scheme ("http:", "about:", "localhost:" …) — WHATWG-style.
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 # The first argument of a goto(...) call when it is a string literal.
-_GOTO_RE = re.compile(r"""\bgoto\(\s*(?:'([^'\n]*)'|"([^"\n]*)"|`([^`]*)`)""")
+_GOTO_RE = re.compile(r"""\bgoto\s*\(\s*(?:'([^'\n]*)'|"([^"\n]*)"|`([^`]*)`)""")
+# Characters that make a goto literal's source text differ from the URL the browser
+# resolves: a backslash is a JS escape (\x68, \/) or a WHATWG path separator (/\host),
+# and tab/CR/LF are silently removed by URL parsing. Either can turn a "relative" path
+# into another host, so such a target is refused rather than guessed at.
+_AMBIGUOUS_TARGET_CHARS = ("\\", "\t", "\r", "\n")
 
 
 def url_origin(url: str) -> str | None:
@@ -155,6 +160,12 @@ def preflight_violations(
     run_allowed = {*extra_origins, *([base_origin] if base_origin else [])}
     violations: list[str] = []
     for target in spec_goto_targets(code):
+        if any(ch in target for ch in _AMBIGUOUS_TARGET_CHARS):
+            violations.append(
+                f"spec goto({target!r}) contains a backslash or control character, so the "
+                "browser may resolve it to a different host — write a plain URL or path"
+            )
+            continue
         url = f"{base_scheme}:{target}" if target.startswith("//") else target
         if not _SCHEME_RE.match(url) or url == BLANK_PAGE:
             continue  # baseURL-relative

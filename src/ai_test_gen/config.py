@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -73,13 +73,19 @@ def _non_prod_markers() -> tuple[str, ...]:
 
 
 def _assert_non_prod_url(url: str, markers: Sequence[str]) -> None:
-    """Fail-closed guardrail: raise unless ``url``'s host contains a non-prod marker."""
-    host = (urlparse(url).hostname or "").lower()
-    if not host:
+    """Fail-closed guardrail: raise unless ``url``'s host contains a non-prod marker.
+
+    The host is read from the same parse the allow-list uses (``url_origin``), so a URL
+    the browser would resolve to a different host than ``urllib`` (e.g. a ``\\@`` trick)
+    is rejected instead of passing on the wrong host.
+    """
+    origin = url_origin(url)
+    if origin is None:
         raise ProductionURLError(
-            f"STAGING_BASE_URL={url!r} has no parseable host — include the scheme, "
-            "e.g. https://staging.example.com"
+            f"STAGING_BASE_URL={url!r} is not a full http(s) URL with a host — include "
+            "the scheme, e.g. https://staging.example.com"
         )
+    host = (urlsplit(origin).hostname or "").lower()
     if not any(marker in host for marker in markers):
         raise ProductionURLError(
             f"Refusing to run: STAGING_BASE_URL host {host!r} contains none of the "
@@ -317,8 +323,8 @@ class Config:
 
     # Staging app. staging_base_url is the PRIMARY environment (the first STAGING_BASE_URL
     # entry): planning, generation and healing run against it; staging_base_urls (below)
-    # holds every environment. Username/password are LEGACY: the pipeline authenticates
-    # from the test users in project_context.md; only scripts/save_auth_state.py reads these.
+    # holds every environment. Username/password are unused by the pipeline, which
+    # authenticates with the test users in project_context.md; they stay optional fields.
     staging_base_url: str
     staging_username: str | None
     staging_password: str | None
@@ -490,8 +496,8 @@ def load_config() -> Config:
         staging_base_url=staging_base_urls[0],
         staging_base_urls=staging_base_urls,
         staging_extra_urls=staging_extra_urls,
-        # Optional: only the legacy save_auth_state.py needs these; the pipeline's
-        # test logins come from project_context.md, so a missing value is fine.
+        # Optional and unused by the pipeline: test logins come from
+        # project_context.md, so a missing value is fine.
         staging_username=os.environ.get("STAGING_USERNAME"),
         staging_password=os.environ.get("STAGING_PASSWORD"),
         gitlab_base_url=_required_if("GITLAB_BASE_URL", required=gitlab_enabled),
