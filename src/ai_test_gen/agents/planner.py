@@ -35,6 +35,7 @@ from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
 from ._match_count import register_count_matches
+from ._reasoning_only import ReasoningOnlyRetry
 from ._run_failure import run_agent_logged
 
 # Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
@@ -138,7 +139,9 @@ def build_planner(
         retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
         # Long explorations accumulate dozens of stale page snapshots; keep only the
         # newest few so the model stays out of its long-context degradation zone.
-        capabilities=[ProcessHistory(trim_stale_snapshots)],
+        # A reasoning-only reply (the call written into the reasoning, never made) gets a
+        # retry prompt that names the problem instead of pydantic-ai's generic one.
+        capabilities=[ProcessHistory(trim_stale_snapshots), ReasoningOnlyRetry()],
     )
     # Optional Vision Aid sensor (AGENT_VISION). Registered only when enabled
     # so a disabled run's toolset — and behaviour — is identical to before. The capture handle

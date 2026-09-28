@@ -56,6 +56,7 @@ def test_records_merge_by_label_and_totals_sum_every_record():
         "output_tokens": 321,
         "cache_read_tokens": 40,
         "reasoning_tokens": 7,
+        "reasoning_only_retries": 0,
         "wall_s": 100.0,  # the whole run, not a sum of the (nested) agent walls
     }
     assert json.loads(json.dumps(report)) == report  # plain JSON-serialisable data
@@ -85,10 +86,10 @@ def test_format_usage_is_an_aligned_table_with_a_total_line():
     table = format_usage(log.summary(420.0))
     lines = table.splitlines()
 
-    assert lines[0].split() == ["agent", "model", "requests", "in", "out", "wall"]
-    assert lines[1].split() == ["Planner", "gpt-oss-120b", "41", "512,340", "6,210", "4m03s"]
+    assert lines[0].split() == ["agent", "model", "requests", "in", "out", "nudges", "wall"]
+    assert lines[1].split() == ["Planner", "gpt-oss-120b", "41", "512,340", "6,210", "0", "4m03s"]
     assert lines[2].endswith("(aborted)")
-    assert lines[3].split() == ["total", "50", "600,340", "7,710", "7m00s"]
+    assert lines[3].split() == ["total", "50", "600,340", "7,710", "0", "7m00s"]
     # Right-aligned numeric columns: the "requests" figures end in the same column.
     assert lines[1].index("41") + 2 == lines[3].index("50") + 2
 

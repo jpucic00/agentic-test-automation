@@ -75,7 +75,8 @@ cd packages/demo-notes-app && npm install && npm run dev
 uv run python scripts/run_one.py NOTE-2 --verbose
 
 # Or run several cases one after another and get one comparison table
-# (status, heals, model requests, tokens, time per case + a JSON file with every result):
+# (status, heals, model requests, tokens, reasoning-only nudges, time per case + a JSON file
+# with every result):
 uv run python scripts/run_batch.py NOTE-1 NOTE-2 NOTE-3
 ```
 

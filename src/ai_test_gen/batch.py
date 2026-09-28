@@ -3,9 +3,10 @@
 Each key runs through the normal pipeline (``orchestrator.process_test_case``) with its own
 run log under ``output/runs/``. A failing key never stops the batch: its exception is logged
 with a traceback and recorded as status ``error``. At the end the batch prints one row per key
-(status, heal attempts, model requests, tokens, wall time) plus totals, and writes every
-result — including the per-agent ``usage`` records — to ``output/runs/batch-<stamp>.json`` so
-two batches (e.g. before and after a prompt change) can be compared.
+(status, heal attempts, model requests, tokens, reasoning-only nudges, wall time) plus totals,
+and writes every result — including the per-agent ``usage`` records — to
+``output/runs/batch-<stamp>.json`` so two batches (e.g. before and after a prompt change) can be
+compared.
 
 Keys run strictly one at a time: they share ``output/`` (snapshots, test results), and the way
 to scale out is one CI job per key, not threads here.
@@ -47,20 +48,22 @@ def _note(result: dict[str, Any], width: int = 70) -> str:
 
 def format_batch(results: list[dict[str, Any]]) -> str:
     """Aligned table: one row per key, then a total row."""
-    header = ("key", "status", "heals", "requests", "in", "out", "wall", "note")
+    header = ("key", "status", "heals", "requests", "in", "out", "nudges", "wall", "note")
     rows: list[tuple[str, ...]] = [header]
-    sums = {"heals": 0, "requests": 0, "in": 0, "out": 0, "wall": 0.0}
+    sums = {"heals": 0, "requests": 0, "in": 0, "out": 0, "nudges": 0, "wall": 0.0}
     for result in results:
         total = (result.get("usage") or {}).get("total") or {}
         heals = int(result.get("heal_attempts", 0) or 0)
         requests = int(total.get("requests", 0))
         tokens_in = int(total.get("input_tokens", 0))
         tokens_out = int(total.get("output_tokens", 0))
+        nudges = int(total.get("reasoning_only_retries", 0))
         wall = float(result.get("batch_wall_s", total.get("wall_s", 0.0)))
         sums["heals"] += heals
         sums["requests"] += requests
         sums["in"] += tokens_in
         sums["out"] += tokens_out
+        sums["nudges"] += nudges
         sums["wall"] += wall
         rows.append(
             (
@@ -70,6 +73,7 @@ def format_batch(results: list[dict[str, Any]]) -> str:
                 str(requests),
                 f"{tokens_in:,}",
                 f"{tokens_out:,}",
+                str(nudges),
                 format_duration(wall),
                 _note(result),
             )
@@ -83,11 +87,12 @@ def format_batch(results: list[dict[str, Any]]) -> str:
             str(sums["requests"]),
             f"{sums['in']:,}",
             f"{sums['out']:,}",
+            str(sums["nudges"]),
             format_duration(sums["wall"]),
             "",
         )
     )
-    numeric = {2, 3, 4, 5, 6}
+    numeric = {2, 3, 4, 5, 6, 7}
     widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
     return "\n".join(
         "  ".join(

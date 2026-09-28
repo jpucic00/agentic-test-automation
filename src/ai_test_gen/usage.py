@@ -9,6 +9,10 @@ pydantic-ai increments in place after every model response — so a run that abo
 failure. ``requests`` counts completed model responses; a request that died without a response
 carries no token counts to report.
 
+Reasoning-only replies the Planner/Healer were nudged about (``agents/_reasoning_only.py``) are
+counted in the run's ``RunUsage.details`` under ``REASONING_ONLY_RETRIES`` and reported per record
+as ``reasoning_only_retries`` (the ``nudges`` column).
+
 Records merge by label: the Vision Aid calls of one agent run (``"Planner vision"``,
 ``"Healer attempt 2 vision"``) add up into one record. ``UsageLog.summary`` renders plain dicts and
 numbers (JSON-serialisable) for the run summary; ``format_usage`` turns that into an aligned table.
@@ -28,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 Outcome = Literal["ok", "error"]
 
+REASONING_ONLY_RETRIES = "reasoning_only_retries"
+
 
 class AgentUsageDict(TypedDict):
     agent: str
@@ -39,6 +45,7 @@ class AgentUsageDict(TypedDict):
     output_tokens: int
     cache_read_tokens: int
     reasoning_tokens: int
+    reasoning_only_retries: int
     wall_s: float
     outcome: Outcome
 
@@ -49,6 +56,7 @@ class UsageTotals(TypedDict):
     output_tokens: int
     cache_read_tokens: int
     reasoning_tokens: int
+    reasoning_only_retries: int
     wall_s: float
 
 
@@ -70,6 +78,7 @@ class AgentUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     reasoning_tokens: int = 0
+    reasoning_only_retries: int = 0
     wall_s: float = 0.0
     outcome: Outcome = "ok"
 
@@ -82,6 +91,7 @@ class AgentUsage:
         self.output_tokens += usage.output_tokens
         self.cache_read_tokens += usage.cache_read_tokens
         self.reasoning_tokens += usage.details.get("reasoning_tokens", 0)
+        self.reasoning_only_retries += usage.details.get(REASONING_ONLY_RETRIES, 0)
         self.wall_s += wall_s
         if not ok:
             self.outcome = "error"
@@ -97,6 +107,7 @@ class AgentUsage:
             output_tokens=self.output_tokens,
             cache_read_tokens=self.cache_read_tokens,
             reasoning_tokens=self.reasoning_tokens,
+            reasoning_only_retries=self.reasoning_only_retries,
             wall_s=round(self.wall_s, 2),
             outcome=self.outcome,
         )
@@ -130,6 +141,7 @@ class UsageLog:
                 output_tokens=sum(r.output_tokens for r in self.records),
                 cache_read_tokens=sum(r.cache_read_tokens for r in self.records),
                 reasoning_tokens=sum(r.reasoning_tokens for r in self.records),
+                reasoning_only_retries=sum(r.reasoning_only_retries for r in self.records),
                 wall_s=round(wall_s, 2),
             ),
         )
@@ -180,7 +192,7 @@ def format_duration(seconds: float) -> str:
 
 def format_usage(summary: UsageSummary) -> str:
     """Aligned table: one line per agent record plus a total line."""
-    header = ("agent", "model", "requests", "in", "out", "wall", "")
+    header = ("agent", "model", "requests", "in", "out", "nudges", "wall", "")
     rows: list[tuple[str, ...]] = [header]
     for r in summary["agents"]:
         rows.append(
@@ -190,6 +202,7 @@ def format_usage(summary: UsageSummary) -> str:
                 str(r["requests"]),
                 f"{r['input_tokens']:,}",
                 f"{r['output_tokens']:,}",
+                str(r["reasoning_only_retries"]),
                 format_duration(r["wall_s"]),
                 "(aborted)" if r["outcome"] == "error" else "",
             )
@@ -202,12 +215,13 @@ def format_usage(summary: UsageSummary) -> str:
             str(total["requests"]),
             f"{total['input_tokens']:,}",
             f"{total['output_tokens']:,}",
+            str(total["reasoning_only_retries"]),
             format_duration(total["wall_s"]),
             "",
         )
     )
     widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
-    numeric = {2, 3, 4, 5}
+    numeric = {2, 3, 4, 5, 6}
     lines = [
         "  ".join(
             cell.rjust(widths[i]) if i in numeric else cell.ljust(widths[i])

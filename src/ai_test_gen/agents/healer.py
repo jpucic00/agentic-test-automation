@@ -36,6 +36,7 @@ from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
 from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
 from ._match_count import register_count_matches
+from ._reasoning_only import ReasoningOnlyRetry
 from ._run_failure import run_agent_logged
 from ._vision_aid import VisionStats, _make_screenshot_capture, register_inspect_screen
 
@@ -99,7 +100,8 @@ def build_healer(
         # responses (empty/unparsed turns) accumulate ACROSS the run — separate, larger budget.
         retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
         # Same trimming as the Planner: stale page snapshots out, newest few kept.
-        capabilities=[ProcessHistory(trim_stale_snapshots)],
+        # Same named retry prompt for a reasoning-only reply as the Planner.
+        capabilities=[ProcessHistory(trim_stale_snapshots), ReasoningOnlyRetry()],
     )
     # Optional Vision Aid sensor (shared budget with the Planner; per-agent-run counter). Registered
     # only when enabled so a disabled run's toolset — and behaviour — is identical to before.

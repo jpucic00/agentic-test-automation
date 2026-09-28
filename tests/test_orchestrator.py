@@ -851,7 +851,7 @@ def _assert_usage_shape(out):
     assert set(report) == {"agents", "total"}
     assert set(report["total"]) == {
         "requests", "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens",
-        "wall_s",
+        "reasoning_only_retries", "wall_s",
     }
     assert json.loads(json.dumps(report)) == report  # batch scripts aggregate it as JSON
 
@@ -950,5 +950,5 @@ def test_main_prints_usage_as_a_table_not_a_raw_dict(monkeypatch, capsys, tmp_pa
     printed = capsys.readouterr().out
     assert "usage: {" not in printed  # not the raw dict
     assert "=== Model usage ===" in printed
-    assert "  Planner  planner-model        41  512,340  6,210  4m03s" in printed
-    assert "  total                         41  512,340  6,210  5m00s" in printed
+    assert "  Planner  planner-model        41  512,340  6,210       0  4m03s" in printed
+    assert "  total                         41  512,340  6,210       0  5m00s" in printed
