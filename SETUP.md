@@ -274,6 +274,10 @@ cd packages/demo-notes-app && npm install && npm run dev
 # 3. Generate a test for a bundled case (NOTE-1 .. NOTE-6). NOTE-6 follows the navbar's
 #    external Wikipedia link, so it also needs STAGING_EXTRA_URLS=https://en.wikipedia.org:
 uv run python scripts/run_one.py NOTE-2 --verbose
+
+# 4. Optional: run all bundled cases in one batch. Each case keeps its own run log, a failing
+#    case doesn't stop the batch, and the end shows one table plus output/runs/batch-<time>.json:
+STAGING_EXTRA_URLS=https://en.wikipedia.org uv run python scripts/run_batch.py NOTE-1 NOTE-2 NOTE-3 NOTE-4 NOTE-5 NOTE-6
 ```
 
 `TESTCASE_SOURCE=local` reads test cases from `packages/demo-notes-app/test-cases/` (raw-Xray-shaped JSON —

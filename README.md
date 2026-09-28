@@ -73,6 +73,10 @@ cd packages/demo-notes-app && npm install && npm run dev
 
 # 3. Generate a test for one of the bundled cases:
 uv run python scripts/run_one.py NOTE-2 --verbose
+
+# Or run several cases one after another and get one comparison table
+# (status, heals, model requests, tokens, time per case + a JSON file with every result):
+uv run python scripts/run_batch.py NOTE-1 NOTE-2 NOTE-3
 ```
 
 The cases live in [`packages/demo-notes-app/test-cases/`](packages/demo-notes-app/test-cases) as
