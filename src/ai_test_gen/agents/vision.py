@@ -15,6 +15,7 @@ policy as every other agent.
 from __future__ import annotations
 
 from pydantic_ai import Agent, BinaryContent
+from pydantic_ai.usage import RunUsage
 
 from ..config import Config
 from ..llm import build_openai_model
@@ -48,14 +49,17 @@ def build_vision_agent(config: Config) -> Agent[None, str]:
     return Agent(model=model, output_type=str, system_prompt=_SYSTEM_PROMPT)
 
 
-async def ask_vision(config: Config, question: str, image_png: bytes) -> str:
+async def ask_vision(
+    config: Config, question: str, image_png: bytes, *, usage: RunUsage | None = None
+) -> str:
     """Ask the vision model ``question`` about ``image_png``; return a short text answer.
 
     A pure pass-through to the gateway vision model. The screenshot bytes go ONLY to this model;
-    the caller hands the returned text back to the (text-only) Planner.
+    the caller hands the returned text back to the (text-only) Planner. ``usage`` (optional) is
+    the ``RunUsage`` this call's token counts accumulate into — filled even if the call fails.
     """
     agent = build_vision_agent(config)
     result = await agent.run(
-        [question, BinaryContent(data=image_png, media_type="image/png")]
+        [question, BinaryContent(data=image_png, media_type="image/png")], usage=usage
     )
     return result.output.strip()[:_MAX_CHARS]

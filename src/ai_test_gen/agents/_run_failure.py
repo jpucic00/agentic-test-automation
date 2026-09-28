@@ -21,8 +21,10 @@ from typing import Any
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import RetryPromptPart, ToolCallPart
+from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
+from ..usage import UsageLog, track_usage
 from ._context import agent_request_limit
 
 logger = logging.getLogger(__name__)
@@ -143,12 +145,22 @@ def _response_meta(message: Any) -> str | None:
     return "; ".join(bits) if bits else None
 
 
+def model_name(agent: object) -> str:
+    """The model an agent runs on (``"unknown"`` for a test double without one)."""
+    model = getattr(agent, "model", None)
+    if isinstance(model, Model):
+        return model.model_name
+    return str(model) if model else "unknown"
+
+
 async def run_agent_logged[OutputT](
     agent: Agent[None, OutputT],
     user_message: str,
     *,
     agent_label: str,
     request_limit: int | None = None,
+    usage: UsageLog | None = None,
+    usage_label: str | None = None,
 ) -> OutputT:
     """Run a browser agent with its MCP context, logging failure evidence before re-raising.
 
@@ -162,16 +174,26 @@ async def run_agent_logged[OutputT](
     ``request_limit`` overrides the shared ``AGENT_REQUEST_LIMIT`` for one run — the offline
     seeding agents (Mapper/Distiller) bound their own exploration via ``DISTILLER_REQUEST_LIMIT``.
     Omitted → the shared default, so every browser-agent caller is unchanged.
+
+    Every run is timed and its token usage logged in one INFO line when it ends — success or
+    failure — and added to ``usage`` (the run's ``UsageLog``) under ``usage_label`` (default
+    ``agent_label``; e.g. ``"Healer attempt 2"``). An aborted run reports what it spent up to the
+    failure (see ``usage.track_usage``).
     """
     # Version marker: this line in a run log PROVES the evidence-capture code is running —
     # its absence means the run used an older checkout, not that nothing failed.
     logger.info("%s run started (failure-evidence capture armed)", agent_label)
     limit = request_limit if request_limit is not None else agent_request_limit()
-    with capture_run_messages() as messages:
+    with (
+        track_usage(usage, usage_label or agent_label, model_name(agent)) as run_usage,
+        capture_run_messages() as messages,
+    ):
         try:
             async with agent:
                 result = await agent.run(
-                    user_message, usage_limits=UsageLimits(request_limit=limit)
+                    user_message,
+                    usage_limits=UsageLimits(request_limit=limit),
+                    usage=run_usage,
                 )
                 return result.output
         except UnexpectedModelBehavior as exc:

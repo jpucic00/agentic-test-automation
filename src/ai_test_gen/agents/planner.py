@@ -24,6 +24,7 @@ from ..config import Config
 from ..llm import build_openai_model
 from ..models import ManualTestCase, TestPlan
 from ..playwright_mcp import build_playwright_mcp
+from ..usage import UsageLog
 from ._context import (
     agent_output_retries,
     agent_retries,
@@ -80,10 +81,12 @@ def build_planner(
     config: Config,
     storage_state: Path | None = None,
     vision_stats: VisionStats | None = None,
+    usage: UsageLog | None = None,
 ) -> Agent[None, TestPlan]:
     """Build the Planner agent (Playwright MCP toolset attached, output_type=TestPlan).
 
-    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary.
+    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary;
+    ``usage`` (optional) the Vision Aid Agent's token usage, as ``"Planner vision"``.
     """
     # Planner may run on a separate endpoint (config.planner_base_url/api_key); when the
     # PLANNER_LLM_* overrides are unset these equal the shared gateway, so nothing changes.
@@ -147,6 +150,7 @@ def build_planner(
             capture=_make_screenshot_capture(mcp),
             on_spent=guard.disable_vision,
             stats=vision_stats,
+            usage=usage,
         )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
@@ -163,12 +167,16 @@ async def plan_test_case(
     test_case: ManualTestCase,
     storage_state: Path | None = None,
     vision_stats: VisionStats | None = None,
+    usage: UsageLog | None = None,
 ) -> TestPlan:
     """Run the Planner on a single test case and return its TestPlan.
 
-    ``vision_stats`` (optional) collects the Vision Aid's check counts for the run summary.
+    ``vision_stats`` (optional) collects the Vision Aid's check counts for the run summary;
+    ``usage`` (optional) the run's token usage and wall time (Planner + its vision calls).
     """
-    agent = build_planner(config, storage_state=storage_state, vision_stats=vision_stats)
+    agent = build_planner(
+        config, storage_state=storage_state, vision_stats=vision_stats, usage=usage
+    )
 
     # Extra allowed hosts (STAGING_EXTRA_URLS — SSO, mail-catcher) are named only when
     # configured, so a default run's message is unchanged; navigation anywhere else is refused.
@@ -212,7 +220,7 @@ own ordered step.
 
     # run_agent_logged enters the agent (Playwright MCP subprocess start/stop around the
     # run) and logs the captured failure evidence on retry exhaustion before re-raising.
-    return await run_agent_logged(agent, user_message, agent_label="Planner")
+    return await run_agent_logged(agent, user_message, agent_label="Planner", usage=usage)
 
 
 def _format_steps(tc: ManualTestCase) -> str:

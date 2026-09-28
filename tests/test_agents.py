@@ -637,7 +637,7 @@ def test_planner_message_names_extra_hosts_only_when_configured(
 ):
     captured: dict[str, str] = {}
 
-    async def fake_run(agent, message, *, agent_label):
+    async def fake_run(agent, message, *, agent_label, **_kwargs):
         captured["msg"] = message
         return None
 

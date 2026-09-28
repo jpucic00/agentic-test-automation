@@ -24,6 +24,7 @@ from ..allowlist import relative_to
 from ..config import Config
 from ..llm import build_openai_model
 from ..models import GeneratedTest, TestPlan
+from ..usage import UsageLog
 from ._context import agent_output_retries, assemble_system_prompt
 from ._run_failure import run_agent_logged
 
@@ -115,11 +116,14 @@ async def generate_test(
     *,
     previous_code: str | None = None,
     error_text: str | None = None,
+    usage: UsageLog | None = None,
 ) -> GeneratedTest:
     """Run the Generator on a TestPlan and return the generated Playwright test.
 
     Pass ``previous_code`` + ``error_text`` to retry after a compile/collection
     failure (a run with ``did_run=False``); the plan itself is unchanged.
+    ``usage`` (optional) collects the run's token usage and wall time, recorded as
+    ``"Generator"`` — or ``"Generator retry"`` for the compile-retry regeneration.
     """
     agent = build_generator(config)
     user_message = _build_generation_message(
@@ -128,4 +132,10 @@ async def generate_test(
     # run_agent_logged captures the run's messages so retry exhaustion (e.g. the model
     # answering in prose instead of emitting GeneratedTest) logs its evidence like the
     # browser agents do; entering the toolset-less agent is a no-op context.
-    return await run_agent_logged(agent, user_message, agent_label="Generator")
+    return await run_agent_logged(
+        agent,
+        user_message,
+        agent_label="Generator",
+        usage=usage,
+        usage_label="Generator retry" if previous_code is not None else "Generator",
+    )

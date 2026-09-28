@@ -32,6 +32,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from ..config import Config
+from ..usage import UsageLog, track_usage
 from .vision import ask_vision
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,8 @@ def register_inspect_screen(
     agent_label: str = "Planner",
     on_spent: Callable[[], None] | None = None,
     stats: VisionStats | None = None,
+    usage: UsageLog | None = None,
+    usage_label: str | None = None,
 ) -> Callable[[str], Coroutine[Any, Any, str]]:
     """Attach the optional ``inspect_screen`` Vision Aid tool to a browser agent.
 
@@ -215,10 +218,13 @@ def register_inspect_screen(
     looking. ``on_spent`` fires once inspect_screen can no longer help this run (last budgeted
     call made, or the vision backend failed) — the builders pass the locator guard's
     ``disable_vision`` so its steer stops sending the agent here. ``stats`` (optional) collects
-    this run's check / no-screenshot / backend-error counts for the run summary. Also returns the
+    this run's check / no-screenshot / backend-error counts for the run summary. ``usage``
+    (optional) receives the Vision Aid Agent's token usage and wall time, all of this agent run's
+    vision calls merged under ``usage_label`` (default ``"<agent_label> vision"``). Also returns the
     tool function (the registration target), which unit tests call.
     """
     max_calls = config.vision_max_calls
+    vision_label = usage_label or f"{agent_label} vision"
     calls_made = 0
     counts = stats if stats is not None else VisionStats()
 
@@ -323,7 +329,8 @@ def register_inspect_screen(
         if calls_made >= max_calls and on_spent is not None:
             on_spent()
         try:
-            answer = await ask_vision(config, question, png.read_bytes())
+            with track_usage(usage, vision_label, config.vision_model) as vision_usage:
+                answer = await ask_vision(config, question, png.read_bytes(), usage=vision_usage)
         except Exception as exc:  # noqa: BLE001 — a sensor failure must degrade, never abort the run
             counts.backend_errors += 1
             logger.warning(

@@ -12,7 +12,10 @@ import dataclasses
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+from pydantic_ai.usage import RunUsage
+
 from ai_test_gen import models, orchestrator
+from ai_test_gen.usage import UsageLog
 
 
 def _manual_case():
@@ -811,7 +814,7 @@ def test_summary_reports_vision_gaps_per_agent(cfg, monkeypatch, caplog):
     vcfg = dataclasses.replace(cfg, vision_max_calls=3)
     _wire(monkeypatch, vcfg, [_result("failed"), _result("failed"), _result("passed")])
 
-    async def plan(config, test_case, *, vision_stats):
+    async def plan(config, test_case, *, vision_stats, **_kwargs):
         vision_stats.checks, vision_stats.no_screenshot = 3, 3  # every check lacked a screenshot
         return _plan()
 
@@ -838,3 +841,114 @@ def test_summary_vision_line_on_early_refusal(cfg, monkeypatch):
     out = asyncio.run(orchestrator.process_test_case("QA-1"))
     assert out["status"] == "refused"
     assert out["vision"] == "Planner: no checks; Healer: no checks"
+
+
+# --- Per-agent usage in the run summary ---------------------------------------------
+
+
+def _assert_usage_shape(out):
+    report = out["usage"]
+    assert set(report) == {"agents", "total"}
+    assert set(report["total"]) == {
+        "requests", "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens",
+        "wall_s",
+    }
+    assert json.loads(json.dumps(report)) == report  # batch scripts aggregate it as JSON
+
+
+def _recording_planner(*, fail=False):
+    """Planner double that spends usage into the run's log (partially, then raises if ``fail``)."""
+
+    async def plan(config, test_case, *, vision_stats, usage):
+        usage.record(
+            "Planner", "planner-model",
+            RunUsage(requests=4, input_tokens=4_000, output_tokens=40), 2.0, ok=not fail,
+        )
+        if fail:
+            raise RuntimeError("UsageLimitExceeded: request_limit of 4")
+        return _plan()
+
+    return plan
+
+
+def test_usage_summary_on_success_counts_every_agent_run(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [_result("failed"), _result("failed"), _result("passed")])
+    monkeypatch.setattr(orchestrator, "plan_test_case", _recording_planner())
+    heal = _healer()
+    monkeypatch.setattr(orchestrator, "heal_test", heal)
+
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+
+    _assert_usage_shape(out)
+    assert out["usage"]["agents"][0]["agent"] == "Planner"
+    assert out["usage"]["total"]["requests"] == 4
+    # Each heal attempt is labelled with its own attempt number and shares the run's log.
+    assert [c.kwargs["attempt"] for c in heal.call_args_list] == [1, 2]
+    assert len({id(c.kwargs["usage"]) for c in heal.call_args_list}) == 1
+    gen = orchestrator.generate_test
+    assert isinstance(gen, AsyncMock)
+    assert gen.call_args.kwargs["usage"] is heal.call_args.kwargs["usage"]
+
+
+def test_usage_summary_on_planning_error_keeps_the_aborted_planner(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [])
+    monkeypatch.setattr(orchestrator, "plan_test_case", _recording_planner(fail=True))
+
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+
+    assert out["status"] == "error"
+    _assert_usage_shape(out)
+    [planner] = out["usage"]["agents"]
+    assert (planner["outcome"], planner["requests"]) == ("error", 4)
+
+
+def test_usage_summary_on_refusal_mr_failure_and_gitlab_off(cfg, monkeypatch):
+    _wire(monkeypatch, cfg, [])
+    refusal = models.TestPlan(test_case_key="QA-1", title="t", target_url="https://x", steps=[])
+    monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=refusal))
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert out["status"] == "refused"
+    _assert_usage_shape(out)
+
+    gl = _wire(monkeypatch, cfg, [_result("passed")])
+    gl.open_mr.side_effect = RuntimeError("401")
+    out = asyncio.run(orchestrator.process_test_case("QA-1"))
+    assert "MR creation failed" in out["error"]
+    _assert_usage_shape(out)
+
+    _wire(monkeypatch, dataclasses.replace(cfg, gitlab_enabled=False), [_result("passed")])
+    _assert_usage_shape(asyncio.run(orchestrator.process_test_case("QA-1")))
+
+
+def test_usage_total_is_logged_at_the_end_of_the_run(cfg, monkeypatch, caplog):
+    _wire(monkeypatch, cfg, [_result("passed")])
+    monkeypatch.setattr(orchestrator, "plan_test_case", _recording_planner())
+    with caplog.at_level("INFO", logger="ai_test_gen.orchestrator"):
+        asyncio.run(orchestrator.process_test_case("QA-1"))
+    [line] = [r.getMessage() for r in caplog.records if "Usage total" in r.getMessage()]
+    assert "[QA-1] Usage total: 4 requests, in=4,000 out=40 tokens" in line
+    assert "Planner" in line  # the per-agent table follows the total
+
+
+def test_main_prints_usage_as_a_table_not_a_raw_dict(monkeypatch, capsys, tmp_path):
+    log = UsageLog()
+    log.record("Planner", "planner-model", RunUsage(requests=41, input_tokens=512_340,
+               output_tokens=6_210), 243.0, ok=True)
+    result = {"issue_key": "QA-1", "status": "passed", "usage": log.summary(300.0)}
+
+    async def fake_process(_key):
+        return result
+
+    monkeypatch.setattr(orchestrator, "process_test_case", fake_process)
+    monkeypatch.setattr(
+        orchestrator, "_configure_logging", lambda key, verbose: tmp_path / "run.log"
+    )
+    monkeypatch.setattr("sys.argv", ["run_one.py", "QA-1"])
+
+    orchestrator.main()
+
+    printed = capsys.readouterr().out
+    assert "usage: {" not in printed  # not the raw dict
+    assert "=== Model usage ===" in printed
+    assert "  Planner  planner-model        41  512,340  6,210  4m03s" in printed
+    assert "  total                         41  512,340  6,210  5m00s" in printed

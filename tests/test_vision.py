@@ -102,7 +102,7 @@ def test_latest_png_picks_newest_by_mtime(cfg):
 
 
 def _tool_with_fake_vision(cfg, monkeypatch, *, max_calls=2, answer="VISION_OK"):
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return answer
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -125,7 +125,7 @@ def test_inspect_screen_fresh_png_calls_vision(cfg, monkeypatch):
     vcfg = _vision_cfg(cfg)
     (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")  # fresh: just written
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "VISION_OK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -140,7 +140,7 @@ def test_inspect_screen_degrades_when_vision_backend_fails(cfg, monkeypatch, cap
     vcfg = _vision_cfg(cfg)
     (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
 
-    async def failing_ask(config, question, png):
+    async def failing_ask(config, question, png, **_kwargs):
         raise RuntimeError("gateway rejected the image")
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", failing_ask)
@@ -162,7 +162,7 @@ def test_inspect_screen_stale_png_warns_and_skips_vision(cfg, monkeypatch, caplo
     shot.write_bytes(b"img")
     os.utime(shot, (1000, 1000))  # very old -> stale
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         raise AssertionError("ask_vision must not run on a stale screenshot")
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -179,7 +179,7 @@ def test_inspect_screen_enforces_per_run_budget(cfg, monkeypatch):
     vcfg = _vision_cfg(cfg, max_calls=1)
     (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "VISION_OK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -197,7 +197,7 @@ def test_inspect_screen_on_spent_waits_for_last_budgeted_call(cfg, monkeypatch):
     vcfg = _vision_cfg(cfg, max_calls=2)
     (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "VISION_OK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -214,7 +214,7 @@ def test_inspect_screen_logs_each_trigger(cfg, monkeypatch, caplog):
     vcfg = _vision_cfg(cfg)
     (vcfg.snapshots_dir / "shot.png").write_bytes(b"img")
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "a modal dialog is visible"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -257,7 +257,7 @@ def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
     twenty_s_ago = time.time() - 20
     os.utime(shot, (twenty_s_ago, twenty_s_ago))
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "VISION_OK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -284,7 +284,7 @@ def test_inspect_screen_self_captures_current_page(cfg, monkeypatch):
         captured["n"] += 1
         (vcfg.snapshots_dir / "live.png").write_bytes(b"fresh")
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         assert png == b"fresh"  # vision saw the just-captured page, not an old shot
         return "VISION_OK"
 
@@ -304,7 +304,7 @@ def test_inspect_screen_self_capture_failure_degrades(cfg, monkeypatch, caplog):
     async def capture():
         raise RuntimeError("browser closed")
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return "FELL_BACK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -342,7 +342,7 @@ def _capture_tool(cfg, monkeypatch, capture, *, stats=None):
     """inspect_screen with ``capture`` wired and a fake vision model that echoes the PNG bytes."""
     vcfg = _vision_cfg(cfg)
 
-    async def fake_ask(config, question, png):
+    async def fake_ask(config, question, png, **_kwargs):
         return png.decode()
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
@@ -432,7 +432,7 @@ def test_vision_stats_count_checks_gaps_and_backend_errors(cfg, monkeypatch):
     vcfg = _vision_cfg(cfg, max_calls=3)
     calls = {"n": 0}
 
-    async def ask(config, question, png):
+    async def ask(config, question, png, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("502")
@@ -493,10 +493,10 @@ def test_planner_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = planner_mod._register_inspect_screen
 
-    def spy(agent, config, capture=None, on_spent=None, stats=None):
+    def spy(agent, config, capture=None, on_spent=None, stats=None, **kwargs):
         seen.append(config.vision_max_calls)
         assert on_spent is not None  # wired to the locator guard's disable_vision
-        return real(agent, config, capture, on_spent=on_spent, stats=stats)
+        return real(agent, config, capture, on_spent=on_spent, stats=stats, **kwargs)
 
     monkeypatch.setattr(planner_mod, "_register_inspect_screen", spy)
     build_planner(cfg)  # vision off (vision_max_calls == 0)
@@ -582,10 +582,12 @@ def test_healer_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = healer_mod.register_inspect_screen
 
-    def spy(agent, config, capture=None, agent_label="Planner", on_spent=None, stats=None):
+    def spy(
+        agent, config, capture=None, agent_label="Planner", on_spent=None, stats=None, **kwargs
+    ):
         seen.append(config.vision_max_calls)
         assert on_spent is not None  # wired to the locator guard's disable_vision
-        return real(agent, config, capture, agent_label, on_spent, stats)
+        return real(agent, config, capture, agent_label, on_spent, stats, **kwargs)
 
     monkeypatch.setattr(healer_mod, "register_inspect_screen", spy)
     healer_mod.build_healer(cfg)  # vision off (vision_max_calls == 0)

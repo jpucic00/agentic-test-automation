@@ -25,6 +25,7 @@ from ..llm import build_openai_model
 from ..models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
 from ..playwright_mcp import build_playwright_mcp
 from ..test_runner import classify_failure
+from ..usage import UsageLog
 from ._context import (
     agent_output_retries,
     agent_retries,
@@ -47,10 +48,13 @@ def build_healer(
     config: Config,
     storage_state: Path | None = None,
     vision_stats: VisionStats | None = None,
+    usage: UsageLog | None = None,
+    usage_label: str = "Healer",
 ) -> Agent[None, HealedTest]:
     """Build the Healer agent (Playwright MCP toolset attached, output_type=HealedTest).
 
-    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary.
+    ``vision_stats`` (optional) receives the Vision Aid's per-run counts for the run summary;
+    ``usage`` (optional) the Vision Aid Agent's token usage, as ``"<usage_label> vision"``.
     """
     model = build_openai_model(config, config.healer_model)
 
@@ -107,6 +111,8 @@ def build_healer(
             agent_label="Healer",
             on_spent=guard.disable_vision,
             stats=vision_stats,
+            usage=usage,
+            usage_label=f"{usage_label} vision",
         )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
     # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
@@ -307,6 +313,8 @@ async def heal_test(
     heal_history: list[str] | None = None,
     failure_repeats: int = 0,
     vision_stats: VisionStats | None = None,
+    usage: UsageLog | None = None,
+    attempt: int | None = None,
 ) -> HealedTest:
     """Run the Healer on a failing test + its failure result and return the fix.
 
@@ -318,11 +326,23 @@ async def heal_test(
     locator KIND for a locator failure, suspect a spec divergence for an assertion failure.
 
     ``vision_stats`` (optional) collects the Vision Aid's check counts for the run summary.
+
+    ``usage`` (optional) collects this attempt's token usage and wall time — its own record,
+    ``"Healer attempt N"`` when ``attempt`` is given (plus ``"Healer attempt N vision"``).
     """
-    agent = build_healer(config, storage_state=storage_state, vision_stats=vision_stats)
+    usage_label = f"Healer attempt {attempt}" if attempt is not None else "Healer"
+    agent = build_healer(
+        config,
+        storage_state=storage_state,
+        vision_stats=vision_stats,
+        usage=usage,
+        usage_label=usage_label,
+    )
     user_message = _build_heal_message(
         test, failure, plan, test_case, heal_history, failure_repeats
     )
     # run_agent_logged enters the agent (MCP subprocess start/stop around the run) and logs
     # the captured failure evidence on retry exhaustion before re-raising.
-    return await run_agent_logged(agent, user_message, agent_label="Healer")
+    return await run_agent_logged(
+        agent, user_message, agent_label="Healer", usage=usage, usage_label=usage_label
+    )

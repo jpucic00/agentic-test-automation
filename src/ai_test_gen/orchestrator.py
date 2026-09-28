@@ -43,6 +43,8 @@ import logging
 import os
 import re
 import shutil
+import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +63,7 @@ from .models import (
     TestRunResult,
 )
 from .test_runner import classify_failure, run_test
+from .usage import UsageLog, describe, format_usage
 from .xray_client import XrayClient
 
 logger = logging.getLogger(__name__)
@@ -98,6 +101,7 @@ def _load_test_case(config: Config, issue_key: str) -> ManualTestCase:
 
 async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = None) -> dict:
     """Run the full pipeline for one Jira/Xray issue key. Returns a result summary."""
+    started = time.monotonic()
     config = load_config()
     if max_heal_attempts is None:
         max_heal_attempts = _resolve_max_heal_attempts()
@@ -106,6 +110,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     # Vision Aid counts per agent (all heal attempts pooled under "Healer"); reported in the
     # summary when vision is on, so a run whose screenshots never arrived is visible at a glance.
     vision = {"Planner": VisionStats(), "Healer": VisionStats()}
+    # Model requests, tokens and wall time per agent run (each heal attempt and each agent's
+    # Vision Aid calls on their own line); every summary below carries it as "usage".
+    usage = UsageLog()
     logger.info(
         "[%s] Environments (primary first): %s; extra allowed hosts: %s",
         issue_key,
@@ -121,7 +128,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
 
     logger.info("[%s] Planning", issue_key)
     try:
-        plan = await plan_test_case(config, test_case, vision_stats=vision["Planner"])
+        plan = await plan_test_case(
+            config, test_case, vision_stats=vision["Planner"], usage=usage
+        )
         plan_json = plan_json_with_context_hash(plan, config)
         (config.plans_dir / f"{issue_key}.json").write_text(plan_json)
 
@@ -136,35 +145,43 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 issue_key,
                 plan.notes or "(none)",
             )
-            return _with_vision(
-                {
-                    "issue_key": issue_key,
-                    "status": "refused",
-                    "heal_attempts": 0,
-                    "mr_url": None,
-                    "notes": plan.notes,
-                },
-                config,
-                vision,
+            return _with_usage(
+                _with_vision(
+                    {
+                        "issue_key": issue_key,
+                        "status": "refused",
+                        "heal_attempts": 0,
+                        "mr_url": None,
+                        "notes": plan.notes,
+                    },
+                    config,
+                    vision,
+                ),
+                usage,
+                started,
             )
 
         logger.info("[%s] Generating Playwright code", issue_key)
-        test = await generate_test(config, plan)
+        test = await generate_test(config, plan, usage=usage)
     except Exception as exc:
         # No plan/test means nothing to run or open an MR for. A Planner/Generator crash
         # (e.g. an MCP tool exceeding its retry budget) must fail cleanly, not dump a stack
         # trace — there's no partial artifact to salvage here.
         logger.error("[%s] Planning/generation failed: %s", issue_key, exc)
-        return _with_vision(
-            {
-                "issue_key": issue_key,
-                "status": "error",
-                "heal_attempts": 0,
-                "mr_url": None,
-                "error": f"Planning/generation failed: {exc}",
-            },
-            config,
-            vision,
+        return _with_usage(
+            _with_vision(
+                {
+                    "issue_key": issue_key,
+                    "status": "error",
+                    "heal_attempts": 0,
+                    "mr_url": None,
+                    "error": f"Planning/generation failed: {exc}",
+                },
+                config,
+                vision,
+            ),
+            usage,
+            started,
         )
 
     # The Generator owns the canonical filename. Every later iteration (the compile-retry
@@ -200,6 +217,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 plan,
                 previous_code=test.code,
                 error_text=result.error_message or result.stderr[:2000],
+                usage=usage,
             )
             # Keep the failed first attempt on disk; the regeneration is its own artifact.
             test = GeneratedTest(
@@ -265,6 +283,8 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
                 heal_history=list(heal_history),
                 failure_repeats=repeats,
                 vision_stats=vision["Healer"],
+                usage=usage,
+                attempt=heal_attempts,
             )
         except Exception as exc:
             # An agent/MCP failure (e.g. "browser_click exceeded max retries") must not discard
@@ -351,7 +371,11 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
             summary["heal_verdict"] = heal_verdict
         if result.trace_path:
             summary["trace_path"] = result.trace_path
-        return _with_vision(_with_environments(summary, env_results), config, vision)
+        return _with_usage(
+            _with_vision(_with_environments(summary, env_results), config, vision),
+            usage,
+            started,
+        )
 
     logger.info("[%s] Opening GitLab MR", issue_key)
     # The MR carries ONE file path (the original first-iteration filename) but one commit
@@ -394,7 +418,11 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         }
         if heal_verdict:
             summary["heal_verdict"] = heal_verdict
-        return _with_vision(_with_environments(summary, env_results), config, vision)
+        return _with_usage(
+            _with_vision(_with_environments(summary, env_results), config, vision),
+            usage,
+            started,
+        )
     logger.info("[%s] MR opened: %s", issue_key, mr_url)
 
     summary = {
@@ -407,7 +435,9 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
         summary["heal_verdict"] = heal_verdict
     if result.trace_path:
         summary["trace_path"] = result.trace_path
-    return _with_vision(_with_environments(summary, env_results), config, vision)
+    return _with_usage(
+        _with_vision(_with_environments(summary, env_results), config, vision), usage, started
+    )
 
 
 async def _run_other_environments(
@@ -478,6 +508,25 @@ def _with_vision(summary: dict, config: Config, vision: dict[str, VisionStats]) 
             summary["issue_key"],
             line,
         )
+    return summary
+
+
+def _with_usage(summary: dict, usage: UsageLog, started: float) -> dict:
+    """Add the per-agent usage records + run totals to a run summary; log the totals.
+
+    ``started`` is the run's ``time.monotonic()`` start, so ``total.wall_s`` is the whole run's
+    wall time (test runs and the MR included), not a sum of the agent runs.
+    """
+    report = usage.summary(time.monotonic() - started)
+    summary["usage"] = report
+    total = report["total"]
+    logger.info(
+        "[%s] Usage total: %s (%d agent run record(s))\n%s",
+        summary["issue_key"],
+        describe(total["requests"], total["input_tokens"], total["output_tokens"], total["wall_s"]),
+        len(report["agents"]),
+        format_usage(report),
+    )
     return summary
 
 
@@ -685,7 +734,11 @@ def main() -> None:
     result = asyncio.run(process_test_case(args.issue_key))
     print("\n=== Result ===")
     for key, value in result.items():
-        print(f"  {key}: {value}")
+        if key != "usage":
+            print(f"  {key}: {value}")
+    if "usage" in result:
+        print("\n=== Model usage ===")
+        print(textwrap.indent(format_usage(result["usage"]), "  "))
     print(f"\nFull DEBUG log: {log_path}")
 
 
