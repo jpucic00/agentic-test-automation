@@ -25,6 +25,28 @@ from ai_test_gen.agents.healer import build_healer
 from ai_test_gen.agents.planner import build_planner
 
 
+def _base_prompt(cfg, monkeypatch, module, build):
+    """The base prompt ``build`` hands to ``assemble_system_prompt`` (before project context)."""
+    captured: dict[str, str] = {}
+    real = module.assemble_system_prompt
+
+    def spy(config, base_prompt, *, include_map=True):
+        captured["base"] = base_prompt
+        return real(config, base_prompt, include_map=include_map)
+
+    monkeypatch.setattr(module, "assemble_system_prompt", spy)
+    build(cfg)
+    return captured["base"]
+
+
+def _planner_prompt(cfg, monkeypatch):
+    return _base_prompt(cfg, monkeypatch, planner_mod, build_planner)
+
+
+def _healer_prompt(cfg, monkeypatch):
+    return _base_prompt(cfg, monkeypatch, healer_mod, build_healer)
+
+
 def _run_offline(agent):
     """Run an agent with a TestModel and no toolsets — no network, no subprocess."""
     with agent.override(model=TestModel(), toolsets=[]):
@@ -77,29 +99,35 @@ def test_healer_attaches_playwright_mcp(cfg, monkeypatch):
     assert len(calls) == 1
 
 
-def test_prompts_carry_generate_locator_contract():
+def test_prompts_carry_generate_locator_contract(cfg, monkeypatch):
     # Locks the selector-contract migration offline: every browser-driving prompt instructs the
     # verified-locator workflow, and the Planner prompt no longer carries the retired #id-first
     # GOOD/BAD guidance the migration replaced (otherwise a regression would pass CI unnoticed).
-    prompts = planner_mod.PROMPTS_DIR
-    for name in ("planner.md", "generator.md", "healer.md"):
-        assert "browser_generate_locator" in (prompts / name).read_text(), name
-    planner_md = (prompts / "planner.md").read_text()
-    assert "getByTestId" in planner_md
-    assert "#login-submit" not in planner_md  # retired GOOD-example marker
+    planner_prompt = _planner_prompt(cfg, monkeypatch)
+    for prompt in (planner_prompt, _healer_prompt(cfg, monkeypatch)):
+        assert "browser_generate_locator" in prompt
+    assert "browser_generate_locator" in (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    assert "getByTestId" in planner_prompt
+    assert "#login-submit" not in planner_prompt  # retired GOOD-example marker
 
 
-def test_prompts_carry_resilience_ladder():
+def test_browser_agents_share_one_locator_fragment(cfg, monkeypatch):
+    # The ladder and verification rules live once, in locators.md, appended to both agents.
+    fragment = (planner_mod.PROMPTS_DIR / "locators.md").read_text()
+    assert fragment in _planner_prompt(cfg, monkeypatch)
+    assert fragment in _healer_prompt(cfg, monkeypatch)
+    for name in ("planner.md", "healer.md"):
+        assert "count_matches" not in (planner_mod.PROMPTS_DIR / name).read_text(), name
+
+
+def test_prompts_carry_resilience_ladder(cfg, monkeypatch):
     # The locator strategy is the element-driven resilience ladder (id > accessible > CSS > XPath),
-    # not id-first: planner.md and healer.md must teach descending to a verified XPath for
+    # not id-first: both browser agents must be taught to descend to a verified XPath for
     # inaccessible elements, and the Generator must accept css/xpath plan selectors.
-    prompts = planner_mod.PROMPTS_DIR
-    planner_md = (prompts / "planner.md").read_text()
-    healer_md = (prompts / "healer.md").read_text()
-    generator_md = (prompts / "generator.md").read_text()
-    for md, name in ((planner_md, "planner.md"), (healer_md, "healer.md")):
-        assert "resilience ladder" in md.lower(), name
-        assert "xpath" in md.lower(), name
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    for prompt in (_planner_prompt(cfg, monkeypatch), _healer_prompt(cfg, monkeypatch)):
+        assert "resilience ladder" in prompt.lower()
+        assert "xpath" in prompt.lower()
     # The Generator carries css/xpath plan selectors verbatim (it has no MCP to re-capture).
     assert "xpath" in generator_md.lower()
     assert "locator('css=" in generator_md
@@ -109,38 +137,50 @@ def test_planner_prompt_has_navigation_discipline():
     # Pins the real-app navigation fixes: navigate like a user (not guessed URLs), never record a
     # URL the live app rejected, and don't emit a plan for a page that wasn't visited.
     planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
-    assert "navigate like a USER" in planner_md
+    assert "Navigate like a USER" in planner_md
     assert "Never record a URL the live app rejected" in planner_md
     assert "Don't plan a page you didn't visit" in planner_md
 
 
-def test_planner_prompt_has_declared_followup_flows():
+def test_activation_fragment_contract():
     # Activation-flow contract: a declared follow-up flow (canonically: email verification before
-    # a new account's first login) yields REAL plan steps right after the creation step, and the
-    # navigation rule admits map-declared auxiliary tool UIs (mail-catcher) — without this the
-    # canonical failure is create-user → login attempts against a never-activated account.
-    planner_md = (planner_mod.PROMPTS_DIR / "planner.md").read_text()
-    assert "Declared follow-up (activation) flows" in planner_md
-    assert "REAL PLAN STEPS" in planner_md
-    assert "mail-catcher" in planner_md
-    assert "NEVER log in with (or" in planner_md  # never use a record before activation
+    # a new account's first login) yields REAL plan steps right after the creation step, a record
+    # is never used before activation, and a fresh account failing its first login is an
+    # activation-gap suspect before a selector suspect — fixed by ADDING the missing steps.
+    fragment = (planner_mod.PROMPTS_DIR / "activation.md").read_text()
+    assert "Declared follow-up (activation) flows" in fragment
+    assert "REAL PLAN STEPS" in fragment
+    assert "mail-catcher" in fragment
+    assert "NEVER log in with (or" in fragment
+    assert "A freshly-created account can't log in" in fragment
+    assert "ADD the missing" in fragment and "activation steps" in fragment
 
 
-def test_healer_prompt_has_activation_gap_diagnosis():
-    # A fresh account failing its first login is an activation-gap suspect BEFORE it is a
-    # selector suspect; the fix is ADDING the missing activation steps, live-verified.
-    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
-    assert "A freshly-created account can't log in" in healer_md
-    assert "activation flow" in healer_md
-    assert "ADD the missing activation steps" in healer_md
+@pytest.mark.parametrize("prompt_of", [_planner_prompt, _healer_prompt])
+def test_activation_fragment_only_when_context_declares_one(cfg, monkeypatch, prompt_of):
+    cfg.project_context_path.write_text("Test users: demo@demo.test")
+    cfg.project_map_path.write_text("## Routes\n/login")
+    assert "Declared follow-up (activation) flows" not in prompt_of(cfg, monkeypatch)
+    cfg.project_map_path.write_text("## Post-creation activation flow\nClick the mail link.")
+    assert "Declared follow-up (activation) flows" in prompt_of(cfg, monkeypatch)
 
 
-def test_healer_prompt_has_locator_kind_escalation():
+def test_activation_word_inside_an_html_comment_does_not_count(cfg):
+    from ai_test_gen.agents._context import declares_activation_flow
+
+    cfg.project_context_path.write_text("<!-- describe any activation flow here -->\nUsers: a")
+    cfg.project_map_path.write_text("## Routes")
+    assert not declares_activation_flow(cfg)
+
+
+def test_locator_escalation_is_in_the_repeat_guidance_not_the_system_prompt():
     # On a persistently-failing step the Healer must escalate the locator KIND down the ladder
-    # (the behavior the user asked for: roll a stuck id over to a verified XPath).
+    # (roll a stuck id over to a verified XPath) and say which kind it moved from and to.
     healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
-    assert "Locator-kind escalation" in healer_md
-    assert "escalat" in healer_md.lower()
+    assert "Locator-kind escalation" not in healer_md
+    msg = healer_mod._build_heal_message(*_with_error(_NOT_FOUND_GUARD), failure_repeats=1)
+    assert "ESCALATE" in msg
+    assert "escalated from and to" in msg
 
 
 def test_planner_prompt_drives_and_keeps_spec():
@@ -219,9 +259,28 @@ def test_heal_message_no_repeat_block_on_first_failure():
         assert "PERSISTED" not in msg
 
 
-def test_heal_message_planner_selector_preference_has_recapture_exception():
+def test_heal_message_does_not_restate_the_system_prompt():
+    # The rules live in healer.md; the message carries the case, plan, code, failure and hints.
     msg = healer_mod._build_heal_message(*_heal_message_fixtures())
-    assert "unless the failing line already\nuses it; then re-capture it live" in msg
+    assert "unless the failing line already" not in msg
+    assert "Diagnose first" not in msg
+
+
+@pytest.mark.parametrize(
+    ("error", "heading"),
+    [
+        ("Error: strict mode violation: getByRole('button', { name: 'Add' }) resolved to 2 "
+         "elements", "strict mode violation"),
+        (_NOT_FOUND_GUARD, "an element was not found"),
+        ("Error: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x.test/", "navigation"),
+        (_DISABLED, "the element was found, its state differs"),
+        ("Test timeout of 30000ms exceeded.", "## About this failure\n"),
+    ],
+)
+def test_heal_message_carries_guidance_for_the_failure_type(error, heading):
+    msg = healer_mod._build_heal_message(*_with_error(error))
+    assert heading in msg
+    assert msg.count("## About this failure") == 1
 
 
 def test_healer_prompt_planner_selector_preference_has_recapture_exception():
@@ -479,13 +538,13 @@ def test_healer_prompt_has_diagnosis_order():
     assert "login first" in healer_md
 
 
-def test_healer_prompt_allows_intent_reconciliation():
+def test_healer_prompt_allows_intent_reconciliation(cfg, monkeypatch):
     # The Healer may now restructure to reconcile with intent (add a skipped step / drop a
     # hallucinated one); the old blanket "DO NOT restructure" must be gone, while live-verified
     # selectors are still required.
-    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
-    assert "DO NOT restructure the test." not in healer_md
-    assert "browser_generate_locator" in healer_md
+    healer_prompt = _healer_prompt(cfg, monkeypatch)
+    assert "DO NOT restructure the test." not in healer_prompt
+    assert "browser_generate_locator" in healer_prompt
 
 
 def test_only_the_planner_passes_the_endpoint_override(cfg, monkeypatch):
@@ -593,21 +652,21 @@ def test_prompts_never_verify_css_xpath_with_verify_tools():
     # browser_verify_text_visible only {text}: neither can check a CSS/XPath selector. Authored
     # selectors are verified by passing them RAW as browser_generate_locator's `target`.
     prompts = planner_mod.PROMPTS_DIR
-    for name in ("planner.md", "healer.md", "dom_probe.md", "generator.md"):
+    for name in ("planner.md", "healer.md", "locators.md", "dom_probe.md", "generator.md"):
         md = (prompts / name).read_text()
         for chunk in _chunks(md):
             if "browser_verify_" in chunk:
                 low = chunk.lower()
                 assert "xpath" not in low and "css" not in low, (name, chunk)
-    for name in ("planner.md", "healer.md", "dom_probe.md"):
+    for name in ("locators.md", "dom_probe.md"):
         md = (prompts / name).read_text()
         assert "RAW" in md and "`target`" in md, name
     # generate_locator does not flag duplicates; uniqueness comes from the read-only
     # count_matches tool (never a side-effecting action such as a hover).
-    for name in ("planner.md", "healer.md"):
-        md = (prompts / name).read_text()
-        assert "count_matches" in md and "exactly 1" in md, name
-        assert "browser_hover" not in md, name
+    locators_md = (prompts / "locators.md").read_text()
+    assert "count_matches" in locators_md and "exactly 1" in locators_md
+    for name in ("planner.md", "healer.md", "locators.md"):
+        assert "browser_hover" not in (prompts / name).read_text(), name
 
 
 def test_generation_message_makes_environment_urls_relative():

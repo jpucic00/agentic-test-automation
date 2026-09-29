@@ -30,6 +30,7 @@ from ._context import (
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
+    declares_activation_flow,
 )
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
@@ -98,7 +99,12 @@ def build_planner(
         api_key=config.planner_api_key,
     )
 
+    # The locator ladder is shared with the Healer; the activation-flow rules are added only for
+    # an app whose context or map declares one.
     base_prompt = (PROMPTS_DIR / "planner.md").read_text()
+    base_prompt += "\n\n" + (PROMPTS_DIR / "locators.md").read_text()
+    if declares_activation_flow(config):
+        base_prompt += "\n\n" + (PROMPTS_DIR / "activation.md").read_text()
     if config.vision_max_calls > 0:
         # Gated so a disabled run's system prompt is byte-identical to before.
         base_prompt += "\n\n" + (PROMPTS_DIR / "vision_aid.md").read_text()
@@ -203,22 +209,7 @@ async def plan_test_case(
 **Steps and Expected Results:**
 {_format_steps(test_case)}
 
-Now build a TestPlan. Navigate the staging app and DRIVE the scenario — perform each outcome-bearing
-step, happy AND failure paths (submit forms, create data, trigger validation), and OBSERVE what the
-app actually does. For each element you act on, capture a VERIFIED locator — the most robust kind
-that element supports (resilience ladder: id > accessible > CSS > XPath). Author-written id=
-attributes surface as getByTestId('...') via browser_generate_locator; accessible elements come back
-as getByRole/getByLabel; inaccessible ones need a verified locator('css=...') or
-locator('xpath=...'). Never hand-write an unverified locator — confirm it resolves to the intended
-element first. Record each locator verbatim in target_selector.
-
-For every step that asserts an outcome (a "verify …" step, or the after-state of a navigate/submit/
-open-modal step), also record HOW to prove it: set page_url for page loads (assert the URL), or
-capture a VERIFIED locator for the proof element into assert_selector — never leave the Generator to
-guess assertion text. Keep each step's `expected` faithful to the manual case; if the live app
-contradicts it, still keep the spec's expected and record the divergence in `notes`. If performing a
-step changes earlier state (a failed login clears the password), make the recovery you had to do its
-own ordered step.
+Plan this test case: perform it live in the staging app, then return the TestPlan.
 """
 
     # run_agent_logged enters the agent (Playwright MCP subprocess start/stop around the

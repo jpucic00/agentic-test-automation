@@ -56,7 +56,8 @@ HOW TO FILL THIS IN:
      agents perform these as REAL plan steps right after the creation step, so describe them like
      any flow. If the flow happens on a separate tool (e.g. a mail-catcher web UI), ALSO list that
      tool's FULL URL under "Directly-addressable routes" below — otherwise the agent is not allowed
-     to navigate to it. -->
+     to navigate to it. The agents get their activation-flow rules only when the word "activation"
+     appears in this file or project_context.md, so delete this section if nothing needs it. -->
 - <Which creation flow needs this, and is it MANDATORY before first use (e.g. login)?>
 - <Where does the verification arrive — e.g. the mail-catcher UI (full URL in the routes table)?>
 - <How to find the right item there (e.g. the newest message addressed to the just-created email —

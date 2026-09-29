@@ -31,6 +31,7 @@ from ._context import (
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
+    declares_activation_flow,
 )
 from ._dom_probe import register_probe_dom
 from ._history import trim_stale_snapshots
@@ -59,7 +60,12 @@ def build_healer(
     """
     model = build_openai_model(config, config.healer_model)
 
+    # The locator ladder is shared with the Planner; the activation-flow rules are added only for
+    # an app whose context or map declares one.
     base_prompt = (PROMPTS_DIR / "healer.md").read_text()
+    base_prompt += "\n\n" + (PROMPTS_DIR / "locators.md").read_text()
+    if declares_activation_flow(config):
+        base_prompt += "\n\n" + (PROMPTS_DIR / "activation.md").read_text()
     if config.vision_max_calls > 0:
         # Gated so a disabled run's system prompt is byte-identical to before. Same shared fragment
         # the Planner uses — the Healer is a full browser agent and reads the page the same way.
@@ -187,6 +193,48 @@ earlier locators live, starting from the top, before trusting them.
 """
 
 
+def _failure_hint(failure: TestRunResult) -> str:
+    """Guidance for this failure's type, so the system prompt carries no failure catalogue."""
+    message = failure.error_message or ""
+    if "strict mode violation" in message.lower():
+        return """
+## About this failure: strict mode violation
+A name-based locator matched several elements (a name match is a SUBSTRING by default). Keep the
+SAME locator and add `exact: true`. If the duplicates share the same full name (a button in a
+dialog and one behind it), scope to the container —
+`page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true })` — or, as a last resort,
+`.first()`. Do NOT swap in a guessed id.
+"""
+    kind = classify_failure(message)
+    if kind == "locator":
+        return """
+## About this failure: an element was not found
+The broken locator is often EARLIER than the line that died (see Diagnosis order). A
+`getByRole('button'/'menuitem', { name })` that never resolves is usually a guessed role on a
+`<div>`/`<span>` item, and a text literal may be in the page's other language — re-capture the
+element live; prefer `getByTestId` when it has an id.
+"""
+    if kind == "navigation":
+        return """
+## About this failure: navigation
+The URL is wrong or never reached. Compare the test's URLs with where the app actually goes when
+you click through it live.
+"""
+    if kind == "assertion":
+        return """
+## About this failure: the element was found, its state differs
+Changing the locator will not fix this. Reproduce the step live: if the assertion is faithful to
+the test case, the app may really differ (see When to give up). Only change an assertion that is
+clearly the Generator's mistake.
+"""
+    return """
+## About this failure
+The element may be HIDDEN (a wrong locator matching a hidden duplicate, or a missing earlier step
+such as opening a menu), or the test hit a script error or a timeout. Replay the flow live from the
+top and decide.
+"""
+
+
 def _repeat_block(failure: TestRunResult, repeats: int) -> str:
     """Guidance for a failure that survived ``repeats`` completed heals ("" on first sighting)."""
     if repeats < 1:
@@ -200,8 +248,8 @@ not working — the locator kind itself is the problem. ESCALATE: go to the live
 a DIFFERENT kind of locator by descending the resilience ladder (id → accessible → CSS → XPath). If
 the element is inaccessible (no id, no usable role/name), use a VERIFIED `locator('xpath=...')`
 anchored on stable text/attributes — that is the correct fix, not a hack. Do NOT re-emit a tweaked
-version of the locator that already failed, and never re-emit a hallucinated id. See "Locator-kind
-escalation".
+version of the locator that already failed, and never re-emit a hallucinated id. Verify the new
+locator, and say in `changes_summary` which kind you escalated from and to, and why.
 """
     if kind == "assertion":
         return f"""
@@ -238,6 +286,10 @@ def _build_heal_message(
     this run. The Healer rewrites the whole file, so without that history attempt 2 can silently
     undo attempt 1's fix and ping-pong between two wrong versions.
 
+    Every message carries guidance for the failure's type (``_failure_hint``: strict mode,
+    element not found, navigation, assertion, other), so that catalogue stays out of the
+    system prompt.
+
     ``failure_repeats`` is how many completed heals this same failure has already survived (the
     orchestrator counts consecutive identical failures). When >= 1 the guidance depends on the
     failure kind (``classify_failure``): a locator failure pushes the Healer down the resilience
@@ -260,11 +312,6 @@ change itself was wrong — build on it or fix something else.
 
     return f"""Fix this failing Playwright test.
 
-Diagnose first: compare the ORIGINAL INTENT and the PLAN below against the failing code and the
-error. The Planner/Generator may have SKIPPED a step the test case requires, or INVENTED a step
-that isn't in it — reconcile the code with the intent. Keep the test faithful to the intent: never
-make it green by dropping a real check or testing something the case didn't ask for.
-
 ## Original test case (the intent — {test_case.key})
 {test_case.title}
 
@@ -285,23 +332,16 @@ Planned steps (selectors here were verified live by the Planner):
 ```typescript
 {test.code}
 ```
-{history_block}{_repeat_block(failure, failure_repeats)}
+{history_block}
 **Failure:**
 - Status: {failure.status}
 - Error: {failure.error_message}
-{_failure_boundary(test, failure)}
+{_failure_boundary(test, failure)}{_failure_hint(failure)}{_repeat_block(failure, failure_repeats)}
 
 **stderr:**
 ```
 {failure.stderr[:2000]}
 ```
-
-You may navigate the staging app and call browser_generate_locator on an element's ref to capture a
-VERIFIED locator — for any selector you fix AND any step you add, don't hand-write it. Prefer a
-Planner-verified selector (above) over the one in the failing code — unless the failing line already
-uses it; then re-capture it live. Honor the Planner's notes.
-Make the change needed to reconcile the test with the intent and make it pass; prefer the smallest
-such change. Do not add unrelated test cases or assertions the test case didn't ask for.
 """
 
 

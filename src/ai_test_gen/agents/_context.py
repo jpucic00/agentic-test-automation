@@ -103,6 +103,23 @@ def _load_context_file(path: Path) -> str:
     return _EXCESS_BLANK_LINES_RE.sub("\n\n", stripped)
 
 
+_ACTIVATION_WORDS = ("activation", "aktivierung")
+
+
+def declares_activation_flow(config: Config) -> bool:
+    """True when the project context or map mentions an activation flow.
+
+    Gates the ``activation.md`` prompt fragment, so an app without one never carries those
+    rules. A plain word match on the comment-stripped files: a false positive only adds the
+    fragment, while missing a real flow would leave the agents without it.
+    """
+    text = "\n".join(
+        _load_context_file(path)
+        for path in (config.project_context_path, config.project_map_path)
+    ).lower()
+    return any(word in text for word in _ACTIVATION_WORDS)
+
+
 def assemble_system_prompt(
     config: Config,
     base_prompt: str,
