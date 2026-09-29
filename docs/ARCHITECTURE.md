@@ -118,9 +118,14 @@ human prose (the `test.step` label), it is **not** a locator. The after-state as
 proof in order: `assert_selector` if set, else the recorded `page_url` (a `page.waitForURL(...)`,
 locale-independent) for page loads, else the `container`/next verified target — and **never a
 `getByText` manufactured from `expected` prose**, which was the source of hallucinated page-load
-checks asserting text the app doesn't contain.
+checks asserting text the app doesn't contain. When `expected` states a concrete value or state, the
+assertion on that proof uses the matching matcher — `toHaveText` for text the case names,
+`toBeDisabled`/`toBeEnabled`, `toBeHidden`, `toHaveValue`, `toHaveCount` — because a merely visible
+proof passes on a bug (a heading exists on every article). The value comes from the test case, never
+invented; a value the test generates is asserted through its variable.
 
-The Generator also **guards each step**: it wraps every plan step in `test.step('<action>', …)`, asserts
+The Generator also **guards each step**: it wraps every plan step in ``test.step(`<action>`, …)`` (a
+template-literal label, so quotes in the action never break the string), asserts
 the target is visible *before* acting (`await expect(target, '…').toBeVisible()`), and — for a step that
 opens a modal/menu or navigates — asserts the new state *after* using the step's verified proof
 (`assert_selector`, else `page.waitForURL(page_url)`, else the dialog/next target).

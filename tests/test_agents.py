@@ -754,3 +754,24 @@ def test_prompts_carry_plan_recording_contract(cfg, monkeypatch):
     fields = models.PlanStep.model_fields
     assert "AFTER this step" in (fields["page_url"].description or "")
     assert "never an MCP tool name" in (fields["action"].description or "")
+
+
+def test_generator_prompt_asserts_the_expected_result_with_a_matching_matcher():
+    # A merely-visible proof passes on a bug (a heading exists on every article; a button that
+    # should stay disabled is visible either way), so the case's value/state gets its matcher.
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    for matcher in ("toHaveText", "toBeDisabled", "toBeHidden", "toHaveValue"):
+        assert matcher in generator_md, matcher
+    assert "never invent one" in generator_md
+    assert "through its variable" in generator_md  # generated values, not the plan's literal
+
+
+def test_generator_step_labels_are_template_literals():
+    generator_md = (planner_mod.PROMPTS_DIR / "generator.md").read_text()
+    assert "test.step(`<step.action>`" in generator_md
+    assert "test.step('<step.action>'" not in generator_md
+
+
+def test_healer_output_is_a_complete_file_never_a_diff():
+    healer_md = (healer_mod.PROMPTS_DIR / "healer.md").read_text()
+    assert "never a diff" in healer_md

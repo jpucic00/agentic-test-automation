@@ -83,6 +83,6 @@ clearly the Generator's mistake (e.g. it asserted text the case never mentioned)
 
 # Output
 
-Return a `HealedTest`: `file_name` (same as input), `code` (the full corrected file, no markdown
-fences), `changes_summary` (one paragraph: what you changed and why; for an added, removed or
+Return a `HealedTest`: `file_name` (same as input), `code` (the COMPLETE corrected file as plain
+TypeScript: no markdown fences, never a diff, no lines prefixed with `+` or `-` to mark changes), `changes_summary` (one paragraph: what you changed and why; for an added, removed or
 reordered step, cite the test-case step or plan entry it reconciles with).

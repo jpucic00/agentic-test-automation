@@ -31,9 +31,10 @@ Playwright TypeScript test.
   Never add `exact` to `getByTestId`, CSS or XPath.
 - When a step has a `container` (e.g. "dialog 'Create user'"), scope its locator to it by role:
   `page.getByRole('dialog').getBy…`. Add the container's name only if several can be open.
-- An ACTION step with NO `target_selector` gets NO locator — never one guessed from its wording.
+- An ACTION step with NO `target_selector` gets NO locator — never one guessed from its wording,
+  even when the wording names a visible label or link text.
   Make it fail loudly right there (the one allowed `throw`) so the Healer captures it live:
-  `await test.step('<step.action>', async () => { throw new Error('UNVERIFIED: step N has no Planner-verified selector — capture it live'); });`
+  ``await test.step(`<step.action>`, async () => { throw new Error('UNVERIFIED: step N has no Planner-verified selector — capture it live'); });``
 - Match the interaction: `.fill()` text inputs, `.selectOption()` selects/comboboxes, `.check()`
   checkboxes and radios, `.setInputFiles()` file inputs.
 - Text literals come from the plan and may be German. Use them VERBATIM — never translate.
@@ -53,18 +54,37 @@ LOGIN credentials for an EXISTING account stay the literal dummy creds.
 
 # Guard each step
 
-Wrap EACH plan step in `await test.step('<step.action>', async () => { … })`:
+Wrap EACH plan step in ``await test.step(`<step.action>`, async () => { … })``. Write the label
+as a template literal (backticks), so quotes in the action — `Click 'Anmelden'` — never break
+the string. Inside each step:
 
 1. **Before** an interaction, assert the target, then act:
    `await expect(<locator>, '<short what/where>').toBeVisible();`
 2. **After** a step that opens a dialog/menu, navigates or submits, assert the new state before
    the next step relies on it. Pick the proof in this order — NEVER invent visible text (an
    unconfirmed `getByText('Welcome')` is the #1 false failure):
-   - `assert_selector` set → `await expect(page.<assert_selector>).toBeVisible();`
+   - `assert_selector` set → assert it (see "Assert the expected result" below).
    - else the step changed `page_url` → `await page.waitForURL('<page_url>');`
    - else the step has a `container` → `await expect(page.getByRole('dialog')).toBeVisible();`
    - else assert the NEXT step's `target_selector` is visible, or skip the after-assertion.
    The `expected` prose is for the step label and your understanding — it is NOT a locator.
+
+# Assert the expected result
+
+A proof that is merely visible does not check the case's expected result: a heading exists on
+every article, and a button that should stay disabled is also visible when it is (wrongly)
+enabled. When `expected` states a concrete value or state, assert THAT on the verified locator
+(`assert_selector`, else the step's `target_selector`) with the matching matcher:
+
+- text the case quotes or names ("the article titled Note-taking") → `toHaveText('Note-taking')`,
+  or `toContainText(...)` for part of a longer text;
+- disabled / enabled → `toBeDisabled()` / `toBeEnabled()`;
+- gone, closed, removed → `toBeHidden()`;
+- a field's value → `toHaveValue(...)`; checked → `toBeChecked()`; a count → `toHaveCount(n)`.
+
+Take the value from the test case's expected result, never invent one. A value the test
+generates (a unique email or name) is asserted through its variable, not the plan's example
+literal. When `expected` states no concrete value or state, `toBeVisible()` is the assertion.
 
 # Structure
 
@@ -75,7 +95,7 @@ test.describe('<title from plan>', () => {
   test('<test case key>: <description>', async ({ page }) => {
     await page.goto('<target_url from plan>');
 
-    await test.step('<step.action>', async () => {
+    await test.step(`<step.action>`, async () => {
       const target = page.getByTestId('open-create-user');
       await expect(target, 'Create-user button should be visible').toBeVisible();
       await target.click();
