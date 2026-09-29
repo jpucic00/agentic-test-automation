@@ -60,7 +60,8 @@ available even though each test run starts with an empty browser.
 - Each run starts with a FRESH, empty `localStorage`. The seeded demo user is re-created on
   every page load (see §3); any notes or extra accounts a scenario needs must be created within
   that scenario.
-- Session-invalidating action: clicking Log out ends the current session — only do it if the
-  test is about logging out, and keep it as the final step.
+- Session-invalidating action: clicking Log out ends the current session — only do it when the
+  scenario needs it (logging out, switching identity), and log back in before any later step
+  that needs the session.
 - Stay within the test's scope: do not clear `localStorage` or delete notes the scenario did not
   create.

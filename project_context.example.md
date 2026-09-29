@@ -90,6 +90,8 @@ HOW TO FILL THIS IN:
 - Stay within the test's scope — don't delete other users' data or change global settings unless
   the test is specifically about that.
 - Session-invalidating actions end the current live login mid-scenario (signing out, "sign out of
-  all devices", changing or resetting a password, <your app's equivalents>): never trigger them
-  while exploring; if a test requires one, it must be the test's final steps.
+  all devices", changing or resetting a password, <your app's equivalents>). The agents trigger
+  one only when the test — or reproducing its failure — needs it, then log back in before
+  anything that needs the session; a generated test gets an explicit re-login step for that.
+  Never trigger one that would lock the account out.
 - <Any other project-specific guardrail (don't toggle language, don't touch billing, etc.)?>
