@@ -17,8 +17,10 @@ element pick the MOST ROBUST kind it actually supports, descending only as far a
 Never skip a rung that works; never stop above one you need.
 
 **Capturing:**
-- Call `browser_generate_locator` on the element's snapshot `ref`; record what it returns, without
-  the `page.` prefix.
+- ALWAYS start with `browser_generate_locator` on the element's snapshot `ref` and record what it
+  returns, without the `page.` prefix. An element with an author-written id comes back as
+  `getByTestId(...)` — take it. Author a CSS/XPath only when that result is on a lower rung than
+  the element supports or unusable — never as your first move.
 - A CSS/XPath you author is recorded only after BOTH checks: pass the RAW selector (`css=…` /
   `xpath=…`, not wrapped in `locator(...)`) as `browser_generate_locator`'s `target` (errors on 0
   matches), AND `count_matches` reports exactly 1 (generate_locator does NOT flag duplicates).

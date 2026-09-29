@@ -81,7 +81,10 @@ class ManualTestCase(BaseModel):
 
 class PlanStep(BaseModel):
     action: str = Field(
-        description="Imperative description of what the test does at this step"
+        description=(
+            "What the user does at this step, in plain words a tester would write (e.g. "
+            "\"Click the 'Save' button\") — never an MCP tool name such as browser_click"
+        )
     )
     target_selector: str | None = Field(
         default=None,
@@ -112,8 +115,8 @@ class PlanStep(BaseModel):
     page_url: str | None = Field(
         default=None,
         description=(
-            "URL of the page this step was performed on, copied from the live session's "
-            "Page URL header. None if unknown."
+            "URL the browser is on AFTER this step — where the step landed — copied from the "
+            "Page URL in the step's live tool result. None if unknown."
         ),
     )
     container: str | None = Field(
