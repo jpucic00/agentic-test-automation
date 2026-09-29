@@ -17,7 +17,9 @@ Without this, the agents fail to reach the gateway on the company laptop with an
 Every model is also wrapped in :class:`DeadlineModel`: a total wall-clock deadline per
 model request (``AGENT_REQUEST_TIMEOUT_S``) with a bounded retry (``AGENT_REQUEST_ATTEMPTS``).
 httpx's read timeout is per CHUNK, so a gateway that trickles keep-alive bytes on a
-non-streaming request resets it forever and the run hangs with no error.
+non-streaming request resets it forever and the run hangs with no error. The same bounded
+retry covers a response the gateway sent but that is not a valid chat completion, such as a
+routed provider's failure reported as ``finish_reason: "error"``.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from dataclasses import dataclass
 
 import httpx
 from openai import DefaultAsyncHttpxClient
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -43,6 +46,9 @@ logger = logging.getLogger(__name__)
 # should fail in seconds, not after the full per-request budget.
 _CONNECT_TIMEOUT_S = 30.0
 
+# pydantic-ai's message for a gateway response that fails chat-completion validation.
+_INVALID_RESPONSE_PREFIX = "Invalid response from"
+
 
 class ModelRequestTimeoutError(TimeoutError):
     """A model request produced no response within its deadline on every attempt.
@@ -58,7 +64,10 @@ class DeadlineModel(WrapperModel):
 
     ``asyncio.timeout`` cancels the in-flight HTTP call (closing its connection) when the
     deadline passes, whatever the socket is doing. A timed-out request is retried up to
-    ``attempts`` tries in total, then :class:`ModelRequestTimeoutError` is raised.
+    ``attempts`` tries in total, then :class:`ModelRequestTimeoutError` is raised. An invalid
+    response (pydantic-ai's "Invalid response from … endpoint", e.g. an upstream provider's
+    failure passed through as ``finish_reason: "error"``) is retried within the same budget;
+    after the last try it propagates unchanged.
 
     Retrying is side-effect free: a model request only RETURNS a response — any tool calls
     in it (browser clicks, navigation, file reads) are executed by the agent loop AFTER the
@@ -89,6 +98,16 @@ class DeadlineModel(WrapperModel):
                     return await self.wrapped.request(
                         messages, model_settings, model_request_parameters
                     )
+            except UnexpectedModelBehavior as exc:
+                if not str(exc).startswith(_INVALID_RESPONSE_PREFIX) or attempt == self.attempts:
+                    raise
+                logger.warning(
+                    "%s: invalid response from the gateway — retrying (attempt %d/%d): %s",
+                    self.model_name,
+                    attempt + 1,
+                    self.attempts,
+                    str(exc).splitlines()[0],
+                )
             except TimeoutError:
                 if not deadline.expired():
                     raise  # a TimeoutError from inside the request, not our deadline

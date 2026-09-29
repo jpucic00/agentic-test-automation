@@ -9,6 +9,7 @@ from typing import cast
 import httpx
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -184,6 +185,61 @@ def test_deadline_model_does_not_retry_an_inner_timeout_error():
 
     model = DeadlineModel(FunctionModel(respond), deadline_s=5.0, attempts=2)
     with pytest.raises(TimeoutError, match="inner"):
+        _request(model)
+    assert len(calls) == 1
+
+
+_INVALID = (
+    "Invalid response from openai chat completions endpoint: 1 validation error for "
+    "ChatCompletion\nchoices.0.finish_reason\n  Input should be 'stop' [input_value='error']"
+)
+
+
+def _failing_then_ok(errors: list[Exception], calls: list[int]) -> FunctionModel:
+    """Fake gateway model: call N raises errors[N] while there is one, then answers."""
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        index = len(calls)
+        calls.append(index)
+        if index < len(errors):
+            raise errors[index]
+        return ModelResponse(parts=[TextPart(f"answer {index + 1}")])
+
+    return FunctionModel(respond)
+
+
+def test_deadline_model_retries_an_invalid_gateway_response(caplog):
+    # OpenRouter passes an upstream provider failure through as finish_reason "error", which
+    # the OpenAI client rejects; the request had no side effects, so one retry is safe.
+    calls: list[int] = []
+    model = DeadlineModel(
+        _failing_then_ok([UnexpectedModelBehavior(_INVALID)], calls), deadline_s=1.0, attempts=2
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.llm"):
+        response = _request(model)
+
+    assert len(calls) == 2
+    assert response.parts == [TextPart("answer 2")]
+    assert "invalid response from the gateway — retrying (attempt 2/2)" in caplog.text
+
+
+def test_deadline_model_gives_up_on_repeated_invalid_responses():
+    calls: list[int] = []
+    errors: list[Exception] = [UnexpectedModelBehavior(_INVALID)] * 2
+    model = DeadlineModel(_failing_then_ok(errors, calls), deadline_s=1.0, attempts=2)
+
+    with pytest.raises(UnexpectedModelBehavior, match="Invalid response from"):
+        _request(model)
+    assert len(calls) == 2
+
+
+def test_deadline_model_does_not_retry_other_model_errors():
+    calls: list[int] = []
+    errors: list[Exception] = [UnexpectedModelBehavior("Exceeded maximum output retries (15)")]
+    model = DeadlineModel(_failing_then_ok(errors, calls), deadline_s=1.0, attempts=2)
+
+    with pytest.raises(UnexpectedModelBehavior, match="output retries"):
         _request(model)
     assert len(calls) == 1
 
