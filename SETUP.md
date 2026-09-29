@@ -167,6 +167,8 @@ uv run python scripts/step0c_xray_flavor.py --issue-key <one-real-QA-key>
 > schemas: two Playwright MCP tools whose generated schemas use such constructs (`browser_drop`,
 > `browser_network_request`) are excluded from the agents' toolset, and a schema-scan test in
 > `tests/test_playwright_mcp.py` guards the rest — re-run it after bumping `@playwright/mcp`.
+> Tools a web page registers itself (WebMCP, `webmcp_<tool>`) are never advertised either, so a
+> page cannot hand the gateway a schema of its own.
 
 Plus two manual smokes:
 

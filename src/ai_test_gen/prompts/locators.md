@@ -17,6 +17,15 @@ element pick the MOST ROBUST kind it actually supports, descending only as far a
 Never skip a rung that works; never stop above one you need.
 
 **Capturing:**
+- An action's result (click, fill, navigate) shows the new Page URL but NOT the page itself; refs
+  from before an action may be stale. Read the page as cheaply as you can — every snapshot stays
+  in the conversation and is resent with each later request:
+  - `browser_find` with a text you expect (a label, a button name) returns just the matching
+    elements and their refs — use it to locate an element;
+  - `browser_snapshot` with `target` (the ref of a dialog, form or list) or `depth` returns part of
+    the page;
+  - a full `browser_snapshot` only when you need to see the whole page, e.g. after landing on a
+    new page. Never on a large external page (an article, a long list).
 - ALWAYS start with `browser_generate_locator` on the element's snapshot `ref` and record what it
   returns, without the `page.` prefix. An element with an author-written id comes back as
   `getByTestId(...)` — take it. Author a CSS/XPath only when that result is on a lower rung than

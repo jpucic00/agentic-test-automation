@@ -50,7 +50,7 @@ MCP_CONFIG_PATH = PROJECT_ROOT / "playwright-mcp-config.json"
 # guide uses ``@latest`` in Phase 1 and only pins in Phase 2 — but version drift
 # during the PoC makes it impossible to tell whether a failure is ours or
 # upstream's. Bump deliberately; verify the current stable release before changing.
-PLAYWRIGHT_MCP_VERSION = "0.0.75"
+PLAYWRIGHT_MCP_VERSION = "0.0.82"
 PLAYWRIGHT_MCP_PACKAGE = f"@playwright/mcp@{PLAYWRIGHT_MCP_VERSION}"
 
 # The server CLI, installed locally under output/node_modules by
@@ -116,11 +116,22 @@ _BLOCKED_TOOL_MARKERS = ("evaluate", "run_code", "unsafe")
 # @playwright/mcp bump cannot silently reintroduce an unsupported construct. (Flux ugz9kif)
 _GRAMMAR_UNSAFE_TOOLS = frozenset({"browser_drop", "browser_network_request"})
 
+# Tools the plan/heal flows never use. Every advertised tool's definition is resent with every
+# model request, so an unused one only costs tokens (browser_emulate_media alone ~290).
+_UNUSED_TOOLS = frozenset({"browser_emulate_media"})
+
+# WebMCP (0.0.81+): tools a WEB PAGE registers become MCP tools named webmcp_<tool>, with a
+# schema the page supplies, plus browser_webmcp_list/_call. Page-authored tools are untrusted
+# input — an injection route and a schema the gateway may not compile — so none reach the model.
+_PAGE_TOOL_MARKER = "webmcp"
+
 
 def _agent_safe_tool(ctx: RunContext[Any], tool: ToolDefinition) -> bool:
-    """Keep a tool unless it is code-execution (evaluate / run_code / unsafe) or grammar-unsafe."""
+    """Keep a tool unless it is code-execution, grammar-unsafe, unused, or page-registered."""
     del ctx
-    if tool.name in _GRAMMAR_UNSAFE_TOOLS:
+    if tool.name in _GRAMMAR_UNSAFE_TOOLS or tool.name in _UNUSED_TOOLS:
+        return False
+    if _PAGE_TOOL_MARKER in tool.name:
         return False
     return not any(marker in tool.name for marker in _BLOCKED_TOOL_MARKERS)
 

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "dependencies": {
-    "@playwright/mcp": "0.0.75"
+    "@playwright/mcp": "0.0.82"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0",

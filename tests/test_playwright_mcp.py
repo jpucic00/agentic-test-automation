@@ -21,7 +21,7 @@ from ai_test_gen.config import Config
 
 
 def test_mcp_version_pinned_not_latest():
-    assert pm.PLAYWRIGHT_MCP_VERSION == "0.0.75"
+    assert pm.PLAYWRIGHT_MCP_VERSION == "0.0.82"
     assert "latest" not in pm.PLAYWRIGHT_MCP_PACKAGE
 
 
@@ -143,6 +143,18 @@ def test_grammar_unsafe_tools_are_filtered_out():
 
     assert keep("browser_drop") is False
     assert keep("browser_network_request") is False
+
+
+def test_page_registered_and_unused_tools_are_filtered_out():
+    # WebMCP tools are authored by the page under test (untrusted); emulate_media is never used.
+    def keep(name: str) -> bool:
+        return pm._agent_safe_tool(cast(Any, None), cast(Any, SimpleNamespace(name=name)))
+
+    assert keep("webmcp_add_to_cart") is False
+    assert keep("browser_webmcp_list") is False
+    assert keep("browser_webmcp_call") is False
+    assert keep("browser_emulate_media") is False
+    assert keep("browser_find") is True
     assert keep("browser_drag") is True
     assert keep("browser_network_requests") is True
     assert keep("browser_click") is True
