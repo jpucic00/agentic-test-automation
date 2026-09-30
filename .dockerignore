@@ -1,0 +1,60 @@
+# Keep the build context small and ensure secrets / host-built binaries never enter
+# the image. The Dockerfile uses targeted COPYs, but this is the safety net.
+
+# ── Secrets / per-adopter (NEVER bake into a shareable image) ──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+project_context.md
+project_map.md
+
+# ── Host-built binaries (macOS arm64 — MUST be rebuilt linux-native in the image) ──
+.venv/
+venv/
+output/node_modules/
+**/__pycache__/
+*.py[cod]
+
+# ── Runtime artifacts / caches (regenerated in the container) ──
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+output/plans/
+output/tests/
+output/runs/
+output/snapshots/
+output/storage_states/
+playwright-report/
+test-results/
+reports/
+
+# ── VCS / IDE / OS ──
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ── Planning / local-only docs not needed at runtime ──
+.claude/
+AI_TEST_GENERATION_GUIDE.md
+CLAUDE.md
+RETRIEVAL_MEMORY_PLAN.md
+VISION_VALIDATION_PLAN.md
+README.md
+SETUP.md
+docs/
+tests/
+packages/
+qdrant_storage/
+Dockerfile
+docker-compose.yml
+project_context.example.md
+project_map.example.md

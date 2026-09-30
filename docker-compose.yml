@@ -1,0 +1,45 @@
+# Local run of the AI test-generation pipeline (no GitLab).
+#
+#   cp .env.example .env          # fill in LLM_BASE_URL/KEY, JIRA_*, STAGING_*
+#   docker compose build
+#   docker compose run --rm pipeline QA-1234 --verbose
+#
+# Requires network access to the LLM gateway, Jira/Xray and the app under test. The
+# agents call the gateway directly (env HTTP(S)_PROXY is ignored unless USE_HTTP_PROXY
+# =true). Generated plan + test land in the named volumes below for review.
+services:
+  pipeline:
+    build: .
+    image: agentic-test-automation:local
+    # Infra secrets (gateway, Jira/Xray, staging). GitLab vars are NOT needed here.
+    env_file: .env
+    environment:
+      # Run without GitLab: skip the MR step, persist the test + plan to disk only.
+      GITLAB_ENABLED: "false"
+      # If the gateway/Jira use a private CA, mount it below and point BOTH vars at it
+      # (httpx reads SSL_CERT_FILE; requests reads REQUESTS_CA_BUNDLE):
+      # SSL_CERT_FILE: /certs/ca.pem
+      # REQUESTS_CA_BUNDLE: /certs/ca.pem
+    volumes:
+      # Per-adopter context the agents read at runtime (untracked; copy from the
+      # *.example.md templates first). Read-only.
+      - ./project_context.md:/app/project_context.md:ro
+      - ./project_map.md:/app/project_map.md:ro
+      # Private CA bundle (uncomment with the env vars above if your gateway needs it):
+      # - ./ca.pem:/certs/ca.pem:ro
+      # mTLS client bundle (uncomment + set MTLS_PKCS12_FILE in .env if required):
+      # - ./client.p12:/certs/client.p12:ro
+      #
+      # Persist generated artifacts. Mount the SUBDIRS only — mounting all of
+      # /app/output would shadow the image's baked output/node_modules and break the
+      # Playwright MCP server + test runner.
+      - atg_plans:/app/output/plans
+      - atg_tests:/app/output/tests
+      - atg_snapshots:/app/output/snapshots
+    # The issue key is passed on the `docker compose run` command line (above), so no
+    # default command — `docker compose up` with no args would just print usage.
+
+volumes:
+  atg_plans:
+  atg_tests:
+  atg_snapshots:
