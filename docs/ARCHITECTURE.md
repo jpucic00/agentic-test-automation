@@ -151,24 +151,24 @@ src/ai_test_gen/
 ├── core/             # config, data models, usage accounting, repo-root anchor (paths)
 ├── net/              # model gateway client + shared proxy / CA / mTLS connection policy
 ├── guardrails/       # navigation allow-list + the runtime MCP navigation guard
-├── testcases/        # test-case sources: Jira/Xray and local JSON
+├── testcases/        # test-case sources: Jira/Xray and local JSON, behind load_test_case()
 ├── browser/          # Playwright MCP toolset (agents) + the generated-test runner
 ├── publish/          # GitLab merge request
-├── pipeline/         # multi-case batch runner
+├── pipeline/         # heal-loop bookkeeping, run-summary assembly, multi-case batch runner
 ├── agents/           # planner, generator, healer, vision + prompts/, runtime/, tools/
 └── rag/              # offline knowledge-base seeding + retriever (+ its prompts/)
 ```
 
 | Concern | Files |
 |---|---|
-| **Orchestration** | `orchestrator.py`, `pipeline/batch.py` (several keys in sequence), `scripts/run_one.py` / `scripts/run_batch.py` (thin CLIs) |
+| **Orchestration** | `orchestrator.py` — the Plan → Generate → Run → Heal → MR flow · `pipeline/heal_loop.py` — heal budget, stop verdicts, failure fingerprints, per-iteration file names + MR commit messages · `pipeline/summary.py` — the run summary (environments, vision, usage) · `pipeline/batch.py` (several keys in sequence) · `scripts/run_one.py` / `scripts/run_batch.py` (thin CLIs) |
 | **Agents** | `agents/planner.py`, `agents/generator.py`, `agents/healer.py`, `agents/vision.py` |
 | **Agent runtime** | `agents/runtime/context.py` — injects the human-authored context files, budgets, model settings · `agents/runtime/run.py` — the one place every agent is run · `agents/runtime/reasoning_only.py`, `agents/runtime/history.py` — capabilities |
-| **Agent tools & hooks** | `agents/tools/locator_guard.py`, `agents/tools/count_matches.py`, `agents/tools/dom_probe.py`, `agents/tools/inspect_screen.py` |
+| **Agent tools & hooks** | `agents/tools/locator_guard.py`, `agents/tools/count_matches.py`, `agents/tools/dom_probe.py`, `agents/tools/inspect_screen.py` · `agents/tools/mcp_direct.py` — shared helpers for tools that call hidden MCP tools directly (unwrap to the live MCP, read its results) |
 | **Prompts** | `agents/prompts/planner.md`, `agents/prompts/generator.md`, `agents/prompts/healer.md` · shared fragments added by code: `agents/prompts/locators.md` (always, Planner + Healer), `agents/prompts/activation.md` (when the context/map declares an activation flow), `agents/prompts/vision_aid.md` / `agents/prompts/dom_probe.md` (when enabled) |
 | **Model access** | `net/gateway.py` (gateway provider) + `net/connection.py` (direct-connect, optional private CA + client cert) |
 | **Browser** | `browser/mcp.py` + `playwright-mcp-config.json` + `output/` (Playwright harness) |
-| **Integrations** | `testcases/xray.py` / `testcases/local.py` (in) · `publish/gitlab.py` (out) |
+| **Integrations** | `testcases/` — `load_test_case()` picks `testcases/xray.py` or `testcases/local.py` by `TESTCASE_SOURCE` (in) · `publish/gitlab.py` (out) |
 | **Config & guardrails** | `core/config.py` — central config + fail-closed prod-URL check · `guardrails/allowlist.py` — navigation allow-list (origins, pre-run spec/plan check) · `guardrails/nav_guard.py` — the runtime MCP navigation guard |
 | **Data models** | `core/models.py` |
 | **Paths** | `core/paths.py` — `PROJECT_ROOT`, the one anchor every repo-relative path resolves against |

@@ -40,8 +40,7 @@ from typing import Any, Literal
 
 from pydantic_ai import Agent
 
-from .dom_probe import PROBE_TOOL, _clean, _result_text
-from .inspect_screen import _underlying_mcp
+from .mcp_direct import EVALUATE_TOOL, clean_result, result_text, underlying_mcp
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +193,7 @@ def parse_count_result(raw: Any) -> dict[str, Any] | None:
     The MCP renders the returned string JSON-encoded under ``### Result`` (so it is decoded
     twice). Returns None when no payload can be recovered.
     """
-    text = _result_text(raw)
+    text = result_text(raw)
     found = _RESULT_RE.search(text)
     body = (found.group("body") if found else text).strip()
     try:
@@ -251,7 +250,7 @@ def register_count_matches(
     selector. ``agent_label`` tags the log lines. Returns the tool function (the registration
     target), which unit tests call.
     """
-    target = _underlying_mcp(toolset)
+    target = underlying_mcp(toolset)
 
     async def count_matches(selector: str) -> str:
         """Count how many elements a raw CSS or XPath selector matches on the current page.
@@ -272,19 +271,19 @@ def register_count_matches(
         logger.info("%s count_matches: %s %r", agent_label, engine, expr)
         try:
             raw = await target.direct_call_tool(
-                PROBE_TOOL, {"function": build_count_js(engine, expr)}
+                EVALUATE_TOOL, {"function": build_count_js(engine, expr)}
             )
         except Exception as exc:  # noqa: BLE001 — a count must degrade, never abort the run
             logger.warning("%s count_matches failed: %s", agent_label, exc)
             return f"count_matches failed ({exc}). Treat the selector as unverified."
         payload = parse_count_result(raw)
         if payload is None:
-            out = f"count_matches returned an unreadable result: {_clean(raw)}"
+            out = f"count_matches returned an unreadable result: {clean_result(raw)}"
         else:
             out = format_count(selector, payload)
         logger.info("%s count_matches result: %s", agent_label, out[:200])
         return out
 
     agent.tool_plain(count_matches)
-    logger.info("%s count_matches ENABLED via direct %s", agent_label, PROBE_TOOL)
+    logger.info("%s count_matches ENABLED via direct %s", agent_label, EVALUATE_TOOL)
     return count_matches

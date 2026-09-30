@@ -34,6 +34,7 @@ from pydantic_ai import Agent
 from ...core.config import Config
 from ...core.usage import UsageLog, track_usage
 from ..vision import ask_vision
+from .mcp_direct import result_text, underlying_mcp
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ __all__ = [
     "_saved_screenshot_path",
     "_stale_after_s",
     "_latest_png",
-    "_underlying_mcp",
     "_make_screenshot_capture",
     "register_inspect_screen",
 ]
@@ -122,16 +122,6 @@ def _latest_png(directory: Path) -> Path | None:
     return max(pngs, key=lambda p: p.stat().st_mtime)
 
 
-def _result_text(raw: object) -> str:
-    """Text of a ``direct_call_tool`` result: a plain string, or the text items of a list."""
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):
-        parts = [item if isinstance(item, str) else getattr(item, "text", None) for item in raw]
-        return "\n".join(p for p in parts if isinstance(p, str))
-    return ""
-
-
 def _saved_screenshot_path(raw: object, base_dir: Path) -> Path | None:
     """The file ``browser_take_screenshot`` says it saved, resolved against ``base_dir``, or None.
 
@@ -139,7 +129,7 @@ def _saved_screenshot_path(raw: object, base_dir: Path) -> Path | None:
     carries no parsable screenshot link (e.g. a test double, or an upstream format change) or the
     link points outside ``base_dir`` — only the server's own output folder is ever read.
     """
-    found = _SAVED_SCREENSHOT_RE.search(_result_text(raw))
+    found = _SAVED_SCREENSHOT_RE.search(result_text(raw))
     if found is None:
         return None
     root = base_dir.resolve()
@@ -159,20 +149,6 @@ def _fresh_fallback_png(directory: Path) -> tuple[Path | None, float | None]:
     return (None, age) if age > _stale_after_s() else (png, None)
 
 
-def _underlying_mcp(toolset: Any) -> Any | None:
-    """Walk a toolset's wrapper chain to the object exposing ``direct_call_tool``.
-
-    ``build_playwright_mcp`` returns the live ``MCPToolset`` wrapped in a ``.filtered(...)`` layer;
-    only the underlying ``MCPToolset`` exposes ``direct_call_tool``. Follow ``.wrapped`` until we
-    find it (or run out), so inspect_screen can take a screenshot on the SAME live browser the
-    agent drives. Returns None if no layer can call a tool directly (defensive — callers degrade).
-    """
-    seen = toolset
-    while seen is not None and not hasattr(seen, "direct_call_tool"):
-        seen = getattr(seen, "wrapped", None)
-    return seen
-
-
 def _make_screenshot_capture(
     toolset: Any,
 ) -> Callable[[], Coroutine[Any, Any, object]] | None:
@@ -183,7 +159,7 @@ def _make_screenshot_capture(
     the model remembering to screenshot first (the cause of stale, previous-page vision answers).
     Returns the raw tool result, which names the saved file (see ``_saved_screenshot_path``).
     """
-    target = _underlying_mcp(toolset)
+    target = underlying_mcp(toolset)
     if target is None:
         return None
 

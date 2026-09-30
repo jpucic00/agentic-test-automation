@@ -31,23 +31,11 @@ from typing import Any
 from pydantic_ai import Agent
 
 from ...core.config import Config
-from .inspect_screen import _underlying_mcp
+from .mcp_direct import EVALUATE_TOOL, clean_result, underlying_mcp
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["PROBE_TOOL", "build_probe_js", "register_probe_dom"]
-
-# The MCP tool the probe drives directly. Hidden from the agents' toolset (see
-# browser.mcp._BLOCKED_TOOL_MARKERS); reachable here only via direct_call_tool with the
-# fixed function below — the model never authors JS.
-PROBE_TOOL = "browser_evaluate"
-
-# Hard cap on the text returned to the agent — recon must inform, not flood the context.
-_RESULT_CHAR_CAP = 4000
-
-# Some MCP tool results append the full page snapshot; the probe's JSON is self-contained, so
-# anything from this marker on is dead weight and is stripped before returning.
-_SNAPSHOT_MARKER = "Page Snapshot"
+__all__ = ["build_probe_js", "register_probe_dom"]
 
 # The fixed, read-only probe function. __QUERY__ / __SCOPE__ are replaced with JSON-encoded
 # values (see build_probe_js) — the model's inputs are data inside string literals, never code.
@@ -226,33 +214,6 @@ def build_probe_js(text: str, scope: str | None) -> str:
     )
 
 
-def _result_text(result: Any) -> str:
-    """Best-effort text of a ``direct_call_tool`` result (plain string or content-item list)."""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        texts = []
-        for item in result:
-            text = item if isinstance(item, str) else getattr(item, "text", None)
-            if text is None and isinstance(item, dict):
-                text = item.get("text")
-            if text:
-                texts.append(text)
-        return "\n".join(texts)
-    return str(result)
-
-
-def _clean(raw: Any) -> str:
-    """Strip any trailing page snapshot and cap the size of a probe result."""
-    text = _result_text(raw)
-    marker_at = text.find(_SNAPSHOT_MARKER)
-    if marker_at >= 0:
-        text = text[:marker_at].rstrip()
-    if len(text) > _RESULT_CHAR_CAP:
-        text = text[:_RESULT_CHAR_CAP] + " …[probe result truncated]"
-    return text
-
-
 def register_probe_dom(
     agent: Agent[None, Any],
     config: Config,
@@ -268,7 +229,7 @@ def register_probe_dom(
     lines. Also returns the tool function (the registration target), which unit tests call.
     """
     max_calls = config.dom_probe_max_calls
-    target = _underlying_mcp(toolset)
+    target = underlying_mcp(toolset)
     calls_made = 0
 
     async def probe_dom(text: str, scope: str | None = None) -> str:
@@ -302,12 +263,12 @@ def register_probe_dom(
         )
         try:
             raw = await target.direct_call_tool(
-                PROBE_TOOL, {"function": build_probe_js(text, scope)}
+                EVALUATE_TOOL, {"function": build_probe_js(text, scope)}
             )
         except Exception as exc:  # noqa: BLE001 — recon must degrade, never abort the run
             logger.warning("%s DOM probe failed: %s", agent_label, exc)
             return f"probe_dom failed ({exc}). Proceed with the accessibility snapshot."
-        out = _clean(raw)
+        out = clean_result(raw)
         logger.info("%s DOM probe result: %s", agent_label, out[:200])
         return out
 
@@ -316,6 +277,6 @@ def register_probe_dom(
         "%s DOM probe ENABLED: up to %d probe_dom call(s)/run via direct %s",
         agent_label,
         max_calls,
-        PROBE_TOOL,
+        EVALUATE_TOOL,
     )
     return probe_dom

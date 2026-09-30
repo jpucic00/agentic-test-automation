@@ -48,7 +48,6 @@ from .tools.inspect_screen import (  # noqa: F401
     _latest_png,
     _make_screenshot_capture,
     _stale_after_s,
-    _underlying_mcp,
     register_inspect_screen,
 )
 from .tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
@@ -71,7 +70,6 @@ __all__ = [
     "_register_probe_dom",
     "register_probe_dom",
     "_make_screenshot_capture",
-    "_underlying_mcp",
     "_latest_png",
     "_stale_after_s",
     "_DEFAULT_STALE_AFTER_S",

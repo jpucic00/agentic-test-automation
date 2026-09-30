@@ -1,9 +1,9 @@
 """Unit tests for the orchestrator — fully local (every agent + integration is mocked).
 
-The agents, the runner, the Xray client, and the GitLab client are monkeypatched in the
-``orchestrator`` namespace, so no network, browser, or subprocess is touched. Coroutines
-are driven with ``asyncio.run`` (no pytest-asyncio). ``Test*`` models are built via the
-``models`` module so pytest does not collect them as test classes.
+The agents, the runner, and the GitLab client are monkeypatched in the ``orchestrator``
+namespace and the test-case sources in ``testcases``, so no network, browser, or subprocess is
+touched. Coroutines are driven with ``asyncio.run`` (no pytest-asyncio). ``Test*`` models are
+built via the ``models`` module so pytest does not collect them as test classes.
 """
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 from pydantic_ai.usage import RunUsage
 
-from ai_test_gen import orchestrator
+from ai_test_gen import orchestrator, testcases
 from ai_test_gen.core import models
 from ai_test_gen.core.usage import UsageLog
+from ai_test_gen.pipeline import heal_loop
 
 
 def _manual_case():
@@ -77,7 +78,7 @@ def _wire(monkeypatch, cfg, run_results):
 
     fake_xray = MagicMock()
     fake_xray.fetch.return_value = _manual_case()
-    monkeypatch.setattr(orchestrator, "XrayClient", MagicMock(return_value=fake_xray))
+    monkeypatch.setattr(testcases, "XrayClient", MagicMock(return_value=fake_xray))
 
     monkeypatch.setattr(orchestrator, "plan_test_case", AsyncMock(return_value=_plan()))
     monkeypatch.setattr(orchestrator, "generate_test", AsyncMock(return_value=_generated()))
@@ -149,7 +150,7 @@ def test_heal_exception_still_opens_mr(cfg, monkeypatch):
     monkeypatch.setattr(orchestrator, "heal_test", heal)
     out = asyncio.run(orchestrator.process_test_case("QA-1", max_heal_attempts=15))
     assert out["status"] == "failed"
-    assert out["heal_attempts"] == orchestrator.MAX_CONSECUTIVE_ABORTED_HEALS == 2
+    assert out["heal_attempts"] == heal_loop.MAX_CONSECUTIVE_ABORTED_HEALS == 2
     assert heal.call_count == 2  # stopped by the consecutive-abort cap, not the budget
     assert out["mr_url"] == "https://gitlab/mr/1"
     gl.open_mr.assert_called_once()
@@ -216,13 +217,13 @@ def test_gitlab_disabled_skips_mr(cfg, monkeypatch):
 
 def test_resolve_max_heal_attempts_reads_env_with_fallbacks(monkeypatch):
     monkeypatch.delenv("MAX_HEAL_ATTEMPTS", raising=False)
-    assert orchestrator._resolve_max_heal_attempts() == orchestrator.MAX_HEAL_ATTEMPTS
+    assert heal_loop.resolve_max_heal_attempts() == heal_loop.MAX_HEAL_ATTEMPTS
     monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "5")
-    assert orchestrator._resolve_max_heal_attempts() == 5
+    assert heal_loop.resolve_max_heal_attempts() == 5
     monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "-3")  # negative is clamped to 0
-    assert orchestrator._resolve_max_heal_attempts() == 0
+    assert heal_loop.resolve_max_heal_attempts() == 0
     monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "not-a-number")  # invalid -> default
-    assert orchestrator._resolve_max_heal_attempts() == orchestrator.MAX_HEAL_ATTEMPTS
+    assert heal_loop.resolve_max_heal_attempts() == heal_loop.MAX_HEAL_ATTEMPTS
 
 
 def test_max_heal_attempts_env_honored_when_arg_omitted(cfg, monkeypatch):
@@ -345,7 +346,7 @@ def test_compile_retry_regeneration_written_to_its_own_file(cfg, monkeypatch):
 
 
 def test_iteration_file_name_inserts_label_before_suffix():
-    f = orchestrator._iteration_file_name
+    f = heal_loop.iteration_file_name
     assert f("QA-1-login.spec.ts", "healer-attempt-1") == "QA-1-login.healer-attempt-1.spec.ts"
     assert f("QA-1.test.ts", "regen") == "QA-1.regen.test.ts"
     assert f("plain.ts", "regen") == "plain.regen.ts"
@@ -353,7 +354,7 @@ def test_iteration_file_name_inserts_label_before_suffix():
 
 
 def test_commit_message_subject_only_and_with_body():
-    m = orchestrator._commit_message
+    m = heal_loop.commit_message
     # No detail -> subject only.
     assert m("QA-1", "initial generated test") == "[AI] QA-1: initial generated test"
     # Detail -> subject + blank line + full (possibly multi-line) body.
@@ -499,9 +500,9 @@ def test_local_source_uses_local_loader_not_xray_client(cfg, monkeypatch, tmp_pa
     local_cfg = dataclasses.replace(cfg, testcase_source="local", local_testcase_dir=tmp_path)
     _wire(monkeypatch, local_cfg, [_result("passed")])
     xray_cls = MagicMock()
-    monkeypatch.setattr(orchestrator, "XrayClient", xray_cls)
+    monkeypatch.setattr(testcases, "XrayClient", xray_cls)
     loader = MagicMock(return_value=_manual_case())
-    monkeypatch.setattr(orchestrator, "load_local_test_case", loader)
+    monkeypatch.setattr(testcases, "load_local_test_case", loader)
     out = asyncio.run(orchestrator.process_test_case("NOTE-1"))
     assert out["status"] == "passed"
     loader.assert_called_once()
@@ -513,7 +514,7 @@ def test_xray_source_uses_xray_client_not_local_loader(cfg, monkeypatch):
     # Default (xray) mode must NOT touch the local loader.
     _wire(monkeypatch, cfg, [_result("passed")])  # cfg.testcase_source == "xray"
     loader = MagicMock()
-    monkeypatch.setattr(orchestrator, "load_local_test_case", loader)
+    monkeypatch.setattr(testcases, "load_local_test_case", loader)
     asyncio.run(orchestrator.process_test_case("QA-1"))
     loader.assert_not_called()
 
@@ -554,20 +555,20 @@ def test_failure_signature_is_selector_agnostic():
         "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByTestId('x')"
     )
     b = _failed(_NOT_FOUND.format(loc="locator('xpath=//y')"))
-    assert orchestrator._failure_signature(a) == orchestrator._failure_signature(b)
+    assert heal_loop.failure_signature(a) == heal_loop.failure_signature(b)
 
 
 def test_failure_signature_differs_by_kind_and_test():
     locator = _failed(_NOT_FOUND.format(loc="getByTestId('save')"))
     assertion = _failed(_DISABLED)
     other_test = _failed(_NOT_FOUND.format(loc="getByTestId('save')"), failed_test="QA-1: logout")
-    sig = orchestrator._failure_signature
+    sig = heal_loop.failure_signature
     assert sig(locator) != sig(assertion)
     assert sig(locator) != sig(other_test)
 
 
 def test_failure_signature_keys_on_the_enclosing_step_not_the_line():
-    sig = orchestrator._failure_signature
+    sig = heal_loop.failure_signature
     in_save = _failed(_NOT_FOUND.format(loc="getByTestId('save')"), error_line=6)
     # A heal that inserts a line above shifts the line number but not the step: still a repeat.
     shifted_code = _STEPPED_SPEC.replace("await page.goto('/');", "await page.goto('/');\n    //")
@@ -579,17 +580,17 @@ def test_failure_signature_keys_on_the_enclosing_step_not_the_line():
 
 
 def test_failing_step_finds_the_enclosing_step_title():
-    assert orchestrator._failing_step(_STEPPED_SPEC, 6) == 'click "save"'
-    assert orchestrator._failing_step(_STEPPED_SPEC, 1) == ""  # before any step
-    assert orchestrator._failing_step(_STEPPED_SPEC, None) == ""
+    assert heal_loop.failing_step(_STEPPED_SPEC, 6) == 'click "save"'
+    assert heal_loop.failing_step(_STEPPED_SPEC, 1) == ""  # before any step
+    assert heal_loop.failing_step(_STEPPED_SPEC, None) == ""
 
 
 def test_consecutive_repeats_counts_trailing_matches():
-    assert orchestrator._consecutive_repeats([], "a") == 0
-    assert orchestrator._consecutive_repeats(["a"], "a") == 1
-    assert orchestrator._consecutive_repeats(["a", "a"], "a") == 2
-    assert orchestrator._consecutive_repeats(["a", "b"], "a") == 0  # streak broken
-    assert orchestrator._consecutive_repeats(["b", "a"], "a") == 1
+    assert heal_loop.consecutive_repeats([], "a") == 0
+    assert heal_loop.consecutive_repeats(["a"], "a") == 1
+    assert heal_loop.consecutive_repeats(["a", "a"], "a") == 2
+    assert heal_loop.consecutive_repeats(["a", "b"], "a") == 0  # streak broken
+    assert heal_loop.consecutive_repeats(["b", "a"], "a") == 1
 
 
 def test_recurring_failure_raises_the_repeat_count(cfg, monkeypatch):
@@ -667,7 +668,7 @@ def test_unchanged_heal_stops_the_loop_with_a_verdict(cfg, monkeypatch):
     assert run.call_count == 1  # no re-run, so no healer-attempt-1 file either
     assert out["status"] == "failed"
     assert out["heal_attempts"] == 1
-    assert out["heal_verdict"].startswith(orchestrator.NO_FIX_VERDICT)
+    assert out["heal_verdict"].startswith(heal_loop.NO_FIX_VERDICT)
     assert "stays enabled" in out["heal_verdict"]
     kwargs = gl.open_mr.call_args.kwargs
     assert [r.message.splitlines()[0] for r in kwargs["revisions"]] == [
@@ -827,7 +828,7 @@ def test_summary_reports_vision_gaps_per_agent(cfg, monkeypatch, caplog):
 
     monkeypatch.setattr(orchestrator, "plan_test_case", plan)
     monkeypatch.setattr(orchestrator, "heal_test", heal)
-    with caplog.at_level("WARNING", logger="ai_test_gen.orchestrator"):
+    with caplog.at_level("WARNING", logger="ai_test_gen.pipeline.summary"):
         out = asyncio.run(orchestrator.process_test_case("QA-1"))
     expected = "Planner: 3 of 3 checks had no screenshot; Healer: 2 checks, all captured"
     assert out["vision"] == expected
@@ -924,7 +925,7 @@ def test_usage_summary_on_refusal_mr_failure_and_gitlab_off(cfg, monkeypatch):
 def test_usage_total_is_logged_at_the_end_of_the_run(cfg, monkeypatch, caplog):
     _wire(monkeypatch, cfg, [_result("passed")])
     monkeypatch.setattr(orchestrator, "plan_test_case", _recording_planner())
-    with caplog.at_level("INFO", logger="ai_test_gen.orchestrator"):
+    with caplog.at_level("INFO", logger="ai_test_gen.pipeline.summary"):
         asyncio.run(orchestrator.process_test_case("QA-1"))
     [line] = [r.getMessage() for r in caplog.records if "Usage total" in r.getMessage()]
     assert "[QA-1] Usage total: 4 requests, in=4,000 out=40 tokens" in line

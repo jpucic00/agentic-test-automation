@@ -17,12 +17,8 @@ from pydantic_ai.models.test import TestModel
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents.tools import dom_probe as dom_probe_mod
-from ai_test_gen.agents.tools.dom_probe import (
-    PROBE_TOOL,
-    _clean,
-    build_probe_js,
-    register_probe_dom,
-)
+from ai_test_gen.agents.tools.dom_probe import build_probe_js, register_probe_dom
+from ai_test_gen.agents.tools.mcp_direct import EVALUATE_TOOL
 from ai_test_gen.core import models
 
 
@@ -79,7 +75,7 @@ def test_probe_dom_dispatches_browser_evaluate_with_fixed_js(cfg):
     out = asyncio.run(tool("Speichern", 'div[role="dialog"]'))
     assert "matchCount" in out
     (name, args), = mcp.calls
-    assert name == PROBE_TOOL
+    assert name == EVALUATE_TOOL
     assert json.dumps("Speichern") in args["function"]  # the model's text rode along as data
     assert "querySelectorAll" in args["function"]  # …inside the fixed probe function
 
@@ -111,30 +107,6 @@ def test_probe_dom_unavailable_without_direct_call_path(cfg):
 
 
 # --- result hygiene: snapshot stripped, size capped ------------------------------
-
-
-def test_clean_strips_trailing_page_snapshot():
-    raw = (
-        '### Result\n{"matchCount": 2}\n\n'
-        "### Page state\n- Page Snapshot\n- generic:\n  - text: x"
-    )
-    out = _clean(raw)
-    assert '{"matchCount": 2}' in out
-    assert "generic" not in out  # everything from the snapshot marker on is gone
-
-
-def test_clean_caps_result_size():
-    out = _clean("x" * 10_000)
-    assert len(out) <= dom_probe_mod._RESULT_CHAR_CAP + 40
-    assert out.endswith("…[probe result truncated]")
-
-
-def test_clean_joins_content_item_lists():
-    class _Item:
-        def __init__(self, text):
-            self.text = text
-
-    assert _clean([_Item("part-a"), {"text": "part-b"}]) == "part-a\npart-b"
 
 
 # --- gating: registered on both agents only when enabled -------------------------
@@ -206,8 +178,3 @@ def test_probe_tool_docstring_demands_verification(cfg):
     assert "UNVERIFIED" in doc
     assert "browser_verify_element_visible" not in doc
     assert "RAW" in doc
-
-
-def test_result_text_keeps_plain_string_items_in_a_list():
-    # pydantic-ai returns a list of plain strings when a tool result has several text items.
-    assert dom_probe_mod._result_text(["### Result", '"[]"']) == '### Result\n"[]"'

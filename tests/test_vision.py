@@ -473,22 +473,6 @@ def test_make_screenshot_capture_drives_browser_take_screenshot():
     assert planner_mod._make_screenshot_capture(object()) is None
 
 
-def test_underlying_mcp_unwraps_filtered_layers():
-    class _Raw:
-        async def direct_call_tool(self, name, args): ...
-
-    class _Wrap:
-        def __init__(self, wrapped):
-            self.wrapped = wrapped
-
-    raw = _Raw()
-    assert planner_mod._underlying_mcp(_Wrap(_Wrap(raw))) is raw  # walks the wrapper chain
-    assert planner_mod._underlying_mcp(object()) is None  # nothing exposes direct_call_tool
-
-
-# --- gating: off by default -> Planner unchanged ------------------------------
-
-
 def test_planner_registers_inspect_screen_only_when_enabled(cfg, monkeypatch):
     seen: list[int] = []
     real = planner_mod._register_inspect_screen
