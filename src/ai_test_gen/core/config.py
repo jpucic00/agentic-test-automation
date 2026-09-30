@@ -531,6 +531,10 @@ class Config:
     locator_steer_after: int = 3
     # Watch the browser drive: a headed copy of the MCP config (PLAYWRIGHT_MCP_HEADED).
     playwright_mcp_headed: bool = False
+    # Size cap for one browser_find result, in characters (BROWSER_FIND_MAX_CHARS); a larger
+    # result keeps its likeliest matches in full and lists the rest one line each
+    # (browser/find_cap.py). 0 = no cap.
+    browser_find_max_chars: int = 6000
     # Heal cap per test case (MAX_HEAL_ATTEMPTS); process_test_case(max_heal_attempts=) overrides.
     # 3 gives the locator-kind escalation room to descend the resilience ladder: a persistently
     # failing step needs one attempt to confirm the failure recurs and another to escalate to a
@@ -684,6 +688,7 @@ def load_config() -> Config:
         vision_stale_after_s=_positive_float_knob("PLANNER_VISION_STALE_S", default=45.0),
         locator_steer_after=_int_knob("PLANNER_LOCATOR_STEER_AFTER", default=3, minimum=1),
         playwright_mcp_headed=_bool_knob("PLAYWRIGHT_MCP_HEADED", default=False),
+        browser_find_max_chars=_int_knob("BROWSER_FIND_MAX_CHARS", default=6000, minimum=0),
         max_heal_attempts=_int_knob("MAX_HEAL_ATTEMPTS", default=3, minimum=0),
         xray_steps_field_id=os.environ.get("XRAY_STEPS_FIELD_ID", DEFAULT_XRAY_STEPS_FIELD_ID),
         model_context_windows=_model_context_windows(),

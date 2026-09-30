@@ -43,6 +43,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from ..core.config import Config
 from ..core.paths import PROJECT_ROOT
 from ..guardrails.nav_guard import NavigationGuard
+from .find_cap import FindResultCap
 
 MCP_CONFIG_PATH = PROJECT_ROOT / "playwright-mcp-config.json"
 
@@ -192,8 +193,13 @@ def build_playwright_mcp(
         StdioTransport(command="node", args=args, cwd=str(MCP_OUTPUT_DIR), keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
         # Always-on navigation allow-list guard (guardrails/nav_guard.py), composed around the
-        # caller's hook (the Planner's/Healer's LocatorFailureGuard), which still sees every call.
-        process_tool_call=NavigationGuard(config.allowed_origins, inner=process_tool_call),
+        # caller's hook (the Planner's/Healer's LocatorFailureGuard), which still sees every call;
+        # browser_find results are capped (browser/find_cap.py) inside the guard, around the
+        # caller's hook.
+        process_tool_call=NavigationGuard(
+            config.allowed_origins,
+            inner=FindResultCap(config.browser_find_max_chars, inner=process_tool_call),
+        ),
     )
     # Hide the raw code-exec tools (browser_evaluate, etc.) — see _agent_safe_tool.
     return toolset.filtered(_agent_safe_tool)

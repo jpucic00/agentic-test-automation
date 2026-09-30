@@ -17,6 +17,7 @@ from pydantic_ai.exceptions import ModelRetry
 
 from ai_test_gen.agents.tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
 from ai_test_gen.browser import mcp as pm
+from ai_test_gen.browser.find_cap import FindResultCap
 from ai_test_gen.core import models
 from ai_test_gen.guardrails import allowlist
 from ai_test_gen.guardrails.nav_guard import NavigationGuard
@@ -185,7 +186,10 @@ def test_build_playwright_mcp_always_wraps_the_callers_hook(cfg, monkeypatch, tm
     pm.build_playwright_mcp(cfg, process_tool_call=inner)
     hook = captured["process_tool_call"]
     assert isinstance(hook, NavigationGuard)
-    assert hook.inner is inner
+    # Chain: NavigationGuard → FindResultCap (browser/find_cap.py) → the caller's hook.
+    assert isinstance(hook.inner, FindResultCap)
+    assert hook.inner.inner is inner
+    assert hook.inner.max_chars == cfg.browser_find_max_chars
     assert hook.allowed_origins == cfg.allowed_origins
 
     pm.build_playwright_mcp(cfg)  # no caller hook → the guard alone, still installed

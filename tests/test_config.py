@@ -566,6 +566,7 @@ _KNOB_DEFAULTS = [
     ("vision_stale_after_s", 45.0),
     ("locator_steer_after", 3),
     ("playwright_mcp_headed", False),
+    ("browser_find_max_chars", 6000),
     ("max_heal_attempts", 3),
     ("xray_steps_field_id", "customfield_11006"),
     ("model_context_windows", {}),
@@ -595,6 +596,8 @@ def test_tuning_knobs_default_to_the_config_defaults(env, cfg):
         ("PLANNER_VISION_STALE_S", "120", "vision_stale_after_s", 120.0),
         ("PLANNER_LOCATOR_STEER_AFTER", "2", "locator_steer_after", 2),
         ("PLAYWRIGHT_MCP_HEADED", "true", "playwright_mcp_headed", True),
+        ("BROWSER_FIND_MAX_CHARS", "12000", "browser_find_max_chars", 12000),
+        ("BROWSER_FIND_MAX_CHARS", "0", "browser_find_max_chars", 0),  # cap off
         ("MAX_HEAL_ATTEMPTS", "0", "max_heal_attempts", 0),  # no healing
         ("XRAY_STEPS_FIELD_ID", "customfield_12000", "xray_steps_field_id", "customfield_12000"),
         (
@@ -623,6 +626,8 @@ def test_tuning_knob_valid_override(env, var, raw, attr, expected):
         ("HEALER_REASONING_EFFORT", "max"),
         ("SNAPSHOT_HISTORY_KEEP", "x"),
         ("SNAPSHOT_HISTORY_KEEP", "-1"),
+        ("BROWSER_FIND_MAX_CHARS", "-1"),
+        ("BROWSER_FIND_MAX_CHARS", "lots"),
         ("ANCHOR_SNAPSHOTS", "maybe"),
         ("PLANNER_VISION_STALE_S", "0"),
         ("PLANNER_VISION_STALE_S", "soon"),
