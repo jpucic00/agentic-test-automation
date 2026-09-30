@@ -12,6 +12,10 @@ The plan it sees has every URL on a configured environment rewritten to a baseUR
 path (``https://staging.example.com/notes`` → ``/notes``), so the generated spec navigates
 with ``page.goto('/notes')`` and runs unchanged on every ``STAGING_BASE_URL`` environment;
 URLs on other hosts (``STAGING_EXTRA_URLS``) stay absolute.
+
+Every text inside a generated locator must come from the plan's verified selectors: an output
+validator (``runtime/spec_literals.py``) restores typographic drift in place and bounces invented
+text back to the model.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from ..guardrails.allowlist import relative_to
 from ..net.gateway import build_openai_model
 from .runtime.context import assemble_system_prompt
 from .runtime.run import run_agent_logged
+from .runtime.spec_literals import spec_literal_validator
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -126,6 +131,7 @@ async def generate_test(
     ``"Generator"`` — or ``"Generator retry"`` for the compile-retry regeneration.
     """
     agent = build_generator(config)
+    agent.output_validator(spec_literal_validator(plan))
     user_message = _build_generation_message(
         plan, previous_code, error_text, app_origins=config.environment_origins
     )

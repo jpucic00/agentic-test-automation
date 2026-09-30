@@ -124,6 +124,37 @@ assertion on that proof uses the matching matcher — `toHaveText` for text the 
 proof passes on a bug (a heading exists on every article). The value comes from the test case, never
 invented; a value the test generates is asserted through its variable.
 
+The "never invented" rule for locators is **enforced in code**, not only by the prompt. An output
+validator on the Generator (`agents/runtime/spec_literals.py`) scans the spec for the text inside
+every locator call — the `getByText`/`getByLabel`/`getByTestId`/`getByPlaceholder`/`getByAltText`/
+`getByTitle`/`locator` argument, a `getByRole` `name`, a `filter` `hasText` — and requires each one
+to appear in some plan `target_selector`/`assert_selector` (or as a name quoted in a step's
+`container`). Text that differs from a plan literal only by typographic characters (curly quotes,
+non-breaking spaces, `…`) or spacing is **rewritten in place** to the plan's exact characters — the
+page renders `“New note”`, and a model that retypes it as `"New note"` no longer produces a locator
+that matches nothing. Any other text (e.g. `getByRole('heading', { name: 'Login' })` asserted from
+the prose "Login page is displayed" on a page whose heading is "Log in") is **bounced back** to the
+Generator as a retry naming the offending locator, within the same output-retry budget
+(`AGENT_OUTPUT_RETRIES`). Variables, `${…}` templates and role-only locators such as
+`getByRole('dialog')` carry no literal and pass.
+
+The same rule is enforced one step earlier on the **Planner**, because a plan with the wrong
+characters poisons everything downstream (the Generator must copy it, the Healer repeats it). An
+output validator on the Planner (`agents/runtime/plan_evidence.py`) checks the text inside every
+recorded `target_selector`/`assert_selector` against what the page actually showed during that
+run: the text of every tool result in the run history (snapshots, `browser_find` and
+`browser_generate_locator` output — minus anything that only repeats that call's own arguments, since
+tools like `count_matches` echo the query they were given), the values the Planner typed into the page,
+and the snapshot files Playwright MCP wrote to `output/snapshots/` (emptied at the start of every
+run, so they survive history trimming). Text found verbatim passes; text that matches only after
+folding typographic quotes/spacing is rewritten to the page's exact characters (the Planner — gpt-oss
+too — retypes `“New note”` as `"New note"`); text no page showed goes back to the Planner as a
+retry naming the step. After two such retries the plan is accepted with a WARNING, so the check can
+never be what exhausts the run's output-retry budget. It proves the text existed on the page, not
+that the locator is unique — that stays `count_matches`' job. Regex literals and raw
+`locator('css=…'/'xpath=…')` selectors are not checked (page text can't evidence them; `count_matches`
+is their proof).
+
 The Generator also **guards each step**: it wraps every plan step in ``test.step(`<action>`, …)`` (a
 template-literal label, so quotes in the action never break the string), asserts
 the target is visible *before* acting (`await expect(target, '…').toBeVisible()`), and — for a step that
@@ -163,7 +194,7 @@ src/ai_test_gen/
 |---|---|
 | **Orchestration** | `orchestrator.py` — the Plan → Generate → Run → Heal → MR flow · `pipeline/heal_loop.py` — heal budget, stop verdicts, failure fingerprints, per-iteration file names + MR commit messages · `pipeline/summary.py` — the run summary (environments, vision, usage) · `pipeline/batch.py` (several keys in sequence) · `scripts/run_one.py` / `scripts/run_batch.py` (thin CLIs) |
 | **Agents** | `agents/planner.py`, `agents/generator.py`, `agents/healer.py`, `agents/vision.py` |
-| **Agent runtime** | `agents/runtime/context.py` — injects the human-authored context files into the system prompt and builds the browser agents' model settings from config · `agents/runtime/run.py` — the one place every agent is run · `agents/runtime/reasoning_only.py`, `agents/runtime/history.py` — capabilities |
+| **Agent runtime** | `agents/runtime/context.py` — injects the human-authored context files into the system prompt and builds the browser agents' model settings from config · `agents/runtime/run.py` — the one place every agent is run · `agents/runtime/reasoning_only.py`, `agents/runtime/history.py` — capabilities · `agents/runtime/plan_evidence.py` — the Planner's output validator (selector text must have appeared on the page) · `agents/runtime/spec_literals.py` — the Generator's output validator (locator text must come from the plan) |
 | **Agent tools & hooks** | `agents/tools/locator_guard.py`, `agents/tools/count_matches.py`, `agents/tools/dom_probe.py`, `agents/tools/inspect_screen.py` · `agents/tools/mcp_direct.py` — shared helpers for tools that call hidden MCP tools directly (unwrap to the live MCP, read its results) |
 | **Prompts** | `agents/prompts/planner.md`, `agents/prompts/generator.md`, `agents/prompts/healer.md` · shared fragments added by code: `agents/prompts/locators.md` (always, Planner + Healer), `agents/prompts/activation.md` (when the context/map declares an activation flow), `agents/prompts/vision_aid.md` / `agents/prompts/dom_probe.md` (when enabled) |
 | **Model access** | `net/gateway.py` (gateway provider) + `net/connection.py` (direct-connect, optional private CA + client cert) |

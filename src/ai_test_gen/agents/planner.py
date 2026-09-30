@@ -31,6 +31,7 @@ from .runtime.context import (
     declares_activation_flow,
 )
 from .runtime.history import snapshot_trimmer
+from .runtime.plan_evidence import plan_evidence_validator
 from .runtime.reasoning_only import ReasoningOnlyRetry
 from .runtime.run import run_agent_logged
 from .tools.count_matches import register_count_matches
@@ -162,6 +163,9 @@ def build_planner(
     # (see agents/tools/count_matches.py) — browser_generate_locator errors on 0 matches but not
     # on duplicates.
     register_count_matches(agent, mcp)
+    # Every text in a recorded selector must have appeared on the page during this run;
+    # typographic drift is restored to the page's characters (see runtime/plan_evidence.py).
+    agent.output_validator(plan_evidence_validator(config.snapshots_dir))
     return agent
 
 

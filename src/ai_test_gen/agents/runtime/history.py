@@ -157,7 +157,7 @@ def _anchor_locations(
         if last_preceding is None:
             continue  # capture before any snapshot — nothing to anchor
         loc, part = last_preceding
-        text = _content_text(part.content) or ""
+        text = content_text(part.content) or ""
         url_match = _PAGE_URL_RE.search(text)
         key: object = (
             (url_match.group(1), bool(_DIALOG_RE.search(text))) if url_match else loc
@@ -179,7 +179,7 @@ def _is_snapshot_bearing(part: ToolReturnPart) -> bool:
     """True for a browser tool return that still carries a full page snapshot."""
     if part.tool_name in _PROTECTED_TOOLS or not part.tool_name.startswith("browser_"):
         return False
-    text = _content_text(part.content)
+    text = content_text(part.content)
     return text is not None and _SNAPSHOT_MARKER in text and _STUB not in text
 
 
@@ -190,14 +190,14 @@ def _truncate(part: ToolReturnPart) -> ToolReturnPart:
     header) survives, so the trail of what the agent did — and where — stays
     readable even after the heavy YAML is dropped.
     """
-    text = _content_text(part.content) or ""
+    text = content_text(part.content) or ""
     marker_at = text.find(_SNAPSHOT_MARKER)
     head = text[:marker_at].rstrip() if marker_at >= 0 else ""
     new_content = f"{head}\n{_STUB}" if head else _STUB
     return dataclasses.replace(part, content=new_content)
 
 
-def _content_text(content: Any) -> str | None:
+def content_text(content: Any) -> str | None:
     """Best-effort text of a tool return (plain string or MCP content-item list)."""
     if isinstance(content, str):
         return content
