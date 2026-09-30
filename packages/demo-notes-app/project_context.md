@@ -1,67 +1,53 @@
 # Project Context — Demo Notes app
 
 ## 1. What the app is
-- A tiny notes app used as the application under test for this pipeline's demo. Users
-  register, log in, and create / edit / delete their own notes.
-- There is no backend or database: accounts, the session, and notes are all stored in the
-  browser's `localStorage`.
-- Core entities: a User (email + password) and a Note (title + body) owned by the logged-in user.
-- It runs locally at http://localhost:3000 and holds only disposable demo data.
+- A simple notes app: you create an account (or use the demo account), log in, and keep a
+  personal list of notes that you can add, edit, and delete.
+- Things tests work with: a user account (email + password) and a note (a title and an
+  optional body). Each user only sees their own notes.
+- It runs locally at http://localhost:3000 and only ever holds throwaway demo data.
 
 ## 2. Authentication model
-- Mock auth — no real identity provider (no Keycloak / OAuth). Login and registration are
-  plain in-app forms.
-- Opening the base URL redirects to `/login`; submit the form to sign in. There is no
-  external redirect.
-- At the start of a scenario, sign in as the user the test needs. This app has a single user
-  role; unless the test registers a new account, log in as the seeded demo user (see §3).
-- Generated tests sign in directly with the seeded demo credentials below, embedded as
-  literals — they are disposable, non-production values. Never put real credentials in a test.
-- To switch identity: click Log out in the navbar, then log in or register as the other user.
+- No saved session is used: every test logs in from scratch at the start of the run.
+- Login is a normal email + password form inside the app — no external login page.
+- There is only one kind of user. Unless the test is about registering a new account, log in
+  as the demo user from §3.
+- To switch users mid-test: click Log out, then log in (or register) as the other user.
+- Generated tests use the demo credentials in §3 as plain values. Never put real credentials
+  in a test.
 
-## 3. Test users (seeded — re-created on every page load)
-The app re-seeds this account into `localStorage` on every page load, so it is always
-available even though each test run starts with an empty browser.
+## 3. Test users (always available)
+The demo account is always there, even in a brand-new browser, so logging in with it always works.
 
-| Role          | Email          | Password    | What this user can do                              |
-| ------------- | -------------- | ----------- | -------------------------------------------------- |
-| Standard user | demo@demo.test | Passw0rd!   | Register / log in and create/edit/delete own notes |
+| Role          | Email          | Password    | What this user can do                  |
+| ------------- | -------------- | ----------- | -------------------------------------- |
+| Standard user | demo@demo.test | Passw0rd!   | Log in and create/edit/delete own notes |
 
 ## 4. Registration & test-data conventions
-- Registration CREATES a new account; do not reuse the seeded demo user for a registration test.
-- Uniqueness (required): the app rejects an email that already exists, so every registration
-  must use a UNIQUE email per run — append a timestamp or short random token, for example
-  `qa-20260622-143200@demo.test`. Compute the suffix in the test at run time so reruns do not
-  collide.
-- Password: the form only requires the password and its confirmation to match; any non-empty
-  value works (for example `NewPass123!`).
-- A note needs a title; the body is optional.
-<!-- The registration flow's entry point, steps, and fields live in project_map.md, not here. -->
+- Registration creates a new account — don't use the demo account for a registration test.
+- Unique email every run (required): the app refuses an email that is already registered, so
+  add a timestamp or short random token to the address, e.g. `qa-20260622-143200@demo.test`.
+  Generate it when the test runs so reruns never clash.
+- Password: any value works as long as "Password" and "Confirm password" match
+  (e.g. `NewPass123!`).
+- A note needs a title; the body can stay empty.
+- Every test starts in a fresh browser with no notes and no extra accounts. If a test needs a
+  note (e.g. to edit or delete it), the test creates it first.
 
-## 5. Selector rules (capture live, never hallucinate)
-- Do NOT list selectors here or in project_map.md. The agents capture every locator LIVE from
-  the running app and pick the most robust kind the element supports — the resilience ladder:
-  id (`getByTestId`) > accessible (`getByRole`/`getByLabel`/`getByText`) > CSS > XPath. (This demo
-  app is a mixed-accessibility fixture ON PURPOSE: only the login page is fully id'd; register/notes
-  inputs are label-only (`getByLabel`, no id) and the New-note/Save/Cancel/Edit/Delete/Log-out
-  controls plus the delete dialog are non-semantic `<div>`s with no role/id — those resolve to a
-  verified CSS/XPath/text locator. So expect the full ladder, not `getByTestId` everywhere.)
-- Capture with Playwright MCP (`browser_generate_locator`; for an authored CSS/XPath, pass it as a
-  raw `xpath=`/`css=` target and confirm `count_matches` reports exactly 1). Record only a locator
-  you verified resolves; never invent one.
-- Per-note controls are generated per row at run time. Locate a specific note by its visible
-  title, then act on the edit/delete control in that same row — don't rely on a fixed per-note id.
+## 5. Selector rules (standard)
+- Do NOT list selectors here or in project_map.md. The agents capture every locator LIVE and pick
+  the most robust kind the element supports — the resilience ladder: id (`getByTestId`) >
+  accessible (`getByRole`/`getByLabel`/`getByText`) > CSS (`locator('css=…')`) > XPath
+  (`locator('xpath=…')`). An id is not "better" than an XPath when the element has no id.
+- Inaccessible elements (no id, no usable role/name) get a verified CSS or XPath — that is the
+  correct fix, not a hack. Capture with Playwright MCP and confirm a locator resolves to the
+  intended element before recording it; never invent one.
 
 ## 6. Localization
-- English only; visible text is stable. The agents still prefer locale-independent locators.
+- English only.
 
 ## 7. Behavior guardrails
-- Local demo only (http://localhost:3000). There is no production environment.
-- Each run starts with a FRESH, empty `localStorage`. The seeded demo user is re-created on
-  every page load (see §3); any notes or extra accounts a scenario needs must be created within
-  that scenario.
-- Session-invalidating action: clicking Log out ends the current session — only do it when the
-  scenario needs it (logging out, switching identity), and log back in before any later step
-  that needs the session.
-- Stay within the test's scope: do not clear `localStorage` or delete notes the scenario did not
-  create.
+- Local demo only (http://localhost:3000); there is no production environment.
+- Logging out ends the session. Only log out when the test needs it (testing logout, switching
+  users), and log back in before any later step that needs you logged in.
+- Stay within the test's scope: only change or delete notes the test itself created.

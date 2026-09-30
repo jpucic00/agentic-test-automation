@@ -1,85 +1,64 @@
 # Application Map — Demo Notes app
 
-<!-- No selectors here on purpose: the Planner/Healer capture every locator LIVE from the
-running app and pick the most robust kind the element supports (resilience ladder:
-id > accessible > CSS > XPath). This map describes routes, flows, and quirks only. -->
-
 ## Base
-- Base URL: http://localhost:3000 (local demo, non-production).
-- Opening the base URL redirects to `/login`.
-- Landing after login: `/notes`.
+- Base URL: http://localhost:3000 (local demo).
+- Opening the base URL takes you to the "Log in" page.
+- After logging in you land on the "Your notes" page.
 - Language: English only.
 
-## Navigation (top navbar, present on every page)
-| Element (by label/purpose) | Goes to / does                          | Visible to |
-| -------------------------- | --------------------------------------- | ---------- |
-| Brand "Demo Notes"         | `/` (which redirects to `/login`)       | everyone   |
-| Login                      | `/login`                                | logged-out |
-| Register                   | `/register`                             | logged-out |
-| About note-taking          | the Wikipedia "Note-taking" article (external, same tab) | everyone |
-| Logged-in email            | shows the current user's email          | logged-in  |
-| Log out                    | clears the session, returns to `/login` | logged-in  |
+## Navigation (top bar, on every page)
+| Item                | What it does                                        | Visible to  |
+| ------------------- | --------------------------------------------------- | ----------- |
+| "Demo Notes" (logo) | Goes to the start page (the "Log in" page)          | everyone    |
+| Login               | Opens the "Log in" page                             | logged out  |
+| Register            | Opens the "Create an account" page                  | logged out  |
+| About note-taking   | Opens the Wikipedia article "Note-taking" (leaves the app, same tab) | everyone |
+| Your email address  | Shows who is logged in (not clickable)              | logged in   |
+| Log out             | Logs you out and returns to the "Log in" page       | logged in   |
 
 ## Auth flow (login) — step by step
-1. Open the base URL → it redirects to `/login`.
-2. Enter the email and password, then submit the login form.
-3. On success the app navigates to `/notes`; the navbar shows the user's email and a Log out button.
-4. On failure an error message appears and the page stays on `/login`.
-5. Log out via the Log out control in the navbar.
+1. Open the base URL → the "Log in" page appears.
+2. Fill in Email and Password, then click "Log in".
+3. Success: the "Your notes" page opens and the top bar shows your email and "Log out".
+4. Wrong email or password: the message "Invalid email or password." appears and you stay on
+   the "Log in" page.
+5. To log out, click "Log out" in the top bar.
 
 ## Registration flow — step by step
-- Entry: `/register` (or click Register in the navbar).
-- Enter email, password, and confirm-password; submit the form.
-- Success: the account is created, the user is logged in automatically, and the app navigates to
-  `/notes`.
-- Failure: an error appears (passwords do not match, or the email already exists). Use a unique
-  email per run.
+- Open it via "Register" in the top bar (or the "Register here" link on the "Log in" page).
+- Fill in Email, Password, and Confirm password, then click "Register".
+- Success: you are logged in straight away and land on "Your notes" (empty for a new account).
+- Failure: an error message appears and you stay on the page —
+  "Passwords do not match." or "An account with that email already exists."
 
-## External hosts
-- `https://en.wikipedia.org` — the "About note-taking" navbar link opens the Wikipedia article
-  "Note-taking" in the same tab. It is a third-party site, not part of the app: it is reachable only
-  when listed in `STAGING_EXTRA_URLS`.
-
-## Routes & access by role
-| Route       | Purpose                       | Auth                                     |
-| ----------- | ----------------------------- | ---------------------------------------- |
-| `/login`    | sign in                       | public                                   |
-| `/register` | create an account             | public                                   |
-| `/notes`    | list / create / edit / delete | logged-in (redirects to `/login` if not) |
+## Pages you can open directly
+| Address     | Page                | Who can open it                                   |
+| ----------- | ------------------- | ------------------------------------------------- |
+| `/login`    | Log in              | everyone                                          |
+| `/register` | Create an account   | everyone                                          |
+| `/notes`    | Your notes          | logged-in users (otherwise you're sent to Log in) |
 
 ## Key features
 
-### Feature: Notes list
-- Route: `/notes` (requires login).
-- An empty state ("No notes yet…") shows when the user has no notes.
-- When notes exist they render as one row per note, each row carrying the note's title and an
-  edit and a delete control.
-- To act on a specific note, find it by its visible title and use the control in that same row.
+### Your notes (list)
+- With no notes, the page shows a "No notes yet" message.
+- Each note is shown with its title, its body text, and its own "Edit" and "Delete" buttons.
+- To work on a specific note, find it by its title and use the "Edit" / "Delete" next to it.
 
-### Feature: Create / edit a note
-- A "new note" control opens an editor with a title field, a body field, and save / cancel
-  controls.
-- Saving adds the new note to the top of the list.
-- Editing opens the same editor (via the row's edit control), pre-filled with the note's values.
+### Create / edit a note
+- Click "New note": a form opens with Title and Body fields and "Save note" / "Cancel".
+- "Save note" adds the note to the list; "Cancel" closes the form without saving.
+- "Edit" on a note opens the same form already filled in with that note; "Save note" updates it.
 
-### Feature: Delete a note (confirmation dialog)
-- The row's delete control opens a confirmation dialog (`role="dialog"`).
-- The dialog has a confirm button (deletes) and a cancel button (closes without deleting); scope
-  those locators to the dialog.
-- After confirming, the note is removed; if it was the last one, the empty state returns.
+### Delete a note
+- "Delete" on a note opens a "Delete note" confirmation box asking you to confirm
+  ("… This cannot be undone.").
+- In that box, "Delete" removes the note; "Cancel" closes the box and keeps the note.
+- While the box is open, the word "Delete" shows up four times on the page: the note's own
+  "Delete" button, the heading "Delete note", the question, and the confirm button. The confirm
+  button is the one right next to "Cancel" inside the box — work inside the box, not the whole page.
+- After deleting the last note, the "No notes yet" message comes back.
 
-## Known quirks
-- Mixed accessibility ON PURPOSE (resilience-ladder fixture). Only the **login** page is fully
-  id'd/semantic. Elsewhere: register/notes-editor inputs are label-only (no id → `getByLabel`);
-  the New-note / Save / Cancel / per-row Edit / Delete / Log-out controls and the delete dialog's
-  confirm/cancel are non-semantic `<div>`s with no role/id/aria (capture a verified CSS/XPath/text
-  locator); note rows carry no per-row id. Climb the ladder per element — don't assume an id or a
-  button role exists.
-- Each run starts with an EMPTY `localStorage` (fresh browser). The seeded demo user
-  (`demo@demo.test` / `Passw0rd!`) is re-created on every page load, so logging in as it always
-  works; anything else (notes, extra accounts) must be created within the scenario.
-- Per-note controls are generated per row at run time — locate a note by its visible title first,
-  then use the edit/delete control in that row; don't rely on a fixed per-note identifier.
-- Delete is guarded by a confirmation dialog; its confirm/cancel buttons exist only while the
-  dialog is open.
-- Login/registration error messages exist only after a failed submit.
+### About note-taking (external link)
+- Takes you to the Wikipedia "Note-taking" article in the same tab. Wikipedia is not part of the
+  app — only check that the article opened; don't test the site itself.
