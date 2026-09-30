@@ -2,7 +2,7 @@
 
 The Planner / Generator / Healer all reach the LLM gateway through pydantic-ai's
 ``OpenAIProvider``. The gateway needs the same httpx policy Phase 0 proved out (see
-``ai_test_gen.mtls``):
+``ai_test_gen.net.connection``):
 
 - ``trust_env`` defaults to False — connect DIRECTLY and IGNORE the environment
   ``HTTP(S)_PROXY``. Routing the gateway call through the env proxy drops it with
@@ -37,8 +37,8 @@ from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from . import mtls
-from .config import Config
+from ..core.config import Config
+from . import connection
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ def build_openai_model(
     """Return an ``OpenAIChatModel`` for ``model_name`` on the corp gateway, deadline-wrapped.
 
     Applies the proven gateway httpx policy (direct-by-default, corp CA, optional
-    mTLS) from ``ai_test_gen.mtls`` so every agent shares one connection config.
+    mTLS) from ``ai_test_gen.net.connection`` so every agent shares one connection config.
 
     ``base_url`` / ``api_key`` override the shared gateway for a single agent — the
     Planner passes ``config.planner_base_url`` / ``config.planner_api_key`` so it can
@@ -178,9 +178,9 @@ def build_openai_model(
     """
     deadline_s = timeout_s if timeout_s is not None else config.agent_request_timeout_s
     http_client = DefaultAsyncHttpxClient(
-        trust_env=mtls.get_trust_env(),
-        verify=mtls.get_verify_arg(),
-        cert=mtls.get_cert_arg(),  # None when no mTLS is configured
+        trust_env=connection.get_trust_env(),
+        verify=connection.get_verify_arg(),
+        cert=connection.get_cert_arg(),  # None when no mTLS is configured
         timeout=httpx.Timeout(deadline_s, connect=min(_CONNECT_TIMEOUT_S, deadline_s)),
     )
     provider = OpenAIProvider(

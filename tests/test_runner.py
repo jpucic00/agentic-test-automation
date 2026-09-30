@@ -13,8 +13,8 @@ import asyncio
 import json
 from unittest.mock import AsyncMock
 
-from ai_test_gen import models
-from ai_test_gen import test_runner as runner
+from ai_test_gen.browser import runner
+from ai_test_gen.core import models
 
 
 class _FakeProc:

@@ -18,14 +18,14 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RequestUsage, RunUsage
 
-from ai_test_gen import models
-from ai_test_gen.agents import _vision_aid as vision_aid_mod
 from ai_test_gen.agents import generator as generator_mod
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents import vision as vision_mod
-from ai_test_gen.agents._run_failure import run_agent_logged
-from ai_test_gen.usage import UsageLog, describe, format_duration, format_usage
+from ai_test_gen.agents.runtime.run import run_agent_logged
+from ai_test_gen.agents.tools import inspect_screen as vision_aid_mod
+from ai_test_gen.core import models
+from ai_test_gen.core.usage import UsageLog, describe, format_duration, format_usage
 
 # --- aggregation math -------------------------------------------------------------
 
@@ -129,7 +129,7 @@ def test_successful_run_records_usage_and_logs_one_line(caplog):
         )
 
     log = UsageLog()
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.usage"):
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
         out = asyncio.run(
             run_agent_logged(_agent(_tool_then(done)), "go", agent_label="Generator", usage=log)
         )
@@ -152,7 +152,7 @@ def test_aborted_run_still_records_partial_usage(caplog):
         raise RuntimeError("gateway dropped the connection")
 
     log = UsageLog()
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.usage"):
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
         with pytest.raises(RuntimeError):
             asyncio.run(
                 run_agent_logged(_agent(_tool_then(crash)), "go", agent_label="Planner", usage=log)
@@ -194,7 +194,7 @@ def test_run_without_a_log_still_runs_and_logs(caplog):
     def done(_messages):
         return ModelResponse(parts=[TextPart("ok")])
 
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.usage"):
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
         asyncio.run(run_agent_logged(_agent(_tool_then(done)), "go", agent_label="Mapper"))
     assert any(r.getMessage().startswith("Mapper usage:") for r in caplog.records)
 

@@ -20,30 +20,30 @@ from pathlib import Path
 from pydantic_ai import Agent, AgentRetries
 from pydantic_ai.capabilities import ProcessHistory
 
-from ..config import Config
-from ..llm import build_openai_model
-from ..models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
-from ..playwright_mcp import build_playwright_mcp
-from ..test_runner import classify_failure
-from ..usage import UsageLog
-from ._context import (
+from ..browser.mcp import build_playwright_mcp
+from ..browser.runner import classify_failure
+from ..core.config import Config
+from ..core.models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, TestRunResult
+from ..core.usage import UsageLog
+from ..net.gateway import build_openai_model
+from .runtime.context import (
     agent_output_retries,
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
     declares_activation_flow,
 )
-from ._dom_probe import register_probe_dom
-from ._history import trim_stale_snapshots
-from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
-from ._match_count import register_count_matches
-from ._reasoning_only import ReasoningOnlyRetry
-from ._run_failure import run_agent_logged
-from ._vision_aid import VisionStats, _make_screenshot_capture, register_inspect_screen
+from .runtime.history import trim_stale_snapshots
+from .runtime.reasoning_only import ReasoningOnlyRetry
+from .runtime.run import run_agent_logged
+from .tools.count_matches import register_count_matches
+from .tools.dom_probe import register_probe_dom
+from .tools.inspect_screen import VisionStats, _make_screenshot_capture, register_inspect_screen
+from .tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 
 def build_healer(
@@ -123,10 +123,11 @@ def build_healer(
             usage_label=f"{usage_label} vision",
         )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
-    # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
+    # live MCP with a FIXED read-only function (see agents/tools/dom_probe.py).
     if config.dom_probe_max_calls > 0:
         register_probe_dom(agent, config, mcp, agent_label="Healer")
-    # Always-on read-only uniqueness check for authored CSS/XPath (see agents/_match_count.py).
+    # Always-on read-only uniqueness check for authored CSS/XPath
+    # (see agents/tools/count_matches.py).
     register_count_matches(agent, mcp, agent_label="Healer")
     return agent
 

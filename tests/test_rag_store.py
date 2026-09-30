@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.models import ManualStep
+from ai_test_gen.core.models import ManualStep
 from ai_test_gen.rag.models import (
     KBRecord,
     ReconstructedPlan,
@@ -259,7 +259,7 @@ def test_default_pipeline_never_imports_qdrant() -> None:
     must not pull qdrant_client into the process (wseu0ou acceptance criterion)."""
     code = (
         "import sys; "
-        "import ai_test_gen.config, ai_test_gen.orchestrator; "
+        "import ai_test_gen.core.config, ai_test_gen.orchestrator; "
         "sys.exit(1 if 'qdrant_client' in sys.modules else 0)"
     )
     result = subprocess.run(

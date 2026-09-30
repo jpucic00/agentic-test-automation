@@ -19,17 +19,17 @@ from pydantic_ai.messages import ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from ai_test_gen import models
-from ai_test_gen.agents import _vision_aid as vision_aid_mod
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents import vision as vision_mod
 from ai_test_gen.agents.planner import _latest_png, _register_inspect_screen, build_planner
+from ai_test_gen.agents.tools import inspect_screen as vision_aid_mod
+from ai_test_gen.core import models
 
 # The inspect_screen sensor + its helpers live in agents/_vision_aid (shared by Planner & Healer);
 # planner re-exports the names for back-compat. ask_vision is called from _vision_aid, so patch it
 # there; the sensor logs under the _vision_aid logger.
-_VISION_LOGGER = "ai_test_gen.agents._vision_aid"
+_VISION_LOGGER = "ai_test_gen.agents.tools.inspect_screen"
 
 
 def _vision_cfg(cfg, max_calls=2):

@@ -2,7 +2,7 @@
 
 Plain synchronous httpx against the OpenAI-compatible gateway, built with the
 repo's direct-connect policy (``trust_env=False`` unless ``USE_HTTP_PROXY`` opts
-back in; optional private CA / mTLS via ``mtls.py``) — the same policy as the
+back in; optional private CA / mTLS via ``net/connection.py``) — the same policy as the
 Xray/GitLab clients, because an env-configured proxy silently drops the gateway
 connection.
 
@@ -24,8 +24,8 @@ from typing import Any
 
 import httpx
 
-from .. import mtls
-from ..config import Config
+from ..core.config import Config
+from ..net import connection
 
 
 class RagGatewayError(RuntimeError):
@@ -33,13 +33,13 @@ class RagGatewayError(RuntimeError):
 
 
 def build_client(timeout: float = 30.0) -> httpx.Client:
-    """An httpx client carrying the gateway direct-connect policy (see mtls.py)."""
+    """An httpx client carrying the gateway direct-connect policy (see net/connection.py)."""
     kwargs: dict[str, Any] = {
         "timeout": timeout,
-        "trust_env": mtls.get_trust_env(),
-        "verify": mtls.get_verify_arg(),
+        "trust_env": connection.get_trust_env(),
+        "verify": connection.get_verify_arg(),
     }
-    cert = mtls.get_cert_arg()
+    cert = connection.get_cert_arg()
     if cert is not None:
         kwargs["cert"] = cert
     return httpx.Client(**kwargs)

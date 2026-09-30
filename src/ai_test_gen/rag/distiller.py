@@ -37,11 +37,11 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from ..agents._context import agent_output_retries, agent_retries
-from ..agents._run_failure import summarize_run_failure
-from ..config import Config
-from ..llm import build_openai_model
-from ..models import ManualStep, ManualTestCase
+from ..agents.runtime.context import agent_output_retries, agent_retries
+from ..agents.runtime.run import summarize_run_failure
+from ..core.config import Config
+from ..core.models import ManualStep, ManualTestCase
+from ..net.gateway import build_openai_model
 from .discover import DiscoveredTest
 from .models import (
     ExplorationTrace,
@@ -54,7 +54,7 @@ from .verify import VerifyPass, build_revalidation_message, verify_plan
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 # One distill turn is bounded work — a hung or queued gateway must surface as an
 # error within minutes. Overrides AGENT_REQUEST_TIMEOUT_S for the Distiller only

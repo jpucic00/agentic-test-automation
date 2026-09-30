@@ -24,8 +24,8 @@ from pydantic_ai.messages import RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
-from ..usage import UsageLog, track_usage
-from ._context import agent_request_limit
+from ...core.usage import UsageLog, track_usage
+from .context import agent_request_limit
 
 logger = logging.getLogger(__name__)
 

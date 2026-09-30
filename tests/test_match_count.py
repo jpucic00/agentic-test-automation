@@ -1,4 +1,6 @@
-"""Unit tests for count_matches (agents/_match_count.py) — fully local (no network, no browser).
+"""Unit tests for count_matches (agents/tools/count_matches.py).
+
+Fully local (no network, no browser).
 
 Covers selector normalization (engine prefixes, XPath auto-detection, ``locator('…')``
 unwrapping, Playwright-only syntax rejected), the fixed-JS embedding (the selector is DATA, never
@@ -15,11 +17,10 @@ import pytest
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
-from ai_test_gen import models
-from ai_test_gen.agents import _match_count as match_mod
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
-from ai_test_gen.agents._match_count import (
+from ai_test_gen.agents.tools import count_matches as match_mod
+from ai_test_gen.agents.tools.count_matches import (
     UnsupportedSelector,
     build_count_js,
     format_count,
@@ -27,6 +28,7 @@ from ai_test_gen.agents._match_count import (
     parse_selector,
     register_count_matches,
 )
+from ai_test_gen.core import models
 
 
 def _evaluate_result(payload: dict) -> str:

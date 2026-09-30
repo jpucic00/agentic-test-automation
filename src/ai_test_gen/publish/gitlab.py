@@ -29,9 +29,9 @@ from datetime import UTC, datetime
 
 import gitlab
 
-from . import mtls
-from .config import Config
-from .models import EnvironmentRunResult, GeneratedTest, TestPlan
+from ..core.config import Config
+from ..core.models import EnvironmentRunResult, GeneratedTest, TestPlan
+from ..net import connection
 
 MR_LABELS = ["ai-generated", "qa-review-needed"]
 
@@ -67,7 +67,7 @@ class GitLabClient:
         # python-gitlab owns its requests.Session (no session= kwarg in 8.x); apply the
         # gateway proxy/CA policy to it so GitLab calls also go direct over the VPN —
         # requests otherwise honors env HTTP(S)_PROXY and hits the same connection drop.
-        mtls.apply_requests_policy(self.gl.session)
+        connection.apply_requests_policy(self.gl.session)
         self.project = self.gl.projects.get(config.gitlab_project_id)
 
     def open_mr(

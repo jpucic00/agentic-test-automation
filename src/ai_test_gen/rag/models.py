@@ -39,7 +39,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..models import ManualStep
+from ..core.models import ManualStep
 
 # Where a record came from. Provenance drives the retrieval rules: only
 # `pipeline` / `playwright-import` records may serve as Generator code examples

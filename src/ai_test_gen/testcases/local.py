@@ -10,7 +10,7 @@ payloads the Server/DC Xray path consumes:
   ``{"step": {"raw", "rendered"}, "data": {...}, "result": {"raw", "rendered"}}`` rows.
 
 It is normalized to ``ManualTestCase`` by the SAME helpers the live Server/DC path uses
-(``xray_client._cell_text`` / ``_strip_adf``), so a locally-sourced case is byte-identical
+(``testcases.xray._cell_text`` / ``_strip_adf``), so a locally-sourced case is byte-identical
 to one fetched from Xray — only the transport differs (a file read, not an HTTP call).
 
 Example file (``NOTE-2.json``)::
@@ -38,9 +38,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .config import Config
-from .models import ManualStep, ManualTestCase
-from .xray_client import _cell_text, _strip_adf
+from ..core.config import Config
+from ..core.models import ManualStep, ManualTestCase
+from .xray import _cell_text, _strip_adf
 
 
 def load_local_test_case(config: Config, issue_key: str) -> ManualTestCase:
@@ -69,7 +69,7 @@ def load_local_test_case(config: Config, issue_key: str) -> ManualTestCase:
 
 
 def _from_raw_xray(raw: dict[str, Any], issue_key: str) -> ManualTestCase:
-    """Normalize a raw-Xray-shaped dict to ManualTestCase (mirrors xray_client._fetch_server).
+    """Normalize a raw-Xray-shaped dict to ManualTestCase (mirrors testcases.xray._fetch_server).
 
     ``key`` is forced to ``issue_key`` (the filename / CLI arg) so the loaded case and the
     pipeline's output artifacts always agree, even if the file's own ``key`` has drifted.

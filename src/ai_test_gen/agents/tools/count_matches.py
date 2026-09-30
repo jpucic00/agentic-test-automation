@@ -7,7 +7,7 @@ first match — and the ``browser_verify_*`` tools accept only role+name / text,
 So nothing in the MCP tool set proves uniqueness read-only, and a duplicate-matching selector
 passes planning only to trip ``strict mode violation … resolved N elements`` at run time.
 
-``count_matches(selector)`` closes that gap with the DOM probe's pattern (``_dom_probe.py``): it
+``count_matches(selector)`` closes that gap with the DOM probe's pattern (``dom_probe.py``): it
 executes ONE fixed, pipeline-authored, READ-ONLY JS function via
 ``direct_call_tool("browser_evaluate", ...)``. The model supplies only DATA — the selector,
 normalized in Python to an (engine, expression) pair and embedded JSON-escaped into the constant
@@ -40,8 +40,8 @@ from typing import Any, Literal
 
 from pydantic_ai import Agent
 
-from ._dom_probe import PROBE_TOOL, _clean, _result_text
-from ._vision_aid import _underlying_mcp
+from .dom_probe import PROBE_TOOL, _clean, _result_text
+from .inspect_screen import _underlying_mcp
 
 logger = logging.getLogger(__name__)
 

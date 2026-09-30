@@ -9,9 +9,10 @@ pydantic-ai increments in place after every model response — so a run that abo
 failure. ``requests`` counts completed model responses; a request that died without a response
 carries no token counts to report.
 
-Reasoning-only replies the Planner/Healer were nudged about (``agents/_reasoning_only.py``) are
-counted in the run's ``RunUsage.details`` under ``REASONING_ONLY_RETRIES`` and reported per record
-as ``reasoning_only_retries`` (the ``nudges`` column).
+Reasoning-only replies the Planner/Healer were nudged about
+(``agents/runtime/reasoning_only.py``) are counted in the run's ``RunUsage.details`` under
+``REASONING_ONLY_RETRIES`` and reported per record as ``reasoning_only_retries`` (the ``nudges``
+column).
 
 Records merge by label: the Vision Aid calls of one agent run (``"Planner vision"``,
 ``"Healer attempt 2 vision"``) add up into one record. ``UsageLog.summary`` renders plain dicts and

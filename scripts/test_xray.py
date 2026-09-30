@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from ai_test_gen.config import load_config
-from ai_test_gen.xray_client import XrayClient
+from ai_test_gen.core.config import load_config
+from ai_test_gen.testcases.xray import XrayClient
 
 
 def main() -> None:

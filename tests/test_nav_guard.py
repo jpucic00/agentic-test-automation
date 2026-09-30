@@ -1,4 +1,5 @@
-"""Unit tests for the navigation allow-list (allowlist.py) and its MCP hook (agents/_nav_guard.py).
+"""Unit tests for the navigation allow-list (guardrails/allowlist.py) and its MCP hook
+(guardrails/nav_guard.py).
 
 Fully local: the hook is driven with fake ``call_tool`` coroutines via ``asyncio.run`` (no
 pytest-asyncio, no browser). Covers origin normalization, the refusal of off-list navigation
@@ -14,10 +15,11 @@ import logging
 import pytest
 from pydantic_ai.exceptions import ModelRetry
 
-from ai_test_gen import allowlist, models
-from ai_test_gen import playwright_mcp as pm
-from ai_test_gen.agents._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
-from ai_test_gen.agents._nav_guard import NavigationGuard
+from ai_test_gen.agents.tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
+from ai_test_gen.browser import mcp as pm
+from ai_test_gen.core import models
+from ai_test_gen.guardrails import allowlist
+from ai_test_gen.guardrails.nav_guard import NavigationGuard
 
 STAGING = "https://staging.example.internal"
 SSO = "https://sso.example.com"

@@ -18,14 +18,14 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from ai_test_gen.agents._history import (
+from ai_test_gen.agents.runtime.history import (
     anchor_snapshots_enabled,
     snapshot_history_keep,
     trim_stale_snapshots,
 )
 
 _STUB_MARKER = "[page snapshot omitted]"
-_HISTORY_LOGGER = "ai_test_gen.agents._history"
+_HISTORY_LOGGER = "ai_test_gen.agents.runtime.history"
 
 
 def _browser_return(call_id, action, *, url=None, dialog=False, tool="browser_click"):

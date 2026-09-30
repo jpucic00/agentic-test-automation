@@ -9,7 +9,7 @@ is launched or any model is contacted. The pipeline drives a real browser and ru
 generated tests against those URLs; this is a hard architectural constraint: staging
 only, never production. ``STAGING_EXTRA_URLS`` (auxiliary hosts such as an SSO login or a
 mail-catcher UI) are exempt from the marker check but must be plain full URLs; together
-with the environments they form the runtime navigation allow-list (``allowlist.py``).
+with the environments they form the runtime navigation allow-list (``guardrails/allowlist.py``).
 
 Implements AI_TEST_GENERATION_GUIDE.md §3.4 + §3.5b.
 """
@@ -25,9 +25,8 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from .allowlist import origins, url_origin
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+from ..guardrails.allowlist import origins, url_origin
+from .paths import PROJECT_ROOT
 
 # Substring markers (case-insensitive) that identify a NON-production host. The
 # guardrail is fail-closed: STAGING_BASE_URL's host must contain at least one of
@@ -301,11 +300,11 @@ class Config:
     generator_model: str
     healer_model: str
     # Optional Vision Aid sensor shared by the Planner AND Healer (agents/vision.py +
-    # agents/_vision_aid.py inspect_screen). vision_max_calls == 0 means the feature is OFF
+    # agents/tools/inspect_screen.py inspect_screen). vision_max_calls == 0 means the feature is OFF
     # (AGENT_VISION unset or false); >0 = per-agent-run call cap.
     vision_model: str
     vision_max_calls: int
-    # Optional DOM Probe shared by the Planner AND Healer (agents/_dom_probe.py probe_dom):
+    # Optional DOM Probe shared by the Planner AND Healer (agents/tools/dom_probe.py probe_dom):
     # read-only recon of elements the a11y snapshot can't name. 0 = OFF (AGENT_DOM_PROBE unset
     # or false); >0 = per-agent-run call cap. No LLM involved — fixed JS via the MCP server.
     dom_probe_max_calls: int

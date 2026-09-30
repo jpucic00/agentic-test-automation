@@ -1,12 +1,12 @@
-"""Unit tests for ai_test_gen.config — fully local (no network, no real .env)."""
+"""Unit tests for ai_test_gen.core.config — fully local (no network, no real .env)."""
 from __future__ import annotations
 
 import dataclasses
 
 import pytest
 
-from ai_test_gen import config
-from ai_test_gen.config import (
+from ai_test_gen.core import config
+from ai_test_gen.core.config import (
     DEFAULT_TEST_MARKER_REGEX,
     Config,
     ProductionURLError,

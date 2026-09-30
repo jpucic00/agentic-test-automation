@@ -28,7 +28,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.mcp import CallToolFunc, ProcessToolCallback, ToolResult
 
-from ..allowlist import navigation_refusal, offlist_page_url
+from .allowlist import navigation_refusal, offlist_page_url
 
 logger = logging.getLogger(__name__)
 

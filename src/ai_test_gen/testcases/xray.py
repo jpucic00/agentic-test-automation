@@ -25,9 +25,9 @@ from typing import Any
 
 from atlassian import Jira
 
-from . import mtls
-from .config import Config
-from .models import ManualStep, ManualTestCase
+from ..core.config import Config
+from ..core.models import ManualStep, ManualTestCase
+from ..net import connection
 
 # Server/DC custom field holding the manual test steps. Phase 0 finding (j1cnfng):
 # "Manual Test Steps" on the company tenant. Override per adopter via env.
@@ -211,7 +211,7 @@ def _build_jira(config: Config) -> Jira:
     # Share the gateway proxy/CA/mTLS policy (direct over VPN, ignoring env
     # HTTP(S)_PROXY unless USE_HTTP_PROXY=true). atlassian-python-api uses the passed
     # session as-is, preserving its trust_env / verify / cert.
-    session = mtls.build_requests_session()
+    session = connection.build_requests_session()
     # A healthy tenant answers in seconds; 30s (down from the library's 75) makes a
     # black-holed route fail fast enough that per-key tolerant callers (KB seeding)
     # stay visibly alive instead of appearing hung.

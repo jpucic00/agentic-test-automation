@@ -5,7 +5,7 @@ source is the accessibility snapshot, which renders unnamed ``generic`` nodes fo
 controls — so resilience-ladder rungs 3–4 (CSS/XPath) have no data to author a candidate from,
 and a visible element ("the modal's submit button") can be unfindable. The raw
 ``browser_evaluate`` tool is deliberately hidden from the agents (model-authored JS hallucinates
-selectors and is a code-exec risk — see ``playwright_mcp._BLOCKED_TOOL_MARKERS``).
+selectors and is a code-exec risk — see ``browser.mcp._BLOCKED_TOOL_MARKERS``).
 
 ``probe_dom(text, scope?)`` fills the gap without re-opening that door: it executes ONE fixed,
 pipeline-authored, READ-ONLY JS function via ``direct_call_tool("browser_evaluate", ...)`` — the
@@ -30,15 +30,15 @@ from typing import Any
 
 from pydantic_ai import Agent
 
-from ..config import Config
-from ._vision_aid import _underlying_mcp
+from ...core.config import Config
+from .inspect_screen import _underlying_mcp
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["PROBE_TOOL", "build_probe_js", "register_probe_dom"]
 
 # The MCP tool the probe drives directly. Hidden from the agents' toolset (see
-# playwright_mcp._BLOCKED_TOOL_MARKERS); reachable here only via direct_call_tool with the
+# browser.mcp._BLOCKED_TOOL_MARKERS); reachable here only via direct_call_tool with the
 # fixed function below — the model never authors JS.
 PROBE_TOOL = "browser_evaluate"
 

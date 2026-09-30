@@ -32,8 +32,8 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from ..config import Config
-from ..models import ManualTestCase
+from ..core.config import Config
+from ..core.models import ManualTestCase
 from . import embeddings
 from .models import KBRecord, ReconstructedSelector, build_intent_text, project_key_of
 

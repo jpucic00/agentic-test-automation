@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_test_gen import batch
+from ai_test_gen.pipeline import batch
 
 
 def _usage(requests: int, tokens_in: int, tokens_out: int, wall: float, nudges: int = 0) -> dict:

@@ -2,7 +2,7 @@
 
 Writes the generated ``.spec.ts`` into ``output/tests/`` and runs it with the Node
 Playwright harness in ``output/`` (``npx playwright test`` + the JSON reporter), then
-parses the report into a :class:`~ai_test_gen.models.TestRunResult`.
+parses the report into a :class:`~ai_test_gen.core.models.TestRunResult`.
 
 Phase 1.D — task ``j18du5c`` (AI_TEST_GENERATION_GUIDE.md §3.11). Two things the
 guide's template lacks:
@@ -34,9 +34,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 
-from .allowlist import preflight_violations
-from .config import Config
-from .models import GeneratedTest, TestPlan, TestRunResult
+from ..core.config import Config
+from ..core.models import GeneratedTest, TestPlan, TestRunResult
+from ..guardrails.allowlist import preflight_violations
 
 # Hard cap on a single Playwright run. A hung browser/test must not wedge the
 # pipeline; on expiry the process is killed and the run is reported as an error.
@@ -63,7 +63,7 @@ async def run_test(
     own so they don't wipe the primary run's trace. ``plan`` adds its recorded URLs to the
     pre-run allow-list check.
 
-    Returns a :class:`~ai_test_gen.models.TestRunResult`. Does not raise when the test
+    Returns a :class:`~ai_test_gen.core.models.TestRunResult`. Does not raise when the test
     itself fails (that is healable); only infrastructure problems (timeout, the runner
     failing to launch) and a refused pre-run navigation check surface as ``status="error"``.
     """

@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.config import PROJECT_ROOT, Config
-from ai_test_gen.models import ManualStep, ManualTestCase
+from ai_test_gen.core.config import PROJECT_ROOT, Config
+from ai_test_gen.core.models import ManualStep, ManualTestCase
 from ai_test_gen.rag import seeding
 from ai_test_gen.rag.discover import DiscoveredTest
 from ai_test_gen.rag.distiller import DistillOutput
@@ -455,7 +455,7 @@ class TestExplicitCaseKeys:
                     ],
                 )
 
-        monkeypatch.setattr("ai_test_gen.xray_client.XrayClient", FakeXrayClient)
+        monkeypatch.setattr("ai_test_gen.testcases.xray.XrayClient", FakeXrayClient)
 
         def fake_embed(config: Config, texts) -> list[list[float]]:
             return [VEC for _ in texts]

@@ -1,4 +1,4 @@
-"""Unit tests for ai_test_gen.agents._context — fully local (no network).
+"""Unit tests for ai_test_gen.agents.runtime.context — fully local (no network).
 
 Uses the shared ``cfg`` fixture (tests/conftest.py); context/map files are written
 into the fixture's tmp_path-backed paths per test.
@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.agents._context import (
+from ai_test_gen.agents.generator import build_generator
+from ai_test_gen.agents.healer import build_healer
+from ai_test_gen.agents.planner import build_planner
+from ai_test_gen.agents.runtime.context import (
     _load_context_file,
     agent_max_output_tokens,
     agent_output_retries,
@@ -20,15 +23,12 @@ from ai_test_gen.agents._context import (
     build_model_settings,
     reasoning_effort,
 )
-from ai_test_gen.agents.generator import build_generator
-from ai_test_gen.agents.healer import build_healer
-from ai_test_gen.agents.planner import build_planner
 
 _BASE_PROMPT = "# Base agent prompt"
 _CONTEXT_TEXT = "PROJECT-CONTEXT-MARKER conventions go here."
 _MAP_TEXT = "APPLICATION-MAP-MARKER routes go here."
 
-_CONTEXT_LOGGER = "ai_test_gen.agents._context"
+_CONTEXT_LOGGER = "ai_test_gen.agents.runtime.context"
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 

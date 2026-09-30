@@ -20,29 +20,28 @@ from pathlib import Path
 from pydantic_ai import Agent, AgentRetries
 from pydantic_ai.capabilities import ProcessHistory
 
-from ..config import Config
-from ..llm import build_openai_model
-from ..models import ManualTestCase, TestPlan
-from ..playwright_mcp import build_playwright_mcp
-from ..usage import UsageLog
-from ._context import (
+from ..browser.mcp import build_playwright_mcp
+from ..core.config import Config
+from ..core.models import ManualTestCase, TestPlan
+from ..core.usage import UsageLog
+from ..net.gateway import build_openai_model
+from .runtime.context import (
     agent_output_retries,
     agent_retries,
     assemble_system_prompt,
     build_model_settings,
     declares_activation_flow,
 )
-from ._dom_probe import register_probe_dom
-from ._history import trim_stale_snapshots
-from ._locator_steer import LOCATOR_TOOL, LocatorFailureGuard
-from ._match_count import register_count_matches
-from ._reasoning_only import ReasoningOnlyRetry
-from ._run_failure import run_agent_logged
+from .runtime.history import trim_stale_snapshots
+from .runtime.reasoning_only import ReasoningOnlyRetry
+from .runtime.run import run_agent_logged
+from .tools.count_matches import register_count_matches
+from .tools.dom_probe import register_probe_dom
 
 # Vision Aid sensor (shared with the Healer). Re-exported here so existing imports and monkeypatch
 # targets (tests/test_vision.py) keep resolving from this module. noqa: these are deliberate
 # re-exports; _make_screenshot_capture and register_inspect_screen are also used directly below.
-from ._vision_aid import (  # noqa: F401
+from .tools.inspect_screen import (  # noqa: F401
     _DEFAULT_STALE_AFTER_S,
     SCREENSHOT_TOOL,
     VisionStats,
@@ -52,10 +51,11 @@ from ._vision_aid import (  # noqa: F401
     _underlying_mcp,
     register_inspect_screen,
 )
+from .tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 # Module-level aliases so build_planner calls names a test can monkeypatch
 # (test_planner_registers_inspect_screen_only_when_enabled patches these attributes).
@@ -162,11 +162,12 @@ def build_planner(
             usage=usage,
         )
     # Optional DOM Probe (AGENT_DOM_PROBE) — same gating; drives browser_evaluate on this same
-    # live MCP with a FIXED read-only function (see agents/_dom_probe.py).
+    # live MCP with a FIXED read-only function (see agents/tools/dom_probe.py).
     if config.dom_probe_max_calls > 0:
         _register_probe_dom(agent, config, mcp)
-    # Always-on read-only uniqueness check for authored CSS/XPath (see agents/_match_count.py) —
-    # browser_generate_locator errors on 0 matches but not on duplicates.
+    # Always-on read-only uniqueness check for authored CSS/XPath
+    # (see agents/tools/count_matches.py) — browser_generate_locator errors on 0 matches but not
+    # on duplicates.
     register_count_matches(agent, mcp)
     return agent
 

@@ -25,8 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .orchestrator import PROJECT_ROOT, _configure_logging, process_test_case
-from .usage import format_duration
+from ..core.usage import format_duration
+from ..orchestrator import PROJECT_ROOT, _configure_logging, process_test_case
 
 logger = logging.getLogger(__name__)
 

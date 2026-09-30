@@ -16,7 +16,7 @@ import logging
 
 import pytest
 
-from ai_test_gen.models import ManualStep, ManualTestCase
+from ai_test_gen.core.models import ManualStep, ManualTestCase
 from ai_test_gen.rag import retriever
 from ai_test_gen.rag.models import (
     KBRecord,

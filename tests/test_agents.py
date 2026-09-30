@@ -16,13 +16,13 @@ import dataclasses
 import pytest
 from pydantic_ai.models.test import TestModel
 
-from ai_test_gen import models
 from ai_test_gen.agents import generator as generator_mod
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents.generator import build_generator
 from ai_test_gen.agents.healer import build_healer
 from ai_test_gen.agents.planner import build_planner
+from ai_test_gen.core import models
 
 
 def _base_prompt(cfg, monkeypatch, module, build):
@@ -166,7 +166,7 @@ def test_activation_fragment_only_when_context_declares_one(cfg, monkeypatch, pr
 
 
 def test_activation_word_inside_an_html_comment_does_not_count(cfg):
-    from ai_test_gen.agents._context import declares_activation_flow
+    from ai_test_gen.agents.runtime.context import declares_activation_flow
 
     cfg.project_context_path.write_text("<!-- describe any activation flow here -->\nUsers: a")
     cfg.project_map_path.write_text("## Routes")

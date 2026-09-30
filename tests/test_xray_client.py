@@ -1,4 +1,4 @@
-"""Unit tests for ai_test_gen.xray_client — fully local (Jira is mocked, no network)."""
+"""Unit tests for ai_test_gen.testcases.xray — fully local (Jira is mocked, no network)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -7,9 +7,9 @@ from unittest import mock
 
 import pytest
 
-from ai_test_gen import xray_client
-from ai_test_gen.config import Config
-from ai_test_gen.models import ManualTestCase
+from ai_test_gen.core.config import Config
+from ai_test_gen.core.models import ManualTestCase
+from ai_test_gen.testcases import xray as xray_client
 
 # --- _strip_adf -------------------------------------------------------------
 
@@ -97,7 +97,7 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
         },
     ]
 
-    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+    with mock.patch("ai_test_gen.testcases.xray.Jira") as mock_jira_cls:
         jira = mock_jira_cls.return_value
         jira.issue.return_value = canned_issue
         jira.get.return_value = raven_steps  # Xray Raven steps endpoint
@@ -140,7 +140,7 @@ def test_fetch_server_falls_back_to_custom_field_when_raven_empty(monkeypatch):
             ],
         }
     }
-    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+    with mock.patch("ai_test_gen.testcases.xray.Jira") as mock_jira_cls:
         jira = mock_jira_cls.return_value
         jira.issue.return_value = canned_issue
         jira.get.return_value = []  # Raven yields nothing
@@ -190,7 +190,7 @@ def test_fetch_server_raises_clear_error_on_dict_error_payload():
         "errors": {},
     }
 
-    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+    with mock.patch("ai_test_gen.testcases.xray.Jira") as mock_jira_cls:
         mock_jira_cls.return_value.issue.return_value = error_payload
         with pytest.raises(RuntimeError, match="QA-9999"):
             xray_client.XrayClient(cast(Config, config)).fetch("QA-9999")
@@ -215,7 +215,7 @@ def test_diagnose_steps_reports_fields_and_raven(monkeypatch):
             "customfield_12000": [{"step": "Navigate"}],  # steps actually live here
         },
     }
-    with mock.patch("ai_test_gen.xray_client.Jira") as mock_jira_cls:
+    with mock.patch("ai_test_gen.testcases.xray.Jira") as mock_jira_cls:
         jira = mock_jira_cls.return_value
         jira.issue.return_value = issue
         jira.get.return_value = [{"id": 1, "step": "Navigate", "result": "OK"}]

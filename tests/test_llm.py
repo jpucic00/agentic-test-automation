@@ -15,9 +15,9 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
 
-from ai_test_gen import mtls
-from ai_test_gen.config import Config
-from ai_test_gen.llm import (
+from ai_test_gen.core.config import Config
+from ai_test_gen.net import connection as mtls
+from ai_test_gen.net.gateway import (
     DeadlineModel,
     ModelRequestTimeoutError,
     build_openai_model,
@@ -145,7 +145,7 @@ def test_deadline_model_retries_a_hung_request_then_raises(caplog):
     calls: list[int] = []
     model = DeadlineModel(_slow_then_fast([5.0], calls), deadline_s=0.05, attempts=2)
 
-    with caplog.at_level(logging.WARNING, logger="ai_test_gen.llm"):
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.net.gateway"):
         with pytest.raises(ModelRequestTimeoutError, match=r"within 0\.05s on 2 attempt"):
             _request(model)
 
@@ -216,7 +216,7 @@ def test_deadline_model_retries_an_invalid_gateway_response(caplog):
         _failing_then_ok([UnexpectedModelBehavior(_INVALID)], calls), deadline_s=1.0, attempts=2
     )
 
-    with caplog.at_level(logging.WARNING, logger="ai_test_gen.llm"):
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.net.gateway"):
         response = _request(model)
 
     assert len(calls) == 2

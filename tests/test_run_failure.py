@@ -18,7 +18,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from ai_test_gen.agents._run_failure import (
+from ai_test_gen.agents.runtime.run import (
     _leaf_exceptions,
     run_agent_logged,
     summarize_run_failure,
@@ -122,7 +122,7 @@ def test_taskgroup_wrapped_exhaustion_still_logs_evidence(caplog):
     # The laptop failure mode: pydantic-ai's exhaustion surfaces inside an ExceptionGroup, so
     # a plain `except UnexpectedModelBehavior` never fires — the group handler must log the
     # leaves AND the evidence block, then re-raise the group unchanged.
-    with caplog.at_level(logging.ERROR, logger="ai_test_gen.agents._run_failure"):
+    with caplog.at_level(logging.ERROR, logger="ai_test_gen.agents.runtime.run"):
         with pytest.raises(BaseExceptionGroup):
             asyncio.run(run_agent_logged(cast(Any, _FakeAgent()), "go", agent_label="Planner"))
 
@@ -147,7 +147,7 @@ class _FakePlainCrashAgent:
 def test_any_exception_logs_marker_and_evidence_backstop(caplog):
     # Nothing may leave the frame silently: the catch-all logs any exception shape, and the
     # INFO start marker proves in the run log that the evidence-capture code is running.
-    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents._run_failure"):
+    with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.runtime.run"):
         with pytest.raises(RuntimeError):
             asyncio.run(
                 run_agent_logged(cast(Any, _FakePlainCrashAgent()), "go", agent_label="Planner")

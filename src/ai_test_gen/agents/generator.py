@@ -20,15 +20,15 @@ from pathlib import Path
 
 from pydantic_ai import Agent, AgentRetries
 
-from ..allowlist import relative_to
-from ..config import Config
-from ..llm import build_openai_model
-from ..models import GeneratedTest, TestPlan
-from ..usage import UsageLog
-from ._context import agent_output_retries, assemble_system_prompt
-from ._run_failure import run_agent_logged
+from ..core.config import Config
+from ..core.models import GeneratedTest, TestPlan
+from ..core.usage import UsageLog
+from ..guardrails.allowlist import relative_to
+from ..net.gateway import build_openai_model
+from .runtime.context import agent_output_retries, assemble_system_prompt
+from .runtime.run import run_agent_logged
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 
 def build_generator(config: Config) -> Agent[None, GeneratedTest]:

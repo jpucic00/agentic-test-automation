@@ -1,4 +1,4 @@
-"""Unit tests for the DOM Probe (agents/_dom_probe.py) — fully local (no network, no browser).
+"""Unit tests for the DOM Probe (agents/tools/dom_probe.py) — fully local (no network, no browser).
 
 Covers the fixed-JS parameter embedding (model input is DATA, never code), the per-run budget,
 the direct ``browser_evaluate`` dispatch (mocked), snapshot-stripping + size-capping of results,
@@ -14,16 +14,16 @@ import json
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
-from ai_test_gen import models
-from ai_test_gen.agents import _dom_probe as dom_probe_mod
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
-from ai_test_gen.agents._dom_probe import (
+from ai_test_gen.agents.tools import dom_probe as dom_probe_mod
+from ai_test_gen.agents.tools.dom_probe import (
     PROBE_TOOL,
     _clean,
     build_probe_js,
     register_probe_dom,
 )
+from ai_test_gen.core import models
 
 
 class _RecordingMcp:

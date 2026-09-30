@@ -40,10 +40,10 @@ from pydantic_ai.mcp import MCPToolset, ProcessToolCallback, StdioTransport
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset
 
-from .agents._nav_guard import NavigationGuard
-from .config import Config
+from ..core.config import Config
+from ..core.paths import PROJECT_ROOT
+from ..guardrails.nav_guard import NavigationGuard
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MCP_CONFIG_PATH = PROJECT_ROOT / "playwright-mcp-config.json"
 
 # Pin the MCP server version from day one (declared in output/package.json). The
@@ -101,7 +101,7 @@ def _safe_unlink(path: str) -> None:
 # MCP tool-name substrings the agents must NOT receive: raw JS / arbitrary code execution.
 # They invite hallucinated selectors (jQuery `:contains()` in querySelector -> SyntaxError)
 # and are a code-exec risk; agents must use the snapshot -> click/type flow. (Flux 11iwg3r)
-# NOTE: the optional DOM Probe (agents/_dom_probe.py) still reaches browser_evaluate via
+# NOTE: the optional DOM Probe (agents/tools/dom_probe.py) still reaches browser_evaluate via
 # direct_call_tool — with a FIXED, read-only, pipeline-authored function. The ban here is on
 # MODEL-authored JS; the model never sees these tools regardless.
 _BLOCKED_TOOL_MARKERS = ("evaluate", "run_code", "unsafe")
@@ -195,7 +195,7 @@ def build_playwright_mcp(
         # all absolute, so changing cwd is safe.
         StdioTransport(command="node", args=args, cwd=str(MCP_OUTPUT_DIR), keep_alive=False),
         init_timeout=MCP_INIT_TIMEOUT_S,
-        # Always-on navigation allow-list guard (agents/_nav_guard.py), composed around the
+        # Always-on navigation allow-list guard (guardrails/nav_guard.py), composed around the
         # caller's hook (the Planner's/Healer's LocatorFailureGuard), which still sees every call.
         process_tool_call=NavigationGuard(config.allowed_origins, inner=process_tool_call),
     )

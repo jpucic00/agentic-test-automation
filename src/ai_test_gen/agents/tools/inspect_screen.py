@@ -31,9 +31,9 @@ from typing import Any
 
 from pydantic_ai import Agent
 
-from ..config import Config
-from ..usage import UsageLog, track_usage
-from .vision import ask_vision
+from ...core.config import Config
+from ...core.usage import UsageLog, track_usage
+from ..vision import ask_vision
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ SCREENSHOT_TOOL = "browser_take_screenshot"
 
 # browser_take_screenshot reports the file it saved as a markdown link under "### Result", e.g.
 # "- [Screenshot of viewport](./page-2026-09-27T10-00-00-000Z.png)" — relative to the MCP server's
-# cwd (output/snapshots/, see playwright_mcp.build_playwright_mcp). It writes the file even with
+# cwd (output/snapshots/, see browser/mcp.py build_playwright_mcp). It writes the file even with
 # imageResponses "omit" (that only drops the inline image from the response).
 _SAVED_SCREENSHOT_RE = re.compile(r"\[Screenshot of [^\]]*\]\(([^)]+)\)")
 

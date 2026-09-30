@@ -1,4 +1,4 @@
-"""Unit tests for the locator-failure guard (agents/_locator_steer.py) — fully local.
+"""Unit tests for the locator-failure guard (agents/tools/locator_guard.py) — fully local.
 
 Covers the ``process_tool_call`` hook: pass-through of non-target tools, the consecutive-failure
 count, the vision-gated steer stage, the ALWAYS-on exhaustion soft-landing (a locator hunt can
@@ -15,7 +15,7 @@ import pytest
 from pydantic_ai.exceptions import ModelRetry
 
 from ai_test_gen.agents import planner as planner_mod
-from ai_test_gen.agents._locator_steer import (
+from ai_test_gen.agents.tools.locator_guard import (
     _DEFAULT_STEER_AFTER,
     _STEER_MESSAGE,
     LOCATOR_TOOL,

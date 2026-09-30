@@ -43,10 +43,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, AgentRetries
 
-from ..agents._context import agent_output_retries, agent_retries
-from ..agents._run_failure import run_agent_logged
-from ..config import Config
-from ..llm import build_openai_model
+from ..agents.runtime.context import agent_output_retries, agent_retries
+from ..agents.runtime.run import run_agent_logged
+from ..core.config import Config
+from ..net.gateway import build_openai_model
 from .discover import DiscoveryResult, discover_tests
 from .models import (
     ExplorationTrace,
@@ -59,7 +59,7 @@ from .tools import RepoTools
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 # Top-N core helpers by fan-in kept in the map (§1.15). A hard cap in code; the model
 # ranks, the code truncates so an over-eager draft can't bloat the map.

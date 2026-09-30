@@ -11,7 +11,7 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   use: {
-    // The environment under test. The runner (src/ai_test_gen/test_runner.py) sets BASE_URL
+    // The environment under test. The runner (src/ai_test_gen/browser/runner.py) sets BASE_URL
     // per run — the primary STAGING_BASE_URL entry, then each secondary one — so a
     // baseURL-relative page.goto('/notes') follows the run. Absolute URLs ignore it.
     baseURL: process.env.BASE_URL,

@@ -48,23 +48,23 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .agents._vision_aid import VisionStats
 from .agents.generator import generate_test
 from .agents.healer import heal_test
 from .agents.planner import plan_test_case
-from .config import PROJECT_ROOT, Config, load_config
-from .gitlab_client import GitLabClient, TestRevision
-from .local_testcases import load_local_test_case
-from .models import (
+from .agents.tools.inspect_screen import VisionStats
+from .browser.runner import classify_failure, run_test
+from .core.config import PROJECT_ROOT, Config, load_config
+from .core.models import (
     EnvironmentRunResult,
     GeneratedTest,
     ManualTestCase,
     TestPlan,
     TestRunResult,
 )
-from .test_runner import classify_failure, run_test
-from .usage import UsageLog, describe, format_usage
-from .xray_client import XrayClient
+from .core.usage import UsageLog, describe, format_usage
+from .publish.gitlab import GitLabClient, TestRevision
+from .testcases.local import load_local_test_case
+from .testcases.xray import XrayClient
 
 logger = logging.getLogger(__name__)
 

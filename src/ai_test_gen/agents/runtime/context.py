@@ -23,7 +23,7 @@ from typing import Any, Literal, cast
 
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 
-from ..config import Config
+from ...core.config import Config
 
 logger = logging.getLogger(__name__)
 

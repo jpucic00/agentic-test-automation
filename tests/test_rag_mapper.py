@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.config import PROJECT_ROOT, Config
+from ai_test_gen.core.config import PROJECT_ROOT, Config
 from ai_test_gen.rag.mapper import (
     PROMPTS_DIR,
     CitedNote,

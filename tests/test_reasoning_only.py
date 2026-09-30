@@ -26,8 +26,8 @@ from pydantic_ai.usage import RunUsage
 
 from ai_test_gen.agents import healer as healer_mod
 from ai_test_gen.agents import planner as planner_mod
-from ai_test_gen.agents._reasoning_only import NUDGE, ReasoningOnlyRetry, is_reasoning_only
-from ai_test_gen.usage import REASONING_ONLY_RETRIES, UsageLog
+from ai_test_gen.agents.runtime.reasoning_only import NUDGE, ReasoningOnlyRetry, is_reasoning_only
+from ai_test_gen.core.usage import REASONING_ONLY_RETRIES, UsageLog
 
 
 class Out(BaseModel):

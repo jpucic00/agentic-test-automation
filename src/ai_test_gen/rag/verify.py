@@ -29,7 +29,7 @@ import re
 from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 
-from ..models import ManualStep
+from ..core.models import ManualStep
 from .models import ReconstructedPlan, ReconstructedSelector
 from .tools import RepoTools
 

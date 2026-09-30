@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from ..config import DEFAULT_TEST_MARKER_REGEX
+from ..core.config import DEFAULT_TEST_MARKER_REGEX
 from .models import KBSource, make_record_id
 
 logger = logging.getLogger(__name__)

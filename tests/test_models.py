@@ -1,4 +1,4 @@
-"""Unit tests for ai_test_gen.models — fully local (no network).
+"""Unit tests for ai_test_gen.core.models — fully local (no network).
 
 Models are referenced via the ``models`` module rather than imported by name:
 ``TestPlan`` / ``TestRunResult`` start with "Test", so importing them as
@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from ai_test_gen import models
+from ai_test_gen.core import models
 
 # One representative, fully-populated instance of every model.
 _INSTANCES: list[BaseModel] = [

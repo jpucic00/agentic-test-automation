@@ -15,9 +15,9 @@ from typing import Any, cast
 
 import pytest
 
-from ai_test_gen import models
-from ai_test_gen import playwright_mcp as pm
-from ai_test_gen.config import Config
+from ai_test_gen.browser import mcp as pm
+from ai_test_gen.core import models
+from ai_test_gen.core.config import Config
 
 
 def test_mcp_version_pinned_not_latest():

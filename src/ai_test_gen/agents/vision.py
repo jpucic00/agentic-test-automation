@@ -1,8 +1,8 @@
 """The Vision Aid Agent: hand a screenshot to a vision-capable model, get a short text answer.
 
 Backs the optional ``inspect_screen`` tool that BOTH browser agents (Planner and Healer) register
-from ``agents/_vision_aid.py``, enabled via the ``AGENT_VISION`` env var. The text-only agents
-(gpt-oss) cannot ingest images, so this converts a screenshot into a one-or-two-sentence text
+from ``agents/tools/inspect_screen.py``, enabled via the ``AGENT_VISION`` env var. The text-only
+agents (gpt-oss) cannot ingest images, so this converts a screenshot into a one-or-two-sentence text
 observation they CAN act on — the Vision Aid Agent is the eye, the browser agent stays the brain and
 the MCP driver. It only ever *describes what is rendered*; it never produces a selector (element
 targeting stays on ``browser_generate_locator``).
@@ -17,8 +17,8 @@ from __future__ import annotations
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.usage import RunUsage
 
-from ..config import Config
-from ..llm import build_openai_model
+from ..core.config import Config
+from ..net.gateway import build_openai_model
 
 _SYSTEM_PROMPT = (
     "You are a vision sensor for a web-UI test-automation agent. You are given a screenshot of "

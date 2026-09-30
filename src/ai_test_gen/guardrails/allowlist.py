@@ -4,7 +4,7 @@ The allow-list is every ``STAGING_BASE_URL`` environment plus every ``STAGING_EX
 host (an SSO login host, a mail-catcher UI), reduced to exact ``scheme://host[:port]``
 origins. Two consumers enforce it:
 
-- the MCP navigation guard (``agents/_nav_guard.py``) refuses ``browser_navigate`` to an
+- the MCP navigation guard (``guardrails/nav_guard.py``) refuses ``browser_navigate`` to an
   off-list origin and warns when a click/redirect lands the browser off-list;
 - ``preflight_violations`` statically checks a spec's literal ``goto(...)`` targets and the
   plan's recorded URLs before Playwright starts (``test_runner.run_test``).
@@ -21,7 +21,7 @@ import re
 from collections.abc import Iterable, Sequence
 from urllib.parse import urlsplit
 
-from .models import TestPlan
+from ..core.models import TestPlan
 
 BLANK_PAGE = "about:blank"
 # Pages the browser shows on its own (no request to any host) — never an off-list landing.

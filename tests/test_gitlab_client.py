@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, call
 import gitlab
 import pytest
 
-from ai_test_gen import gitlab_client, models
+from ai_test_gen.core import models
+from ai_test_gen.publish import gitlab as gitlab_client
 
 
 def _plan():

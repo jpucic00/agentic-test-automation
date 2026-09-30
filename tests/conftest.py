@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.config import Config
+from ai_test_gen.core.config import Config
 
 
 @pytest.fixture

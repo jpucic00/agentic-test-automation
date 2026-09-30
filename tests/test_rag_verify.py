@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.models import ManualStep
+from ai_test_gen.core.models import ManualStep
 from ai_test_gen.rag.models import (
     ReconstructedPlan,
     ReconstructedSelector,

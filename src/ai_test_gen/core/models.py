@@ -19,7 +19,7 @@ def _safe_spec_filename(value: str) -> str:
     """Reduce an LLM-generated test filename to a bare, traversal-free basename.
 
     ``file_name`` is later used as a filesystem path (``test_runner``) and a GitLab
-    commit path (``gitlab_client``). Taking ``Path(value).name`` strips any directory
+    commit path (``publish/gitlab.py``). Taking ``Path(value).name`` strips any directory
     parts or absolute prefix, so a model-emitted ``../x`` or ``/abs/x`` can never be
     written outside ``output/tests/`` / ``tests/generated/``. A value that reduces to
     nothing is rejected rather than producing a nameless file.

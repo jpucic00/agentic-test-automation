@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from ai_test_gen.config import Config
-from ai_test_gen.models import ManualStep, ManualTestCase
+from ai_test_gen.core.config import Config
+from ai_test_gen.core.models import ManualStep, ManualTestCase
 from ai_test_gen.rag.discover import DiscoveredTest
 from ai_test_gen.rag.distiller import (
     _TWO_CALL_MAX_FILES,

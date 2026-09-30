@@ -35,7 +35,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _mtls  # noqa: E402
 
-from ai_test_gen.llm import judge_reasoning_effort_support  # noqa: E402
+from ai_test_gen.net.gateway import judge_reasoning_effort_support  # noqa: E402
 
 # Hard enough that a reasoning model's deliberation length visibly scales with
 # effort, small enough to stay cheap.

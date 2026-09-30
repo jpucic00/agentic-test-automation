@@ -32,8 +32,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..config import Config
-from ..models import ManualStep, ManualTestCase
+from ..core.config import Config
+from ..core.models import ManualStep, ManualTestCase
 from . import embeddings
 from .discover import (
     DiscoveredTest,
@@ -463,7 +463,7 @@ def _load_cases(
 def _load_local(
     config: Config, keys: list[str], misses: dict[str, str]
 ) -> dict[str, ManualTestCase]:
-    from ..local_testcases import load_local_test_case
+    from ..testcases.local import load_local_test_case
 
     logger.info(":: loading %d manual case(s) from %s", len(keys), config.local_testcase_dir)
     loaded: dict[str, ManualTestCase] = {}
@@ -479,7 +479,7 @@ def _load_local(
 def _fetch_live(
     config: Config, keys: list[str], misses: dict[str, str]
 ) -> dict[str, ManualTestCase]:
-    from ..xray_client import XrayClient  # live fetch — needs the Jira network
+    from ..testcases.xray import XrayClient  # live fetch — needs the Jira network
 
     try:
         client = XrayClient(config)
@@ -767,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
 
     faulthandler.dump_traceback_later(120, repeat=True)
 
-    from ..config import load_config
+    from ..core.config import load_config
 
     config = load_config()
     try:

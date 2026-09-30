@@ -1,7 +1,7 @@
 """Unit tests for the local (raw-Xray-shaped JSON) test-case source — fully offline.
 
 Mirrors the real Server/DC Xray path: a file carries the Jira issue ``fields`` plus the
-Raven step array, and is normalized via the same ``xray_client`` helpers, so a locally
+Raven step array, and is normalized via the same ``testcases.xray`` helpers, so a locally
 sourced ``ManualTestCase`` is identical to a fetched one.
 """
 from __future__ import annotations
@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from ai_test_gen import local_testcases
-from ai_test_gen.config import Config
+from ai_test_gen.core.config import Config
+from ai_test_gen.testcases import local as local_testcases
 
 # A complete raw-Xray-shaped payload: issue fields + Raven step rows ({raw, rendered} cells).
 RAW_XRAY = {

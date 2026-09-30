@@ -26,7 +26,7 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import ModelResponse, ThinkingPart
 from pydantic_ai.models import ModelRequestContext
 
-from ..usage import REASONING_ONLY_RETRIES
+from ...core.usage import REASONING_ONLY_RETRIES
 
 logger = logging.getLogger(__name__)
 

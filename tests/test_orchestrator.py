@@ -14,8 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from pydantic_ai.usage import RunUsage
 
-from ai_test_gen import models, orchestrator
-from ai_test_gen.usage import UsageLog
+from ai_test_gen import orchestrator
+from ai_test_gen.core import models
+from ai_test_gen.core.usage import UsageLog
 
 
 def _manual_case():
