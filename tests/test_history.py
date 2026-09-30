@@ -8,6 +8,7 @@ deduped to the latest state per (page URL, dialog-open?).
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 from pydantic_ai.messages import (
@@ -18,11 +19,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from ai_test_gen.agents.runtime.history import (
-    anchor_snapshots_enabled,
-    snapshot_history_keep,
-    trim_stale_snapshots,
-)
+from ai_test_gen.agents.runtime.history import snapshot_trimmer, trim_stale_snapshots
 
 _STUB_MARKER = "[page snapshot omitted]"
 _HISTORY_LOGGER = "ai_test_gen.agents.runtime.history"
@@ -76,17 +73,11 @@ def _stubbed_ids(messages):
     }
 
 
-def _no_anchor_env(monkeypatch, keep="2"):
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", keep)
-    monkeypatch.delenv("ANCHOR_SNAPSHOTS", raising=False)
-
-
 # --- transient window (no locator captures → no anchors) ---------------------------
 
 
-def test_keeps_latest_n_and_stubs_older(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="2")
-    out = trim_stale_snapshots(_history(5))
+def test_keeps_latest_n_and_stubs_older():
+    out = trim_stale_snapshots(_history(5), keep=2)
     assert _kept_ids(out) == {"3", "4"}
     assert _stubbed_ids(out) == {"0", "1", "2"}
     # The action confirmation survives the trim — only the snapshot body is gone —
@@ -98,18 +89,16 @@ def test_keeps_latest_n_and_stubs_older(monkeypatch):
     assert "most recent" not in stub_text
 
 
-def test_no_trim_when_at_or_under_keep(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="2")
+def test_no_trim_when_at_or_under_keep():
     messages = _history(2)
-    assert trim_stale_snapshots(messages) is messages  # untouched, same object
+    assert trim_stale_snapshots(messages, keep=2) is messages  # untouched, same object
 
 
-def test_non_snapshot_messages_never_altered(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="1")
+def test_non_snapshot_messages_never_altered():
     locator = _locator_return("loc1")
     messages = _history(3)
     messages.insert(2, ModelRequest(parts=[locator]))
-    out = trim_stale_snapshots(messages)
+    out = trim_stale_snapshots(messages, keep=1)
     # The user prompt, model turns, and the verified locator are byte-identical.
     assert out[0] is messages[0]
     kept_locator = [
@@ -121,15 +110,14 @@ def test_non_snapshot_messages_never_altered(monkeypatch):
             assert processed is original
 
 
-def test_mcp_content_item_lists_are_handled(monkeypatch):
+def test_mcp_content_item_lists_are_handled():
     # pydantic-ai may surface MCP tool results as content-item lists, not plain strings.
-    _no_anchor_env(monkeypatch, keep="0")
     part = ToolReturnPart(
         tool_name="browser_click",
         content=[{"type": "text", "text": "Clicked\n- Page Snapshot\n```yaml\nbig\n```"}],
         tool_call_id="1",
     )
-    out = trim_stale_snapshots([ModelRequest(parts=[part])])
+    out = trim_stale_snapshots([ModelRequest(parts=[part])], keep=0)
     (new_part,) = _tool_returns(out)
     assert isinstance(new_part.content, str)
     assert _STUB_MARKER in new_part.content
@@ -150,17 +138,15 @@ def _users_flow():
     )
 
 
-def test_anchor_survives_while_transit_stubs(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="2")
-    out = trim_stale_snapshots(_users_flow())
+def test_anchor_survives_while_transit_stubs():
+    out = trim_stale_snapshots(_users_flow(), keep=2)
     # "1" is the anchor (a locator was captured there); "4"/"5" are the transient
     # window; the equally-old transit pages "2"/"3" are stubbed.
     assert _kept_ids(out) == {"1", "4", "5"}
     assert _stubbed_ids(out) == {"2", "3"}
 
 
-def test_anchor_dedup_keeps_latest_per_page_state(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="1")
+def test_anchor_dedup_keeps_latest_per_page_state():
     out = trim_stale_snapshots(
         _flow(
             _browser_return("1", "Opened users", url="https://s/users"),
@@ -169,15 +155,15 @@ def test_anchor_dedup_keeps_latest_per_page_state(monkeypatch):
             _locator_return("L2"),
             _browser_return("3", "Clicked a", url="https://s/o1"),
             _browser_return("4", "Clicked b", url="https://s/o2"),
-        )
+        ),
+        keep=1,
     )
     # Two captures on the same page state collapse to ONE anchor — the latest ("2").
     assert _kept_ids(out) == {"2", "4"}
     assert _stubbed_ids(out) == {"1", "3"}
 
 
-def test_modal_and_page_anchors_coexist_for_same_url(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="1")
+def test_modal_and_page_anchors_coexist_for_same_url():
     out = trim_stale_snapshots(
         _flow(
             _browser_return("1", "Opened users", url="https://s/users"),
@@ -186,7 +172,8 @@ def test_modal_and_page_anchors_coexist_for_same_url(monkeypatch):
             _locator_return("L2"),
             _browser_return("3", "Closed modal", url="https://s/users"),
             _browser_return("4", "Clicked elsewhere", url="https://s/o1"),
-        )
+        ),
+        keep=1,
     )
     # Modals don't change the URL: the dialog-open flag keys them separately, so the
     # page-state anchor ("1") and the modal-state anchor ("2") both survive.
@@ -194,80 +181,62 @@ def test_modal_and_page_anchors_coexist_for_same_url(monkeypatch):
     assert _stubbed_ids(out) == {"3"}
 
 
-def test_anchor_snapshots_off_reproduces_chronological(monkeypatch):
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "2")
-    monkeypatch.setenv("ANCHOR_SNAPSHOTS", "off")
-    out = trim_stale_snapshots(_users_flow())
+def test_anchor_snapshots_off_reproduces_chronological():
+    out = trim_stale_snapshots(_users_flow(), keep=2, anchors=False)
     # The escape hatch: pure keep-newest-N, the anchor is stubbed like any transit.
     assert _kept_ids(out) == {"4", "5"}
     assert _stubbed_ids(out) == {"1", "2", "3"}
 
 
-def test_idempotent_across_requests_with_anchors(monkeypatch):
+def test_idempotent_across_requests_with_anchors():
     # The processor runs before EVERY model request; anchors must be stable fixed
     # points (the locator returns defining them are never trimmed) and stubs must
     # not be re-mangled or re-counted.
-    _no_anchor_env(monkeypatch, keep="1")
-    once = trim_stale_snapshots(_users_flow())
-    twice = trim_stale_snapshots(once)
+    once = trim_stale_snapshots(_users_flow(), keep=1)
+    twice = trim_stale_snapshots(once, keep=1)
     assert [str(m) for m in twice] == [str(m) for m in once]
 
 
-def test_capture_before_any_snapshot_is_ignored(monkeypatch):
-    _no_anchor_env(monkeypatch, keep="1")
+def test_capture_before_any_snapshot_is_ignored():
     out = trim_stale_snapshots(
         _flow(
             _locator_return("L0"),  # nothing to anchor yet
             _browser_return("1", "Opened a", url="https://s/a"),
             _browser_return("2", "Opened b", url="https://s/b"),
-        )
+        ),
+        keep=1,
     )
     assert _kept_ids(out) == {"2"}
     assert _stubbed_ids(out) == {"1"}
 
 
-def test_tripwire_warning_when_anchor_count_excessive(monkeypatch, caplog):
-    _no_anchor_env(monkeypatch, keep="1")
+def test_tripwire_warning_when_anchor_count_excessive(caplog):
     parts = []
     for i in range(12):  # 12 distinct pages, each with a capture
         parts.append(_browser_return(str(i), f"Opened page {i}", url=f"https://s/p{i}"))
         parts.append(_locator_return(f"L{i}"))
     parts.append(_browser_return("99", "One more transit", url="https://s/extra"))
     with caplog.at_level(logging.WARNING, logger=_HISTORY_LOGGER):
-        trim_stale_snapshots(_flow(*parts))
+        trim_stale_snapshots(_flow(*parts), keep=1)
     warnings = [r.getMessage() for r in caplog.records if "anchor snapshots" in r.getMessage()]
     assert warnings and "12" in warnings[0]
 
 
-# --- env knobs ----------------------------------------------------------------------
+# --- config binding -------------------------------------------------------------------
 
 
-def test_snapshot_history_keep_env_and_default(monkeypatch):
-    monkeypatch.delenv("SNAPSHOT_HISTORY_KEEP", raising=False)
-    assert snapshot_history_keep() is None  # trimming disabled by default
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "5")
-    assert snapshot_history_keep() == 5
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "-1")  # clamped, but enabled
-    assert snapshot_history_keep() == 0
-    monkeypatch.setenv("SNAPSHOT_HISTORY_KEEP", "x")  # invalid -> disabled (safe)
-    assert snapshot_history_keep() is None
-
-
-def test_trimming_disabled_by_default_leaves_history_untouched(monkeypatch):
-    # The opt-in contract: without SNAPSHOT_HISTORY_KEEP set, the processor is a
-    # pure pass-through — same object, no stubs — regardless of history size.
-    monkeypatch.delenv("SNAPSHOT_HISTORY_KEEP", raising=False)
-    monkeypatch.delenv("ANCHOR_SNAPSHOTS", raising=False)
+def test_trimming_disabled_by_default_leaves_history_untouched(cfg):
+    # The opt-in contract: with the default config (SNAPSHOT_HISTORY_KEEP unset) the bound
+    # processor is a pure pass-through — same object, no stubs — regardless of history size.
     messages = _history(20)
-    assert trim_stale_snapshots(messages) is messages
+    assert snapshot_trimmer(cfg)(messages) is messages
     assert _stubbed_ids(messages) == set()
 
 
-def test_anchor_snapshots_enabled_env_and_default(monkeypatch):
-    monkeypatch.delenv("ANCHOR_SNAPSHOTS", raising=False)
-    assert anchor_snapshots_enabled() is True
-    for off in ("off", "FALSE", "0", "no"):
-        monkeypatch.setenv("ANCHOR_SNAPSHOTS", off)
-        assert anchor_snapshots_enabled() is False
-    monkeypatch.setenv("ANCHOR_SNAPSHOTS", "on")
-    assert anchor_snapshots_enabled() is True
+def test_snapshot_trimmer_binds_the_config_knobs(cfg):
+    trim = snapshot_trimmer(dataclasses.replace(cfg, snapshot_history_keep=2))
+    assert _kept_ids(trim(_users_flow())) == {"1", "4", "5"}  # anchor + newest two
+    trim = snapshot_trimmer(
+        dataclasses.replace(cfg, snapshot_history_keep=2, anchor_snapshots=False)
+    )
+    assert _kept_ids(trim(_users_flow())) == {"4", "5"}

@@ -353,28 +353,29 @@ def test_heal_message_includes_intent_plan_and_notes():
     assert "locator timeout" in msg  # failure still present
 
 
-def test_planner_builds_with_valid_reasoning_effort(cfg, monkeypatch):
-    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "high")
-    out = _run_offline(build_planner(cfg))  # knob must not break the agent
+@pytest.mark.parametrize(
+    ("build", "field"),
+    [(build_planner, "planner_reasoning_effort"), (build_healer, "healer_reasoning_effort")],
+)
+def test_browser_agent_sends_its_own_reasoning_effort(cfg, build, field):
+    # Each browser agent reads ITS OWN effort field; the knob must not break the agent.
+    agent = build(dataclasses.replace(cfg, **{field: "high"}))
+    assert agent.model_settings is not None
+    assert agent.model_settings.get("openai_reasoning_effort") == "high"
+    assert "openai_reasoning_effort" not in (build(cfg).model_settings or {})
+
+
+def test_planner_builds_with_valid_reasoning_effort(cfg):
+    out = _run_offline(build_planner(dataclasses.replace(cfg, planner_reasoning_effort="high")))
     assert isinstance(out, models.TestPlan)
-
-
-def test_planner_invalid_reasoning_effort_fails_at_build(cfg, monkeypatch):
-    # Fail fast on a typo — a silently-vanishing effort value would masquerade as
-    # a tuned pipeline (the whole reason the knob ships with a validation story).
-    monkeypatch.setenv("PLANNER_REASONING_EFFORT", "ultra")
-    with pytest.raises(ValueError, match="PLANNER_REASONING_EFFORT"):
-        build_planner(cfg)
 
 
 @pytest.mark.parametrize("build", [build_planner, build_healer])
 @pytest.mark.parametrize("vision_calls", [0, 2])
-def test_agent_always_disables_parallel_tool_calls(cfg, monkeypatch, build, vision_calls):
+def test_agent_always_disables_parallel_tool_calls(cfg, build, vision_calls):
     # Browser agents are ALWAYS sequential — vision on or off. pydantic-ai executes a turn's
     # tool calls concurrently, so batched browser actions could click/navigate out of order
     # (and race a vision screenshot); one tool call per turn is the only correct order.
-    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
-    monkeypatch.delenv("HEALER_REASONING_EFFORT", raising=False)
     agent = build(dataclasses.replace(cfg, vision_max_calls=vision_calls))
     assert agent.model_settings is not None
     assert agent.model_settings.get("parallel_tool_calls") is False
@@ -551,8 +552,6 @@ def test_only_the_planner_passes_the_endpoint_override(cfg, monkeypatch):
     # PLANNER_LLM_* wiring: build_planner must hand config.planner_base_url/api_key to
     # build_openai_model, while the Generator and Healer call WITHOUT endpoint kwargs —
     # they stay on the shared gateway even when the Planner is pointed elsewhere.
-    monkeypatch.delenv("PLANNER_REASONING_EFFORT", raising=False)
-    monkeypatch.delenv("HEALER_REASONING_EFFORT", raising=False)
     calls: dict[str, dict[str, object]] = {}
 
     def spy_for(label, real):

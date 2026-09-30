@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal, TypedDict
@@ -189,6 +189,7 @@ def track_usage(
     model: str,
     *,
     messages: list[ModelMessage] | None = None,
+    context_windows: Mapping[str, int] | None = None,
 ) -> Iterator[RunUsage]:
     """Time one agent run and record its usage — on success AND on failure.
 
@@ -197,7 +198,9 @@ def track_usage(
     when the run raised) and adds the run to ``log`` when one is given. Exceptions propagate.
 
     ``messages`` is the run's captured history (``capture_run_messages``); when given, the run's
-    context profile is logged (``Planner context: peak …``) and recorded with its usage.
+    context profile is logged (``Planner context: peak …``) and recorded with its usage;
+    ``context_windows`` (``config.model_context_windows``) sizes its peak against the model's
+    window.
     """
     usage = RunUsage()
     started = time.monotonic()
@@ -216,7 +219,7 @@ def track_usage(
         context = None
         if messages is not None:
             try:
-                context = profile_context(messages, model)
+                context = profile_context(messages, model, context_windows)
             except Exception:  # telemetry must never break a run
                 logger.warning("%s context profile failed", agent, exc_info=True)
             log_context(agent, context)

@@ -64,7 +64,6 @@ from .pipeline.heal_loop import (
     failure_signature,
     iteration_file_name,
     normalized_code,
-    resolve_max_heal_attempts,
 )
 from .pipeline.summary import environment_result, with_environments, with_usage, with_vision
 from .publish.gitlab import GitLabClient, TestRevision
@@ -78,7 +77,7 @@ async def process_test_case(issue_key: str, *, max_heal_attempts: int | None = N
     started = time.monotonic()
     config = load_config()
     if max_heal_attempts is None:
-        max_heal_attempts = resolve_max_heal_attempts()
+        max_heal_attempts = config.max_heal_attempts
 
     _clear_snapshots_dir(config)
     # Vision Aid counts per agent (all heal attempts pooled under "Healer"); reported in the

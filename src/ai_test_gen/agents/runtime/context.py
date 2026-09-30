@@ -12,23 +12,22 @@ past ~30K tokens, so every token saved makes structured output more reliable.
 The loader therefore strips HTML comments (author guidance, not app facts) before
 injection, and warns loudly when a file still carries template placeholders —
 an unfilled template reads to the model as real app documentation.
+
+``build_model_settings`` turns the browser agents' ``Config`` knobs into pydantic-ai model
+settings; every budget and knob itself lives in ``core/config.py``.
 """
 from __future__ import annotations
 
 import logging
-import os
 import re
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any
 
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 
-from ...core.config import Config
+from ...core.config import Config, ReasoningEffort
 
 logger = logging.getLogger(__name__)
-
-ReasoningEffort = Literal["low", "medium", "high"]
-_VALID_REASONING_EFFORTS = ("low", "medium", "high")
 
 _MISSING_PLACEHOLDER = "(no project context provided)"
 
@@ -148,72 +147,9 @@ def assemble_system_prompt(
     return "\n\n".join(parts)
 
 
-def agent_retries(default: int = 5) -> int:
-    """Max retries for an agent's tool/output errors.
-
-    Browser-driving agents (Planner, Healer) make many MCP tool calls and must recover from
-    transient "element not found" errors while hunting for selectors; pydantic-ai's low default
-    aborts the whole run after only a couple (e.g. "Tool 'browser_type' exceeded max retries").
-    Override via the ``AGENT_MCP_RETRIES`` env var.
-    """
-    raw = os.environ.get("AGENT_MCP_RETRIES")
-    if raw is None:
-        return default
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return default
-
-
-def reasoning_effort(env_var: str) -> ReasoningEffort | None:
-    """Validated reasoning-effort setting from ``env_var`` (None when unset).
-
-    Only meaningful on reasoning models (e.g. gpt-oss). An invalid value fails fast —
-    a typo'd effort that silently disappears would masquerade as a tuned pipeline.
-    When set, a warning reminds that gateway support must be PROVEN: OpenAI-compatible
-    gateways commonly accept unknown params and silently drop them, so the setting is
-    only trustworthy after ``scripts/step0d_verify_reasoning_effort.py`` reports HONORED.
-    """
-    raw = os.environ.get(env_var)
-    if raw is None or not raw.strip():
-        return None
-    value = raw.strip().lower()
-    if value not in _VALID_REASONING_EFFORTS:
-        raise ValueError(
-            f"{env_var}={raw!r} is not a valid reasoning effort; "
-            f"use one of {_VALID_REASONING_EFFORTS} or unset it"
-        )
-    logger.warning(
-        "%s=%s is set. Gateways may silently DROP unknown request params — only trust "
-        "this setting if scripts/step0d_verify_reasoning_effort.py reported HONORED "
-        "against your gateway/model.",
-        env_var,
-        value,
-    )
-    return cast(ReasoningEffort, value)
-
-
-def agent_output_retries(default: int = 15) -> int:
-    """Structured-output retry budget from ``AGENT_OUTPUT_RETRIES`` (default 15).
-
-    Retries for the MODEL'S OWN responses — empty turns, unparsed tool calls, output-schema
-    validation failures — as opposed to ``agent_retries`` (tool errors). pydantic-ai counts
-    these CUMULATIVELY across a run (successful turns never reset the counter) and, when no
-    separate budget is set, falls back to the tool budget (5): a gateway whose tool-call
-    parser intermittently returns empty husk turns then kills a long exploration even though
-    each bounce is individually recoverable. 15 rides that out; ``AGENT_REQUEST_LIMIT``
-    remains the hard backstop on total run size.
-    """
-    raw = os.environ.get("AGENT_OUTPUT_RETRIES")
-    if raw is None:
-        return default
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return default
-
-
-def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
+def build_model_settings(
+    config: Config, reasoning_effort: ReasoningEffort | None
+) -> OpenAIChatModelSettings:
     """Model settings for a browser agent: always-sequential tool calls + optional effort.
 
     - **``parallel_tool_calls=False`` — always.** Browser tools mutate ONE shared page, and
@@ -223,55 +159,18 @@ def build_model_settings(effort_env: str) -> OpenAIChatModelSettings:
       makes every browser agent's actions strictly sequential, which is the only correct order for
       UI automation. (The gateway must honor the flag — OpenAI-compatible servers may silently
       drop it; confirm on a real run.)
-    - **Reasoning effort** from ``effort_env`` (see ``reasoning_effort``) when that env var is set.
-    - **``max_tokens``** from ``AGENT_MAX_OUTPUT_TOKENS`` when set: an explicit per-request
-      completion budget. Overrides a gateway's small default, which can truncate a THINKING
-      model's turn into a thinking-only response that pydantic-ai rejects and retries to
-      exhaustion (see ``agent_max_output_tokens``).
+    - **Reasoning effort** — the agent's own field (``config.planner_reasoning_effort`` /
+      ``config.healer_reasoning_effort``) when set.
+    - **``max_tokens``** from ``config.agent_max_output_tokens`` when set: an explicit
+      per-request completion budget. Overrides a gateway's small default, which can truncate a
+      THINKING model's turn into a thinking-only response that pydantic-ai rejects and retries
+      to exhaustion.
 
     Shared by the Planner and the Healer; the Generator (no browser) never uses this.
     """
     settings_kwargs: dict[str, Any] = {"parallel_tool_calls": False}
-    effort = reasoning_effort(effort_env)
-    if effort:
-        settings_kwargs["openai_reasoning_effort"] = effort
-    max_tokens = agent_max_output_tokens()
-    if max_tokens is not None:
-        settings_kwargs["max_tokens"] = max_tokens
+    if reasoning_effort:
+        settings_kwargs["openai_reasoning_effort"] = reasoning_effort
+    if config.agent_max_output_tokens is not None:
+        settings_kwargs["max_tokens"] = config.agent_max_output_tokens
     return OpenAIChatModelSettings(**settings_kwargs)
-
-
-def agent_max_output_tokens() -> int | None:
-    """Per-request completion budget from ``AGENT_MAX_OUTPUT_TOKENS`` (unset = provider default).
-
-    Some gateways apply a SMALL default ``max_tokens`` when the request carries none. A
-    thinking model then spends the whole budget on its reasoning and the turn arrives
-    thinking-only or cut mid-emission — rejected, retried (with a longer context that thinks
-    even longer), and exhausted within a few turns. An explicit request-level budget overrides
-    such defaults wherever the gateway honors the param. Unset, invalid, or non-positive
-    values leave the request untouched.
-    """
-    raw = os.environ.get("AGENT_MAX_OUTPUT_TOKENS")
-    if raw is None:
-        return None
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
-def agent_request_limit(default: int = 300) -> int:
-    """Max model requests per agent run (pydantic-ai ``UsageLimits.request_limit``).
-
-    A browser agent exploring a multi-step flow makes many tool round-trips; pydantic-ai's
-    default of 50 aborts mid-exploration on a complex case (``UsageLimitExceeded``). Override
-    via the ``AGENT_REQUEST_LIMIT`` env var.
-    """
-    raw = os.environ.get("AGENT_REQUEST_LIMIT")
-    if raw is None:
-        return default
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return default

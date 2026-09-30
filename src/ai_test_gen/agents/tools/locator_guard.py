@@ -36,7 +36,6 @@ consecutive failures) — one instance per agent run.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from pydantic_ai import RunContext
@@ -47,9 +46,6 @@ logger = logging.getLogger(__name__)
 
 # The one MCP tool whose repeated failure triggers the guard — the agents' sole selector source.
 LOCATOR_TOOL = "browser_generate_locator"
-
-_STEER_AFTER_ENV = "PLANNER_LOCATOR_STEER_AFTER"
-_DEFAULT_STEER_AFTER = 3
 
 # Delivered IN PLACE OF the bland MCP error once the steer threshold is hit — the ModelRetry
 # prompt the agent sees. It names the exact tools to call, and forbids vision as a selector source.
@@ -67,23 +63,16 @@ _STEER_MESSAGE = (
 )
 
 
-def _steer_after(ceiling: int) -> int:
-    """Consecutive-failure threshold for the steer (``PLANNER_LOCATOR_STEER_AFTER``, default 3).
+def _steer_after(ceiling: int, requested: int) -> int:
+    """Consecutive-failure threshold for the steer: ``requested``, clamped to ``[1, ceiling - 1]``.
 
-    Clamped to ``[1, ceiling - 1]`` so at least one retry remains AFTER the steer fires for the
-    agent to act on — a steer that can only fire on the final allowed attempt is useless.
-    ``ceiling`` is the per-tool retry budget (``agent_retries()``). Invalid values fall back to
-    the default; this is a tuning knob, not a correctness gate.
+    ``requested`` is ``config.locator_steer_after`` (``PLANNER_LOCATOR_STEER_AFTER``, default 3).
+    The clamp leaves at least one retry AFTER the steer fires for the agent to act on — a steer
+    that can only fire on the final allowed attempt is useless. ``ceiling`` is the per-tool retry
+    budget (``config.agent_mcp_retries``).
     """
-    raw = os.environ.get(_STEER_AFTER_ENV)
-    value = _DEFAULT_STEER_AFTER
-    if raw is not None:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = _DEFAULT_STEER_AFTER
     upper = max(1, ceiling - 1)
-    return min(max(1, value), upper)
+    return min(max(1, requested), upper)
 
 
 class LocatorFailureGuard:
@@ -105,9 +94,16 @@ class LocatorFailureGuard:
     vision budget is spent or its backend failed, so the agent isn't sent to a dead tool.
     """
 
-    def __init__(self, ceiling: int, *, vision_on: bool = False, probe_on: bool = False) -> None:
+    def __init__(
+        self,
+        ceiling: int,
+        *,
+        steer_after: int = 3,
+        vision_on: bool = False,
+        probe_on: bool = False,
+    ) -> None:
         self.exhaust_after = max(1, ceiling)
-        self.steer_after = _steer_after(ceiling)
+        self.steer_after = _steer_after(ceiling, steer_after)
         self._vision_on = vision_on
         self._probe_on = probe_on
         self._consecutive = 0

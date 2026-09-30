@@ -27,17 +27,21 @@ and — critically — ``browser_generate_locator`` results (the verified locato
 whole selector strategy depends on) are never trimmed, so a captured locator can
 never be lost regardless of which snapshots are evicted.
 
-Attached to the Planner/Healer via ``Agent(capabilities=[ProcessHistory(...)])``.
+Both knobs are ``Config`` fields read by ``core/config.py``; ``snapshot_trimmer(config)``
+binds them into the processor attached to the Planner/Healer via
+``Agent(capabilities=[ProcessHistory(snapshot_trimmer(config))])``.
 """
 from __future__ import annotations
 
 import dataclasses
 import logging
-import os
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+
+from ...core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -62,46 +66,34 @@ _DIALOG_RE = re.compile(r"^\s*-\s+(?:alert)?dialog\b", re.MULTILINE)
 _ANCHOR_TRIPWIRE = 10
 
 
-def snapshot_history_keep(default: int | None = None) -> int | None:
-    """Transient-window size, or ``None`` when trimming is disabled (the default).
+def snapshot_trimmer(config: Config) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
+    """The history processor for one browser agent, bound to the run's trimming knobs.
 
-    Trimming is an opt-in experiment: set the ``SNAPSHOT_HISTORY_KEEP`` env var to
-    a number to enable it (that many newest snapshots kept verbatim, plus anchors).
-    Unset or unparseable → ``None`` → the history passes through untouched, which is
-    the proven-safe behavior for the mid-tier gateway models.
+    pydantic-ai calls a history processor with the messages only, so the knobs
+    (``config.snapshot_history_keep`` / ``config.anchor_snapshots``) are bound here when
+    the agent is built. With the default config the processor is a no-op.
     """
-    raw = os.environ.get("SNAPSHOT_HISTORY_KEEP")
-    if raw is None:
-        return default
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return default
+    keep = config.snapshot_history_keep
+    anchors = config.anchor_snapshots
+
+    def trim(messages: list[ModelMessage]) -> list[ModelMessage]:
+        return trim_stale_snapshots(messages, keep=keep, anchors=anchors)
+
+    return trim
 
 
-def anchor_snapshots_enabled(default: bool = True) -> bool:
-    """Whether milestone (anchor) snapshots are retained — ``ANCHOR_SNAPSHOTS`` env var.
-
-    ``off``/``false``/``0``/``no`` disables anchors, reproducing the pure
-    chronological keep-newest-N behavior (the A/B escape hatch).
-    """
-    raw = os.environ.get("ANCHOR_SNAPSHOTS")
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"off", "false", "0", "no"}
-
-
-def trim_stale_snapshots(messages: list[ModelMessage]) -> list[ModelMessage]:
+def trim_stale_snapshots(
+    messages: list[ModelMessage], *, keep: int | None, anchors: bool = True
+) -> list[ModelMessage]:
     """Truncate stale snapshot-bearing browser tool returns.
 
-    No-op unless ``SNAPSHOT_HISTORY_KEEP`` is set (trimming is opt-in). When enabled,
-    keeps the newest N snapshots (transient window) plus all anchor snapshots (latest
-    state per ``(page URL, dialog-open?)`` of every page a locator was captured on).
-    Pure with respect to its input: returns new message/part objects for anything it
-    changes. Idempotent — stubbed parts no longer carry the snapshot marker and are
+    No-op when ``keep`` is None (trimming is opt-in: ``SNAPSHOT_HISTORY_KEEP`` unset). When
+    enabled, keeps the newest ``keep`` snapshots (transient window) plus — when ``anchors`` —
+    all anchor snapshots (latest state per ``(page URL, dialog-open?)`` of every page a locator
+    was captured on). Pure with respect to its input: returns new message/part objects for
+    anything it changes. Idempotent — stubbed parts no longer carry the snapshot marker and are
     skipped on later passes.
     """
-    keep = snapshot_history_keep()
     if keep is None:
         return messages  # trimming disabled (the default) — full history untouched
 
@@ -121,7 +113,7 @@ def trim_stale_snapshots(messages: list[ModelMessage]) -> list[ModelMessage]:
     keep_set: set[tuple[int, int]] = (
         {loc for loc, _ in snapshot_locs[-keep:]} if keep > 0 else set()
     )
-    if anchor_snapshots_enabled():
+    if anchors:
         keep_set |= _anchor_locations(snapshot_locs, locator_locs)
 
     stale = {loc for loc, _ in snapshot_locs if loc not in keep_set}

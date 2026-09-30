@@ -27,13 +27,11 @@ from ..core.models import GeneratedTest, HealedTest, ManualTestCase, TestPlan, T
 from ..core.usage import UsageLog
 from ..net.gateway import build_openai_model
 from .runtime.context import (
-    agent_output_retries,
-    agent_retries,
     assemble_system_prompt,
     build_model_settings,
     declares_activation_flow,
 )
-from .runtime.history import trim_stale_snapshots
+from .runtime.history import snapshot_trimmer
 from .runtime.reasoning_only import ReasoningOnlyRetry
 from .runtime.run import run_agent_logged
 from .tools.count_matches import register_count_matches
@@ -80,7 +78,8 @@ def build_healer(
     # exceeded max retries" abort the heal attempt (which used to end the whole heal loop). Its
     # mid-streak steer to vision stays gated on AGENT_VISION.
     guard = LocatorFailureGuard(
-        agent_retries(),
+        config.agent_mcp_retries,
+        steer_after=config.locator_steer_after,
         vision_on=config.vision_max_calls > 0,
         probe_on=config.dom_probe_max_calls > 0,
     )
@@ -94,7 +93,7 @@ def build_healer(
 
     # Reasoning effort (HEALER_REASONING_EFFORT) + parallel_tool_calls=False ALWAYS — browser
     # tool calls mutate one shared page and must run strictly in order (see build_model_settings).
-    model_settings = build_model_settings("HEALER_REASONING_EFFORT")
+    model_settings = build_model_settings(config, config.healer_reasoning_effort)
 
     agent = Agent(
         model=model,
@@ -104,10 +103,10 @@ def build_healer(
         model_settings=model_settings,
         # tool: room to recover from transient MCP tool errors. output: the model's own bad
         # responses (empty/unparsed turns) accumulate ACROSS the run — separate, larger budget.
-        retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
+        retries=AgentRetries(tools=config.agent_mcp_retries, output=config.agent_output_retries),
         # Same trimming as the Planner: stale page snapshots out, newest few kept.
         # Same named retry prompt for a reasoning-only reply as the Planner.
-        capabilities=[ProcessHistory(trim_stale_snapshots), ReasoningOnlyRetry()],
+        capabilities=[ProcessHistory(snapshot_trimmer(config)), ReasoningOnlyRetry()],
     )
     # Optional Vision Aid sensor (shared budget with the Planner; per-agent-run counter). Registered
     # only when enabled so a disabled run's toolset — and behaviour — is identical to before.
@@ -391,5 +390,10 @@ async def heal_test(
     # run_agent_logged enters the agent (MCP subprocess start/stop around the run) and logs
     # the captured failure evidence on retry exhaustion before re-raising.
     return await run_agent_logged(
-        agent, user_message, agent_label="Healer", usage=usage, usage_label=usage_label
+        agent,
+        user_message,
+        config=config,
+        agent_label="Healer",
+        usage=usage,
+        usage_label=usage_label,
     )

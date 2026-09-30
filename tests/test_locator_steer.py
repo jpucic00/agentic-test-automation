@@ -2,7 +2,7 @@
 
 Covers the ``process_tool_call`` hook: pass-through of non-target tools, the consecutive-failure
 count, the vision-gated steer stage, the ALWAYS-on exhaustion soft-landing (a locator hunt can
-never abort the run), reset-on-success, the env-driven and clamped steer threshold, the "never a
+never abort the run), reset-on-success, the configured and clamped steer threshold, the "never a
 selector" guarantee of the messages, and the wiring that attaches the guard to the Planner
 unconditionally. Coroutines run via ``asyncio.run`` (no pytest-asyncio); no network.
 """
@@ -16,7 +16,6 @@ from pydantic_ai.exceptions import ModelRetry
 
 from ai_test_gen.agents import planner as planner_mod
 from ai_test_gen.agents.tools.locator_guard import (
-    _DEFAULT_STEER_AFTER,
     _STEER_MESSAGE,
     LOCATOR_TOOL,
     LocatorFailureGuard,
@@ -54,7 +53,7 @@ def test_non_target_failures_never_intervene_and_never_count():
 
 def test_steers_on_third_consecutive_locator_failure():
     guard = LocatorFailureGuard(ceiling=5, vision_on=True)
-    assert guard.steer_after == _DEFAULT_STEER_AFTER == 3
+    assert guard.steer_after == 3
 
     # failures 1 and 2 re-raise the original MCP error unchanged
     for _ in range(2):
@@ -187,29 +186,19 @@ def test_exhaust_message_never_contains_a_concrete_selector():
         assert forbidden not in out
 
 
-# --- threshold: env-driven + clamped to [1, ceiling-1] -------------------------
+# --- threshold: configured + clamped to [1, ceiling-1] -------------------------
 
 
-def test_steer_after_reads_env_and_clamps(monkeypatch):
-    monkeypatch.delenv("PLANNER_LOCATOR_STEER_AFTER", raising=False)
-    assert _steer_after(5) == _DEFAULT_STEER_AFTER  # default 3
+def test_steer_after_clamps_to_the_retry_ceiling():
+    assert _steer_after(5, 3) == 3  # default 3 (config.locator_steer_after)
+    assert _steer_after(5, 2) == 2
+    assert _steer_after(5, 10) == 4  # clamp to ceiling-1
+    assert _steer_after(1, 3) == 1  # tiny ceiling → upper clamps to 1
 
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "2")
-    assert _steer_after(5) == 2
 
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "10")  # clamp to ceiling-1
-    assert _steer_after(5) == 4
-
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "0")  # floor at 1
-    assert _steer_after(5) == 1
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "-3")
-    assert _steer_after(5) == 1
-
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "abc")  # invalid → default
-    assert _steer_after(5) == _DEFAULT_STEER_AFTER
-
-    monkeypatch.setenv("PLANNER_LOCATOR_STEER_AFTER", "3")  # tiny ceiling → upper clamps to 1
-    assert _steer_after(1) == 1
+def test_guard_takes_the_configured_steer_threshold():
+    assert LocatorFailureGuard(ceiling=5).steer_after == 3  # the shipped default
+    assert LocatorFailureGuard(ceiling=5, steer_after=2).steer_after == 2
 
 
 # --- wiring: the guard is attached ALWAYS, vision on or off --------------------
@@ -230,3 +219,9 @@ def test_planner_attaches_guard_always(cfg, monkeypatch):
 
     planner_mod.build_planner(dataclasses.replace(cfg, vision_max_calls=2))  # vision on
     assert isinstance(captured["hook"], LocatorFailureGuard)
+
+    # The configured budgets reach the guard: its ceiling and steer threshold come from Config.
+    planner_mod.build_planner(dataclasses.replace(cfg, agent_mcp_retries=4, locator_steer_after=2))
+    hook = captured["hook"]
+    assert isinstance(hook, LocatorFailureGuard)
+    assert (hook.exhaust_after, hook.steer_after) == (4, 2)

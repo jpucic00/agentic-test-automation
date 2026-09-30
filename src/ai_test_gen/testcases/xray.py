@@ -19,7 +19,6 @@ the company laptop) and differ from the guide template:
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -28,10 +27,6 @@ from atlassian import Jira
 from ..core.config import Config
 from ..core.models import ManualStep, ManualTestCase
 from ..net import connection
-
-# Server/DC custom field holding the manual test steps. Phase 0 finding (j1cnfng):
-# "Manual Test Steps" on the company tenant. Override per adopter via env.
-DEFAULT_STEPS_FIELD_ID = "customfield_11006"
 
 
 class XrayClient:
@@ -45,9 +40,8 @@ class XrayClient:
                 "JIRA_TOKEN. Set TESTCASE_SOURCE=local to read test cases from local JSON."
             )
         self.config = config
-        # Read after config has loaded .env. Default keeps the company tenant
-        # working with zero extra config; the env var keeps the scaffold shareable.
-        self.steps_field_id = os.environ.get("XRAY_STEPS_FIELD_ID", DEFAULT_STEPS_FIELD_ID)
+        # XRAY_STEPS_FIELD_ID (default customfield_11006) — see core/config.py.
+        self.steps_field_id = config.xray_steps_field_id
         self.jira = _build_jira(config)
 
     def fetch(self, issue_key: str) -> ManualTestCase:

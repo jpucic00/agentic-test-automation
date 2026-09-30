@@ -65,13 +65,13 @@ def test_parse_manual_steps_non_list_returns_empty(raw):
 # --- fetch() wiring (Jira mocked, Server/DC path) ---------------------------
 
 
-def test_fetch_server_returns_populated_test_case(monkeypatch):
-    monkeypatch.delenv("XRAY_STEPS_FIELD_ID", raising=False)
+def test_fetch_server_returns_populated_test_case():
     config = SimpleNamespace(
         xray_is_cloud=False,
         jira_base_url="https://jira.internal",
         jira_email="qa.bot",
         jira_token="fake-pat",
+        xray_steps_field_id="customfield_11006",
     )
     canned_issue = {
         "fields": {
@@ -118,15 +118,15 @@ def test_fetch_server_returns_populated_test_case(monkeypatch):
     jira.get.assert_called_once_with("rest/raven/1.0/api/test/QA-1234/step")
 
 
-def test_fetch_server_falls_back_to_custom_field_when_raven_empty(monkeypatch):
+def test_fetch_server_falls_back_to_custom_field_when_raven_empty():
     # Raven returns no steps -> parse the "Manual Test Steps" custom field, whose
     # Server/DC shape nests the cells under "fields" (action / data / expected_result).
-    monkeypatch.delenv("XRAY_STEPS_FIELD_ID", raising=False)
     config = SimpleNamespace(
         xray_is_cloud=False,
         jira_base_url="https://jira.internal",
         jira_email="qa.bot",
         jira_token="fake-pat",
+        xray_steps_field_id="customfield_11006",
     )
     canned_issue = {
         "fields": {
@@ -184,6 +184,7 @@ def test_fetch_server_raises_clear_error_on_dict_error_payload():
         jira_base_url="https://jira.internal",
         jira_email="qa.bot",
         jira_token="fake-pat",
+        xray_steps_field_id="customfield_11006",
     )
     error_payload = {
         "errorMessages": ["Issue does not exist or you do not have permission to see it."],
@@ -196,16 +197,16 @@ def test_fetch_server_raises_clear_error_on_dict_error_payload():
             xray_client.XrayClient(cast(Config, config)).fetch("QA-9999")
 
 
-def test_diagnose_steps_reports_fields_and_raven(monkeypatch):
+def test_diagnose_steps_reports_fields_and_raven():
     # diagnose_steps must surface the configured field's value, step-named fields,
     # populated custom fields (skipping empty ones), and the Raven endpoint results
     # — all without raising, so it's usable to pin the steps source on the laptop.
-    monkeypatch.delenv("XRAY_STEPS_FIELD_ID", raising=False)
     config = SimpleNamespace(
         xray_is_cloud=False,
         jira_base_url="https://jira.internal",
         jira_email="qa.bot",
         jira_token="fake-pat",
+        xray_steps_field_id="customfield_11006",
     )
     issue = {
         "names": {"customfield_11006": "Manual Test Steps", "summary": "Summary"},

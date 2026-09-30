@@ -215,20 +215,9 @@ def test_gitlab_disabled_skips_mr(cfg, monkeypatch):
     assert (cfg.plans_dir / "QA-1.json").exists()  # plan still persisted for review
 
 
-def test_resolve_max_heal_attempts_reads_env_with_fallbacks(monkeypatch):
-    monkeypatch.delenv("MAX_HEAL_ATTEMPTS", raising=False)
-    assert heal_loop.resolve_max_heal_attempts() == heal_loop.MAX_HEAL_ATTEMPTS
-    monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "5")
-    assert heal_loop.resolve_max_heal_attempts() == 5
-    monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "-3")  # negative is clamped to 0
-    assert heal_loop.resolve_max_heal_attempts() == 0
-    monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "not-a-number")  # invalid -> default
-    assert heal_loop.resolve_max_heal_attempts() == heal_loop.MAX_HEAL_ATTEMPTS
-
-
-def test_max_heal_attempts_env_honored_when_arg_omitted(cfg, monkeypatch):
-    monkeypatch.setenv("MAX_HEAL_ATTEMPTS", "1")
-    _wire(monkeypatch, cfg, [_result("failed"), _result("failed")])
+def test_config_heal_cap_used_when_arg_omitted(cfg, monkeypatch):
+    # MAX_HEAL_ATTEMPTS reaches the loop as config.max_heal_attempts; the argument overrides it.
+    _wire(monkeypatch, dataclasses.replace(cfg, max_heal_attempts=1), [_result("failed")] * 2)
     out = asyncio.run(orchestrator.process_test_case("QA-1"))  # no max_heal_attempts arg
     assert out["heal_attempts"] == 1
     assert out["status"] == "failed"

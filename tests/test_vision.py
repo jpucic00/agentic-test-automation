@@ -236,18 +236,6 @@ def test_register_inspect_screen_logs_enabled(cfg, caplog):
     assert any("vision sensor enabled" in r.getMessage().lower() for r in caplog.records)
 
 
-def test_stale_after_s_reads_env(monkeypatch):
-    f = planner_mod._stale_after_s
-    monkeypatch.delenv("PLANNER_VISION_STALE_S", raising=False)
-    assert f() == planner_mod._DEFAULT_STALE_AFTER_S  # default
-    monkeypatch.setenv("PLANNER_VISION_STALE_S", "120")
-    assert f() == 120.0
-    monkeypatch.setenv("PLANNER_VISION_STALE_S", "not-a-number")  # invalid -> default
-    assert f() == planner_mod._DEFAULT_STALE_AFTER_S
-    monkeypatch.setenv("PLANNER_VISION_STALE_S", "0")  # non-positive -> default
-    assert f() == planner_mod._DEFAULT_STALE_AFTER_S
-
-
 def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
     # A screenshot ~20s old is FRESH under the 45s default (vision runs) but STALE under a
     # tightened PLANNER_VISION_STALE_S=5 (bounces) — proves the knob and the generous default.
@@ -261,14 +249,15 @@ def test_inspect_screen_staleness_window_configurable(cfg, monkeypatch):
         return "VISION_OK"
 
     monkeypatch.setattr(vision_aid_mod, "ask_vision", fake_ask)
-    agent = Agent(model=TestModel(), output_type=models.TestPlan)
-    tool = _register_inspect_screen(agent, vcfg)
 
-    monkeypatch.delenv("PLANNER_VISION_STALE_S", raising=False)  # default 45 -> fresh
-    assert asyncio.run(tool("is a modal open?")) == "VISION_OK"
+    def tool_for(config):
+        agent = Agent(model=TestModel(), output_type=models.TestPlan)
+        return _register_inspect_screen(agent, config)
 
-    monkeypatch.setenv("PLANNER_VISION_STALE_S", "5")  # 20s > 5s -> stale
-    assert "stale" in asyncio.run(tool("is a modal open?")).lower()
+    assert asyncio.run(tool_for(vcfg)("is a modal open?")) == "VISION_OK"  # default 45 -> fresh
+
+    tight = dataclasses.replace(vcfg, vision_stale_after_s=5.0)  # 20s > 5s -> stale
+    assert "stale" in asyncio.run(tool_for(tight)("is a modal open?")).lower()
 
 
 # --- inspect_screen self-captures the live page -------------------------------

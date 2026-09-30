@@ -37,7 +37,6 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from ..agents.runtime.context import agent_output_retries, agent_retries
 from ..agents.runtime.run import summarize_run_failure
 from ..core.config import Config
 from ..core.models import ManualStep, ManualTestCase
@@ -337,7 +336,9 @@ class AgenticTurns:
             output_type=DistillDraft,
             system_prompt=_system_prompt(),
             model_settings=seeding_model_settings(config),
-            retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
+            retries=AgentRetries(
+                tools=config.agent_mcp_retries, output=config.agent_output_retries
+            ),
         )
         tools.register(self._agent)
         self._limit = config.distiller_request_limit
@@ -448,7 +449,7 @@ def _structured_call[OutputT: BaseModel](
         output_type=output_type,
         system_prompt=_system_prompt(),
         model_settings=seeding_model_settings(config),
-        retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
+        retries=AgentRetries(tools=config.agent_mcp_retries, output=config.agent_output_retries),
     )
 
     async def run(message: str) -> OutputT:

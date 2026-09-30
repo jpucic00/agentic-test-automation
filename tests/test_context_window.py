@@ -23,7 +23,6 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from ai_test_gen.core.context_window import (
     SCHEMAS,
     ContextProfile,
-    context_windows,
     describe_context,
     format_peak,
     log_context,
@@ -36,8 +35,8 @@ def _response(input_tokens: int, *parts) -> ModelResponse:
     return ModelResponse(parts=list(parts), usage=RequestUsage(input_tokens=input_tokens))
 
 
-def _profile(history, model: str = "m") -> ContextProfile:
-    profile = profile_context(history, model)
+def _profile(history, model: str = "m", windows=None) -> ContextProfile:
+    profile = profile_context(history, model, windows)
     assert profile is not None
     return profile
 
@@ -60,8 +59,7 @@ def _history():
     ]
 
 
-def test_profile_reads_each_requests_own_prompt_size(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOWS", raising=False)
+def test_profile_reads_each_requests_own_prompt_size():
     profile = _profile(_history())
 
     assert profile["per_request"] == [1000, 1600, 2200, 2150]
@@ -71,8 +69,7 @@ def test_profile_reads_each_requests_own_prompt_size(monkeypatch):
     assert json.loads(json.dumps(profile)) == profile
 
 
-def test_composition_splits_measured_growth_and_sums_to_the_peak(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOWS", raising=False)
+def test_composition_splits_measured_growth_and_sums_to_the_peak():
     composition = _profile(_history())["composition"]
 
     # Growth steps are 100% attributed: snapshots get almost all of the 2 x 600 tokens.
@@ -87,15 +84,13 @@ def test_composition_splits_measured_growth_and_sums_to_the_peak(monkeypatch):
     assert "tool: browser_click" not in composition
 
 
-def test_single_request_prompt_is_estimated_as_prose(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOWS", raising=False)
+def test_single_request_prompt_is_estimated_as_prose():
     history = [ModelRequest(parts=[UserPromptPart("t" * 400)]), _response(300, TextPart("x"))]
     composition = _profile(history)["composition"]
     assert composition == {SCHEMAS: 200, "task message": 100}
 
 
-def test_instructions_count_as_the_system_prompt_once(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOWS", raising=False)
+def test_instructions_count_as_the_system_prompt_once():
     history = [
         ModelRequest(parts=[UserPromptPart("t" * 40)], instructions="i" * 400),
         _response(500, TextPart("x")),
@@ -109,12 +104,9 @@ def test_no_per_response_usage_gives_no_profile():
     assert format_peak(None) == "-"
 
 
-def test_window_share_comes_from_model_context_windows(monkeypatch):
-    monkeypatch.setenv(
-        "MODEL_CONTEXT_WINDOWS", " openai/gpt-oss-120b = 4400 , junk, bad=x, zero=0, m=8000"
-    )
-    assert context_windows() == {"openai/gpt-oss-120b": 4400, "m": 8000}
-    profile = _profile(_history(), "openai/gpt-oss-120b")
+def test_window_share_comes_from_model_context_windows():
+    windows = {"openai/gpt-oss-120b": 4400, "m": 8000}  # config.model_context_windows
+    profile = _profile(_history(), "openai/gpt-oss-120b", windows)
     assert (profile["window"], profile["peak_pct"]) == (4400, 50.0)
     assert format_peak(profile) == "2,200 (50%)"
     assert describe_context(profile, top=0) == (
@@ -122,18 +114,16 @@ def test_window_share_comes_from_model_context_windows(monkeypatch):
     )
 
 
-def test_near_the_window_limit_logs_a_warning(monkeypatch, caplog):
-    monkeypatch.setenv("MODEL_CONTEXT_WINDOWS", "m=2500")
+def test_near_the_window_limit_logs_a_warning(caplog):
     with caplog.at_level(logging.INFO, logger="ai_test_gen.core.context_window"):
-        log_context("Planner", _profile(_history()))
+        log_context("Planner", _profile(_history(), windows={"m": 2500}))
     [record] = caplog.records
     assert record.levelno == logging.WARNING
     assert record.getMessage().startswith("Planner context: peak 2,200 (88%) of 2,500")
     assert "NEAR THE CONTEXT LIMIT" in record.getMessage()
 
 
-def test_merged_records_keep_the_higher_peak_and_format_the_composition(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOWS", raising=False)
+def test_merged_records_keep_the_higher_peak_and_format_the_composition():
     big = _profile(_history())
     small = _profile(
         [ModelRequest(parts=[UserPromptPart("t")]), _response(10, TextPart("x"))]

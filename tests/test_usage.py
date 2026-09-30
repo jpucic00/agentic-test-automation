@@ -126,7 +126,7 @@ def _agent(fn) -> Agent[None, str]:
     return agent
 
 
-def test_successful_run_records_usage_and_logs_one_line(caplog):
+def test_successful_run_records_usage_and_logs_one_line(cfg, caplog):
     def done(_messages):
         return ModelResponse(
             parts=[TextPart("done")], usage=RequestUsage(input_tokens=120, output_tokens=3)
@@ -135,7 +135,9 @@ def test_successful_run_records_usage_and_logs_one_line(caplog):
     log = UsageLog()
     with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
         out = asyncio.run(
-            run_agent_logged(_agent(_tool_then(done)), "go", agent_label="Generator", usage=log)
+            run_agent_logged(
+                _agent(_tool_then(done)), "go", config=cfg, agent_label="Generator", usage=log
+            )
         )
 
     assert out == "done"
@@ -149,13 +151,14 @@ def test_successful_run_records_usage_and_logs_one_line(caplog):
     assert rec["context"] is not None
     assert rec["context"]["per_request"] == [100, 120]
     assert (rec["context"]["peak"], rec["context"]["peak_request"]) == (120, 2)
+    assert rec["context"]["window"] is None  # no MODEL_CONTEXT_WINDOWS entry for fn-model
     lines = [r.getMessage() for r in caplog.records if "usage:" in r.getMessage()]
     assert len(lines) == 1
     assert lines[0].startswith("Generator usage: 2 requests, in=220 out=10 tokens, ")
     assert "(aborted)" not in lines[0]
 
 
-def test_aborted_run_still_records_partial_usage(caplog):
+def test_aborted_run_still_records_partial_usage(cfg, caplog):
     def crash(_messages):
         raise RuntimeError("gateway dropped the connection")
 
@@ -163,7 +166,9 @@ def test_aborted_run_still_records_partial_usage(caplog):
     with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
         with pytest.raises(RuntimeError):
             asyncio.run(
-                run_agent_logged(_agent(_tool_then(crash)), "go", agent_label="Planner", usage=log)
+                run_agent_logged(
+                    _agent(_tool_then(crash)), "go", config=cfg, agent_label="Planner", usage=log
+                )
             )
 
     [rec] = log.summary(1.0)["agents"]
@@ -178,7 +183,7 @@ def test_aborted_run_still_records_partial_usage(caplog):
     )
 
 
-def test_request_limit_abort_records_what_was_spent(monkeypatch):
+def test_request_limit_abort_records_what_was_spent(cfg):
     # UsageLimitExceeded (AGENT_REQUEST_LIMIT) — the classic "ran out of turns" abort.
     def loop(_messages):
         return ModelResponse(
@@ -189,7 +194,11 @@ def test_request_limit_abort_records_what_was_spent(monkeypatch):
     with pytest.raises(UsageLimitExceeded):
         asyncio.run(
             run_agent_logged(
-                _agent(_tool_then(loop)), "go", agent_label="Healer", usage=log, request_limit=3
+                _agent(_tool_then(loop)),
+                "go",
+                config=dataclasses.replace(cfg, agent_request_limit=3),
+                agent_label="Healer",
+                usage=log,
             )
         )
 
@@ -199,12 +208,14 @@ def test_request_limit_abort_records_what_was_spent(monkeypatch):
     assert rec["outcome"] == "error"
 
 
-def test_run_without_a_log_still_runs_and_logs(caplog):
+def test_run_without_a_log_still_runs_and_logs(cfg, caplog):
     def done(_messages):
         return ModelResponse(parts=[TextPart("ok")])
 
     with caplog.at_level(logging.INFO, logger="ai_test_gen.core.usage"):
-        asyncio.run(run_agent_logged(_agent(_tool_then(done)), "go", agent_label="Mapper"))
+        asyncio.run(
+            run_agent_logged(_agent(_tool_then(done)), "go", config=cfg, agent_label="Mapper")
+        )
     assert any(r.getMessage().startswith("Mapper usage:") for r in caplog.records)
 
 
@@ -347,3 +358,19 @@ def test_generator_compile_retry_is_its_own_record(cfg, monkeypatch):
         generator_mod.generate_test(cfg, plan, previous_code="// bad", error_text="E", usage=log)
     )
     assert [r["agent"] for r in log.summary(1.0)["agents"]] == ["Generator", "Generator retry"]
+
+
+def test_context_window_share_comes_from_config(cfg):
+    def done(_messages):
+        return ModelResponse(parts=[TextPart("done")], usage=RequestUsage(input_tokens=120))
+
+    log = UsageLog()
+    config = dataclasses.replace(cfg, model_context_windows={"fn-model": 240})
+    asyncio.run(
+        run_agent_logged(
+            _agent(_tool_then(done)), "go", config=config, agent_label="Planner", usage=log
+        )
+    )
+    [rec] = log.summary(1.0)["agents"]
+    assert rec["context"] is not None
+    assert (rec["context"]["window"], rec["context"]["peak_pct"]) == (240, 50.0)

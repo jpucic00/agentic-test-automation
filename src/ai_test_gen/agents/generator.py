@@ -25,7 +25,7 @@ from ..core.models import GeneratedTest, TestPlan
 from ..core.usage import UsageLog
 from ..guardrails.allowlist import relative_to
 from ..net.gateway import build_openai_model
-from .runtime.context import agent_output_retries, assemble_system_prompt
+from .runtime.context import assemble_system_prompt
 from .runtime.run import run_agent_logged
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -42,7 +42,7 @@ def build_generator(config: Config) -> Agent[None, GeneratedTest]:
         model=model,
         output_type=GeneratedTest,
         system_prompt=system_prompt,
-        retries=AgentRetries(tools=2, output=agent_output_retries()),  # output: serving husks
+        retries=AgentRetries(tools=2, output=config.agent_output_retries),  # output: serving husks
     )
 
 
@@ -135,6 +135,7 @@ async def generate_test(
     return await run_agent_logged(
         agent,
         user_message,
+        config=config,
         agent_label="Generator",
         usage=usage,
         usage_label="Generator retry" if previous_code is not None else "Generator",

@@ -26,13 +26,11 @@ from ..core.models import ManualTestCase, TestPlan
 from ..core.usage import UsageLog
 from ..net.gateway import build_openai_model
 from .runtime.context import (
-    agent_output_retries,
-    agent_retries,
     assemble_system_prompt,
     build_model_settings,
     declares_activation_flow,
 )
-from .runtime.history import trim_stale_snapshots
+from .runtime.history import snapshot_trimmer
 from .runtime.reasoning_only import ReasoningOnlyRetry
 from .runtime.run import run_agent_logged
 from .tools.count_matches import register_count_matches
@@ -42,12 +40,10 @@ from .tools.dom_probe import register_probe_dom
 # targets (tests/test_vision.py) keep resolving from this module. noqa: these are deliberate
 # re-exports; _make_screenshot_capture and register_inspect_screen are also used directly below.
 from .tools.inspect_screen import (  # noqa: F401
-    _DEFAULT_STALE_AFTER_S,
     SCREENSHOT_TOOL,
     VisionStats,
     _latest_png,
     _make_screenshot_capture,
-    _stale_after_s,
     register_inspect_screen,
 )
 from .tools.locator_guard import LOCATOR_TOOL, LocatorFailureGuard
@@ -71,8 +67,6 @@ __all__ = [
     "register_probe_dom",
     "_make_screenshot_capture",
     "_latest_png",
-    "_stale_after_s",
-    "_DEFAULT_STALE_AFTER_S",
     "SCREENSHOT_TOOL",
 ]
 
@@ -116,7 +110,8 @@ def build_planner(
     # the whole planning run. Its mid-streak steer to vision stays gated on AGENT_VISION, and
     # its guidance mentions probe_dom only when the probe is registered.
     guard = LocatorFailureGuard(
-        agent_retries(),
+        config.agent_mcp_retries,
+        steer_after=config.locator_steer_after,
         vision_on=config.vision_max_calls > 0,
         probe_on=config.dom_probe_max_calls > 0,
     )
@@ -130,7 +125,7 @@ def build_planner(
 
     # Reasoning effort (PLANNER_REASONING_EFFORT) + parallel_tool_calls=False ALWAYS — browser
     # tool calls mutate one shared page and must run strictly in order (see build_model_settings).
-    model_settings = build_model_settings("PLANNER_REASONING_EFFORT")
+    model_settings = build_model_settings(config, config.planner_reasoning_effort)
 
     agent = Agent(
         model=model,
@@ -140,12 +135,12 @@ def build_planner(
         model_settings=model_settings,
         # tool: room to recover from transient MCP tool errors. output: the model's own bad
         # responses (empty/unparsed turns) accumulate ACROSS the run — separate, larger budget.
-        retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
+        retries=AgentRetries(tools=config.agent_mcp_retries, output=config.agent_output_retries),
         # Long explorations accumulate dozens of stale page snapshots; keep only the
         # newest few so the model stays out of its long-context degradation zone.
         # A reasoning-only reply (the call written into the reasoning, never made) gets a
         # retry prompt that names the problem instead of pydantic-ai's generic one.
-        capabilities=[ProcessHistory(trim_stale_snapshots), ReasoningOnlyRetry()],
+        capabilities=[ProcessHistory(snapshot_trimmer(config)), ReasoningOnlyRetry()],
     )
     # Optional Vision Aid sensor (AGENT_VISION). Registered only when enabled
     # so a disabled run's toolset — and behaviour — is identical to before. The capture handle
@@ -220,7 +215,9 @@ Plan this test case: perform it live in the staging app, then return the TestPla
 
     # run_agent_logged enters the agent (Playwright MCP subprocess start/stop around the
     # run) and logs the captured failure evidence on retry exhaustion before re-raising.
-    return await run_agent_logged(agent, user_message, agent_label="Planner", usage=usage)
+    return await run_agent_logged(
+        agent, user_message, config=config, agent_label="Planner", usage=usage
+    )
 
 
 def _format_steps(tc: ManualTestCase) -> str:

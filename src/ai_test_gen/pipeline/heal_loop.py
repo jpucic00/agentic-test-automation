@@ -1,45 +1,28 @@
-"""Heal-loop bookkeeping: the heal budget, stop verdicts, failure fingerprints, and the
+"""Heal-loop bookkeeping: the crashed-attempt cap, stop verdicts, failure fingerprints, and the
 per-iteration artifact names and MR commit messages.
 
-The loop itself stays in the orchestrator; these are the pure helpers it decides with.
+The loop itself stays in the orchestrator; these are the pure helpers it decides with. The heal
+budget itself is ``config.max_heal_attempts`` (``MAX_HEAL_ATTEMPTS``, see ``core/config.py``).
 """
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
 from ..browser.runner import classify_failure
 from ..core.models import TestRunResult
 
-# Default heal cap; override per run via the MAX_HEAL_ATTEMPTS env var (read after
-# load_config() so a value in .env is honored) or the process_test_case argument.
-# 3 (was 2) gives the locator-kind escalation room to descend the resilience ladder: a
-# persistently-failing step needs one attempt to confirm the failure recurs and another to
-# escalate to a different locator kind (e.g. roll a hallucinated id over to a verified XPath).
-MAX_HEAL_ATTEMPTS = 3
-
 # A heal attempt that CRASHES (agent/gateway/MCP exception) consumes its attempt but does NOT
 # end healing — each attempt builds a fresh Healer + browser, so the next one starts clean.
 # Only this many CONSECUTIVE crashed attempts stop the loop early: back-to-back crashes mean
 # something environmental (gateway down, browser broken) that more attempts won't heal. Without
-# this, one crashed attempt used to abandon the entire remaining MAX_HEAL_ATTEMPTS budget.
+# this, one crashed attempt used to abandon the entire remaining heal budget.
 MAX_CONSECUTIVE_ABORTED_HEALS = 2
 
 # Verdict recorded (run summary + MR description) when a completed heal returns the code
 # unchanged — healer.md's signal for a genuine app bug or a spec-vs-app divergence.
 NO_FIX_VERDICT = "Healer found no fix — probable app bug or spec divergence"
-
-
-def resolve_max_heal_attempts() -> int:
-    raw = os.environ.get("MAX_HEAL_ATTEMPTS")
-    if raw is None:
-        return MAX_HEAL_ATTEMPTS
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return MAX_HEAL_ATTEMPTS
 
 
 def iteration_file_name(base_file_name: str, label: str) -> str:

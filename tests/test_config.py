@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 import pytest
 
@@ -66,6 +67,21 @@ _OPTIONAL_VARS = (
     "AGENT_REQUEST_ATTEMPTS",
     "TEST_MARKER_REGEX",
     "STAGING_EXTRA_URLS",
+    # Agent run tuning knobs
+    "AGENT_MCP_RETRIES",
+    "AGENT_OUTPUT_RETRIES",
+    "AGENT_REQUEST_LIMIT",
+    "AGENT_MAX_OUTPUT_TOKENS",
+    "PLANNER_REASONING_EFFORT",
+    "HEALER_REASONING_EFFORT",
+    "SNAPSHOT_HISTORY_KEEP",
+    "ANCHOR_SNAPSHOTS",
+    "PLANNER_VISION_STALE_S",
+    "PLANNER_LOCATOR_STEER_AFTER",
+    "PLAYWRIGHT_MCP_HEADED",
+    "MAX_HEAL_ATTEMPTS",
+    "XRAY_STEPS_FIELD_ID",
+    "MODEL_CONTEXT_WINDOWS",
 )
 
 
@@ -532,3 +548,105 @@ def test_extra_urls_must_be_full_http_urls_without_wildcards(env, bad):
 def test_config_rejects_primary_that_is_not_the_first_environment(cfg):
     with pytest.raises(ValueError, match="primary"):
         dataclasses.replace(cfg, staging_base_urls=("https://qa.example.internal",))
+
+
+# --- agent run tuning knobs ---------------------------------------------------------------
+
+# (attr, shipped default) — load_config() with none of the knobs set must match the Config
+# defaults exactly, so a hermetic Config (tests/conftest.py) and a real run behave alike.
+_KNOB_DEFAULTS = [
+    ("agent_mcp_retries", 5),
+    ("agent_output_retries", 15),
+    ("agent_request_limit", 300),
+    ("agent_max_output_tokens", None),
+    ("planner_reasoning_effort", None),
+    ("healer_reasoning_effort", None),
+    ("snapshot_history_keep", None),
+    ("anchor_snapshots", True),
+    ("vision_stale_after_s", 45.0),
+    ("locator_steer_after", 3),
+    ("playwright_mcp_headed", False),
+    ("max_heal_attempts", 3),
+    ("xray_steps_field_id", "customfield_11006"),
+    ("model_context_windows", {}),
+]
+
+
+def test_tuning_knobs_default_to_the_config_defaults(env, cfg):
+    # cfg (tests/conftest.py) leaves every knob at its dataclass default.
+    loaded = load_config()
+    for attr, default in _KNOB_DEFAULTS:
+        assert getattr(loaded, attr) == getattr(cfg, attr) == default, attr
+
+
+@pytest.mark.parametrize(
+    ("var", "raw", "attr", "expected"),
+    [
+        ("AGENT_MCP_RETRIES", "8", "agent_mcp_retries", 8),
+        ("AGENT_OUTPUT_RETRIES", "25", "agent_output_retries", 25),
+        ("AGENT_REQUEST_LIMIT", "500", "agent_request_limit", 500),
+        ("AGENT_MAX_OUTPUT_TOKENS", "8000", "agent_max_output_tokens", 8000),
+        ("AGENT_MAX_OUTPUT_TOKENS", "0", "agent_max_output_tokens", None),  # ≤0 = provider default
+        ("PLANNER_REASONING_EFFORT", "High", "planner_reasoning_effort", "high"),
+        ("HEALER_REASONING_EFFORT", "medium", "healer_reasoning_effort", "medium"),
+        ("SNAPSHOT_HISTORY_KEEP", "0", "snapshot_history_keep", 0),  # anchors only
+        ("SNAPSHOT_HISTORY_KEEP", "5", "snapshot_history_keep", 5),
+        ("ANCHOR_SNAPSHOTS", "OFF", "anchor_snapshots", False),
+        ("PLANNER_VISION_STALE_S", "120", "vision_stale_after_s", 120.0),
+        ("PLANNER_LOCATOR_STEER_AFTER", "2", "locator_steer_after", 2),
+        ("PLAYWRIGHT_MCP_HEADED", "true", "playwright_mcp_headed", True),
+        ("MAX_HEAL_ATTEMPTS", "0", "max_heal_attempts", 0),  # no healing
+        ("XRAY_STEPS_FIELD_ID", "customfield_12000", "xray_steps_field_id", "customfield_12000"),
+        (
+            "MODEL_CONTEXT_WINDOWS",
+            " openai/gpt-oss-120b = 4400 , m=8000,",
+            "model_context_windows",
+            {"openai/gpt-oss-120b": 4400, "m": 8000},
+        ),
+        ("AGENT_MCP_RETRIES", "  ", "agent_mcp_retries", 5),  # blank = unset
+    ],
+)
+def test_tuning_knob_valid_override(env, var, raw, attr, expected):
+    env.setenv(var, raw)
+    assert getattr(load_config(), attr) == expected
+
+
+@pytest.mark.parametrize(
+    ("var", "raw"),
+    [
+        ("AGENT_MCP_RETRIES", "nope"),
+        ("AGENT_MCP_RETRIES", "0"),
+        ("AGENT_OUTPUT_RETRIES", "-3"),
+        ("AGENT_REQUEST_LIMIT", "x"),
+        ("AGENT_MAX_OUTPUT_TOKENS", "bogus"),
+        ("PLANNER_REASONING_EFFORT", "ultra"),
+        ("HEALER_REASONING_EFFORT", "max"),
+        ("SNAPSHOT_HISTORY_KEEP", "x"),
+        ("SNAPSHOT_HISTORY_KEEP", "-1"),
+        ("ANCHOR_SNAPSHOTS", "maybe"),
+        ("PLANNER_VISION_STALE_S", "0"),
+        ("PLANNER_VISION_STALE_S", "soon"),
+        ("PLANNER_LOCATOR_STEER_AFTER", "abc"),
+        ("PLAYWRIGHT_MCP_HEADED", "yesplease"),
+        ("MAX_HEAL_ATTEMPTS", "-3"),
+        ("MAX_HEAL_ATTEMPTS", "not-a-number"),
+        ("MODEL_CONTEXT_WINDOWS", "m=8000,junk"),
+        ("MODEL_CONTEXT_WINDOWS", "bad=x"),
+        ("MODEL_CONTEXT_WINDOWS", "zero=0"),
+    ],
+)
+def test_invalid_tuning_knob_fails_fast_naming_the_var(env, var, raw):
+    # A typo'd knob that silently fell back would masquerade as a tuned pipeline.
+    env.setenv(var, raw)
+    with pytest.raises(ValueError, match=var):
+        load_config()
+
+
+def test_reasoning_effort_warns_about_gateway_support(env, caplog):
+    # The knob must never be silent: gateways can drop unknown params, so a set value
+    # always reminds that step0d must have proven support.
+    env.setenv("PLANNER_REASONING_EFFORT", "high")
+    with caplog.at_level(logging.WARNING, logger="ai_test_gen.core.config"):
+        load_config()
+    warning = [r.getMessage() for r in caplog.records if "REASONING_EFFORT" in r.getMessage()]
+    assert warning and "step0d_verify_reasoning_effort" in warning[0]

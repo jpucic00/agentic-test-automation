@@ -68,19 +68,15 @@ MCP_OUTPUT_DIR = PROJECT_ROOT / "output" / "snapshots"
 # pydantic-ai's MCP init timeout defaults to 5s; a cold Node start can exceed that.
 MCP_INIT_TIMEOUT_S = 60.0
 
-# Set this truthy to watch the browser drive (debugging the Planner/Healer). The
-# committed config stays headless for CI / Docker / other consumers.
-HEADED_ENV_VAR = "PLAYWRIGHT_MCP_HEADED"
+def _resolve_config_path(headed: bool) -> str:
+    """Return the MCP config path, honoring ``headed`` (``config.playwright_mcp_headed``).
 
-
-def _resolve_config_path() -> str:
-    """Return the MCP config path, honoring ``PLAYWRIGHT_MCP_HEADED``.
-
-    Default is the committed (headless) ``playwright-mcp-config.json``. When the env
-    var is truthy, write a one-off headed copy to a temp file so you can watch the
-    agent drive the browser — without mutating the committed config.
+    Default is the committed (headless) ``playwright-mcp-config.json`` — it stays headless for
+    CI / Docker / other consumers. With ``PLAYWRIGHT_MCP_HEADED`` on (debugging the
+    Planner/Healer), write a one-off headed copy to a temp file so you can watch the agent
+    drive the browser — without mutating the committed config.
     """
-    if os.environ.get(HEADED_ENV_VAR, "").strip().lower() not in {"1", "true", "yes", "on"}:
+    if not headed:
         return str(MCP_CONFIG_PATH)
     config = json.loads(MCP_CONFIG_PATH.read_text())
     config.setdefault("browser", {}).setdefault("launchOptions", {})["headless"] = False
@@ -177,7 +173,7 @@ def build_playwright_mcp(
     args = [
         str(MCP_CLI_PATH),
         "--config",
-        _resolve_config_path(),
+        _resolve_config_path(config.playwright_mcp_headed),
         "--isolated",
         "--output-dir",
         str(MCP_OUTPUT_DIR),

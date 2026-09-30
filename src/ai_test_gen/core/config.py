@@ -11,22 +11,30 @@ only, never production. ``STAGING_EXTRA_URLS`` (auxiliary hosts such as an SSO l
 mail-catcher UI) are exempt from the marker check but must be plain full URLs; together
 with the environments they form the runtime navigation allow-list (``guardrails/allowlist.py``).
 
+Every pipeline tuning knob (retry budgets, request limits, reasoning effort, history trimming,
+heal cap, …) is read here too, once, and reaches the agents as a ``Config`` field — no other
+module reads the environment for them. An invalid knob value fails ``load_config()`` with a
+``ValueError`` naming the env var instead of silently falling back to its default.
+
 Implements AI_TEST_GENERATION_GUIDE.md §3.4 + §3.5b.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 from ..guardrails.allowlist import origins, url_origin
 from .paths import PROJECT_ROOT
+
+logger = logging.getLogger(__name__)
 
 # Substring markers (case-insensitive) that identify a NON-production host. The
 # guardrail is fail-closed: STAGING_BASE_URL's host must contain at least one of
@@ -42,6 +50,13 @@ DEFAULT_NON_PROD_MARKERS: tuple[str, ...] = ("localhost", "127.0.0.1", "staging"
 # with @Xray(testCase = "KEY"); other corpora override via TEST_MARKER_REGEX (the
 # pattern MUST keep exactly one capture group for the key).
 DEFAULT_TEST_MARKER_REGEX = r'@Xray\s*\(\s*testCase\s*=\s*"([^"]+)"\s*\)'
+
+# Server/DC custom field holding the manual test steps ("Manual Test Steps" on the tenant
+# this scaffold was built against). Other tenants override via XRAY_STEPS_FIELD_ID.
+DEFAULT_XRAY_STEPS_FIELD_ID = "customfield_11006"
+
+ReasoningEffort = Literal["low", "medium", "high"]
+_VALID_REASONING_EFFORTS = ("low", "medium", "high")
 
 
 class ProductionURLError(RuntimeError):
@@ -209,7 +224,7 @@ def _resolve_under_root(raw: str) -> Path:
 def _call_budget(env_var: str, what: str) -> int:
     """Tri-state per-agent-run call budget from ``env_var`` (0 = feature off).
 
-    Mirrors the env-knob style of ``agent_request_limit`` / ``reasoning_effort``:
+    Mirrors the fail-fast style of the tuning-knob parsers below:
     unset / ``false`` / ``0`` / ``off`` / ``no`` → 0 (disabled); a positive integer → that cap.
     Any other value fails fast — a typo that silently disabled the feature would masquerade as
     "the feature isn't helping". ``what`` names the capped thing in the error message.
@@ -252,6 +267,134 @@ def _dom_probe_max_calls() -> int:
     optional sensor so a default run's prompts and toolset stay byte-identical.
     """
     return _call_budget("AGENT_DOM_PROBE", "DOM-probe calls")
+
+
+# --- Tuning-knob parsers ----------------------------------------------------------------------
+# Unset or blank → the shipped default. Anything else must parse and be in range, or
+# load_config() raises a ValueError naming the env var: a typo'd knob that silently fell back
+# would masquerade as a tuned pipeline.
+
+
+def _int_knob(name: str, *, default: int, minimum: int) -> int:
+    """An integer knob from ``name``: unset/blank → ``default``; must be ``>= minimum``."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} is not an integer; unset it or use one.") from None
+    if value < minimum:
+        raise ValueError(f"{name}={raw!r} must be >= {minimum}.")
+    return value
+
+
+def _optional_int_knob(name: str, *, minimum: int) -> int | None:
+    """Like ``_int_knob`` but unset/blank → ``None`` (the feature stays off)."""
+    if not os.environ.get(name, "").strip():
+        return None
+    return _int_knob(name, default=minimum, minimum=minimum)
+
+
+def _positive_float_knob(name: str, *, default: float) -> float:
+    """A positive, finite number knob from ``name``: unset/blank → ``default``."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name}={raw!r} must be a positive number (seconds).")
+    return value
+
+
+def _bool_knob(name: str, *, default: bool) -> bool:
+    """An on/off knob from ``name``: 1/true/yes/on or 0/false/no/off (case-insensitive)."""
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name}={raw!r} is not valid; use 'on'/'true' or 'off'/'false'.")
+
+
+def _max_output_tokens() -> int | None:
+    """Per-request completion budget from ``AGENT_MAX_OUTPUT_TOKENS`` (None = provider default).
+
+    Some gateways apply a SMALL default ``max_tokens`` when the request carries none. A
+    thinking model then spends the whole budget on its reasoning and the turn arrives
+    thinking-only or cut mid-emission — rejected, retried (with a longer context that thinks
+    even longer), and exhausted within a few turns. An explicit request-level budget overrides
+    such defaults wherever the gateway honors the param. Unset, blank, zero or negative leave
+    the request untouched; a non-integer fails fast.
+    """
+    raw = os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"AGENT_MAX_OUTPUT_TOKENS={raw!r} is not an integer; unset it or use one."
+        ) from None
+    return value if value > 0 else None
+
+
+def _reasoning_effort(env_var: str) -> ReasoningEffort | None:
+    """Validated reasoning-effort setting from ``env_var`` (None when unset/blank).
+
+    Only meaningful on reasoning models (e.g. gpt-oss). An invalid value fails fast —
+    a typo'd effort that silently disappears would masquerade as a tuned pipeline.
+    When set, a warning reminds that gateway support must be PROVEN: OpenAI-compatible
+    gateways commonly accept unknown params and silently drop them, so the setting is
+    only trustworthy after ``scripts/step0d_verify_reasoning_effort.py`` reports HONORED.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value not in _VALID_REASONING_EFFORTS:
+        raise ValueError(
+            f"{env_var}={raw!r} is not a valid reasoning effort; "
+            f"use one of {_VALID_REASONING_EFFORTS} or unset it"
+        )
+    logger.warning(
+        "%s=%s is set. Gateways may silently DROP unknown request params — only trust "
+        "this setting if scripts/step0d_verify_reasoning_effort.py reported HONORED "
+        "against your gateway/model.",
+        env_var,
+        value,
+    )
+    return cast(ReasoningEffort, value)
+
+
+def _model_context_windows() -> dict[str, int]:
+    """``MODEL_CONTEXT_WINDOWS`` as ``{model name: tokens}``.
+
+    Format: ``model=tokens`` pairs, comma-separated — the model name exactly as the usage
+    table shows it, e.g. ``openai/gpt-oss-120b=131072,mistralai/devstral-2512=262144``.
+    Empty entries (a trailing comma) are ignored; any other entry must be ``name=<positive int>``.
+    """
+    windows: dict[str, int] = {}
+    for entry in os.environ.get("MODEL_CONTEXT_WINDOWS", "").split(","):
+        if not entry.strip():
+            continue
+        name, sep, raw = entry.strip().rpartition("=")
+        try:
+            tokens = int(raw.strip()) if sep and name.strip() else 0
+        except ValueError:
+            tokens = 0
+        if tokens <= 0:
+            raise ValueError(
+                f"MODEL_CONTEXT_WINDOWS entry {entry.strip()!r} is not valid; use "
+                "model=tokens pairs, e.g. openai/gpt-oss-120b=131072"
+            )
+        windows[name.strip()] = tokens
+    return windows
 
 
 # API-key placeholder for a keyless overridden Planner endpoint (e.g. a local
@@ -355,6 +498,48 @@ class Config:
     # chunk, so a gateway trickling keep-alive bytes could otherwise hang a run indefinitely.
     agent_request_timeout_s: float = 180.0
     agent_request_attempts: int = 2
+
+    # --- Agent run tuning knobs (every one optional; see .env.example) -----------------------
+    # Per-tool retry budget (AGENT_MCP_RETRIES) for tool errors. Browser agents make many MCP
+    # calls and must recover from transient "element not found" errors while hunting selectors;
+    # pydantic-ai's low default aborts the run after a couple. Also the LocatorFailureGuard's
+    # ceiling, and the tool budget of the offline seeding agents.
+    agent_mcp_retries: int = 5
+    # Budget for the MODEL'S OWN bad responses (AGENT_OUTPUT_RETRIES): empty turns, unparsed tool
+    # calls, output-schema failures. pydantic-ai counts these CUMULATIVELY across a run and would
+    # otherwise fall back to the tool budget, so a gateway that intermittently returns husk turns
+    # kills a long exploration even though each bounce is recoverable.
+    agent_output_retries: int = 15
+    # Max model requests per agent run (AGENT_REQUEST_LIMIT → UsageLimits.request_limit): the hard
+    # backstop on run size. pydantic-ai's default of 50 aborts a complex exploration mid-flow.
+    agent_request_limit: int = 300
+    # Explicit per-request completion budget (AGENT_MAX_OUTPUT_TOKENS); None = provider default.
+    # Overrides a gateway's small default that truncates a thinking model into reasoning-only turns.
+    agent_max_output_tokens: int | None = None
+    # Reasoning effort per browser agent (PLANNER_/HEALER_REASONING_EFFORT); None = not sent.
+    planner_reasoning_effort: ReasoningEffort | None = None
+    healer_reasoning_effort: ReasoningEffort | None = None
+    # Opt-in snapshot-history trimming (agents/runtime/history.py): None = OFF (the default);
+    # N = keep the newest N snapshots (SNAPSHOT_HISTORY_KEEP), plus anchor snapshots unless
+    # ANCHOR_SNAPSHOTS is off.
+    snapshot_history_keep: int | None = None
+    anchor_snapshots: bool = True
+    # Seconds a fallback screenshot stays fresh for inspect_screen (PLANNER_VISION_STALE_S).
+    vision_stale_after_s: float = 45.0
+    # Consecutive browser_generate_locator failures before the vision steer fires
+    # (PLANNER_LOCATOR_STEER_AFTER); clamped below agent_mcp_retries by the guard.
+    locator_steer_after: int = 3
+    # Watch the browser drive: a headed copy of the MCP config (PLAYWRIGHT_MCP_HEADED).
+    playwright_mcp_headed: bool = False
+    # Heal cap per test case (MAX_HEAL_ATTEMPTS); process_test_case(max_heal_attempts=) overrides.
+    # 3 gives the locator-kind escalation room to descend the resilience ladder: a persistently
+    # failing step needs one attempt to confirm the failure recurs and another to escalate to a
+    # different locator kind (e.g. roll a hallucinated id over to a verified XPath).
+    max_heal_attempts: int = 3
+    # Xray Server/DC custom field holding the manual steps (XRAY_STEPS_FIELD_ID).
+    xray_steps_field_id: str = DEFAULT_XRAY_STEPS_FIELD_ID
+    # Context-window size per model name (MODEL_CONTEXT_WINDOWS) for the run summary's peak %.
+    model_context_windows: Mapping[str, int] = field(default_factory=dict)
 
     # Retrieval memory (optional, OFF by default — RETRIEVAL_MEMORY_PLAN.md). When
     # rag_enabled is False nothing below is consulted and no rag/ module (or qdrant)
@@ -488,6 +673,20 @@ def load_config() -> Config:
         dom_probe_max_calls=_dom_probe_max_calls(),
         agent_request_timeout_s=_positive_float("AGENT_REQUEST_TIMEOUT_S", default=180.0),
         agent_request_attempts=_positive_int("AGENT_REQUEST_ATTEMPTS", default=2),
+        agent_mcp_retries=_int_knob("AGENT_MCP_RETRIES", default=5, minimum=1),
+        agent_output_retries=_int_knob("AGENT_OUTPUT_RETRIES", default=15, minimum=1),
+        agent_request_limit=_int_knob("AGENT_REQUEST_LIMIT", default=300, minimum=1),
+        agent_max_output_tokens=_max_output_tokens(),
+        planner_reasoning_effort=_reasoning_effort("PLANNER_REASONING_EFFORT"),
+        healer_reasoning_effort=_reasoning_effort("HEALER_REASONING_EFFORT"),
+        snapshot_history_keep=_optional_int_knob("SNAPSHOT_HISTORY_KEEP", minimum=0),
+        anchor_snapshots=_bool_knob("ANCHOR_SNAPSHOTS", default=True),
+        vision_stale_after_s=_positive_float_knob("PLANNER_VISION_STALE_S", default=45.0),
+        locator_steer_after=_int_knob("PLANNER_LOCATOR_STEER_AFTER", default=3, minimum=1),
+        playwright_mcp_headed=_bool_knob("PLAYWRIGHT_MCP_HEADED", default=False),
+        max_heal_attempts=_int_knob("MAX_HEAL_ATTEMPTS", default=3, minimum=0),
+        xray_steps_field_id=os.environ.get("XRAY_STEPS_FIELD_ID", DEFAULT_XRAY_STEPS_FIELD_ID),
+        model_context_windows=_model_context_windows(),
         jira_base_url=_required_if("JIRA_BASE_URL", required=testcase_source == "xray"),
         jira_email=_required_if("JIRA_EMAIL", required=testcase_source == "xray"),
         jira_token=_required_if("JIRA_TOKEN", required=testcase_source == "xray"),

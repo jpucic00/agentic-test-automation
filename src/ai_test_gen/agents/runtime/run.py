@@ -24,8 +24,8 @@ from pydantic_ai.messages import RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.usage import UsageLimits
 
+from ...core.config import Config
 from ...core.usage import UsageLog, track_usage
-from .context import agent_request_limit
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,7 @@ async def run_agent_logged[OutputT](
     agent: Agent[None, OutputT],
     user_message: str,
     *,
+    config: Config,
     agent_label: str,
     request_limit: int | None = None,
     usage: UsageLog | None = None,
@@ -171,24 +172,29 @@ async def run_agent_logged[OutputT](
     model actually emitted and why it was rejected. The exception re-raises unchanged, so
     orchestrator flow (heal accounting, clean-failure wrapping) is untouched.
 
-    ``request_limit`` overrides the shared ``AGENT_REQUEST_LIMIT`` for one run — the offline
-    seeding agents (Mapper/Distiller) bound their own exploration via ``DISTILLER_REQUEST_LIMIT``.
-    Omitted → the shared default, so every browser-agent caller is unchanged.
+    ``request_limit`` overrides the shared ``config.agent_request_limit`` (``AGENT_REQUEST_LIMIT``)
+    for one run — the offline seeding agents (Mapper/Distiller) bound their own exploration via
+    ``config.distiller_request_limit``. Omitted → the shared limit.
 
     Every run is timed and its token usage logged in one INFO line when it ends — success or
     failure — and added to ``usage`` (the run's ``UsageLog``) under ``usage_label`` (default
     ``agent_label``; e.g. ``"Healer attempt 2"``). An aborted run reports what it spent up to the
     failure (see ``usage.track_usage``). The captured history also gives the run a context
-    profile — per-request prompt size, peak, and what filled it (``core/context_window.py``).
+    profile — per-request prompt size, peak, and what filled it (``core/context_window.py``),
+    measured against ``config.model_context_windows``.
     """
     # Version marker: this line in a run log PROVES the evidence-capture code is running —
     # its absence means the run used an older checkout, not that nothing failed.
     logger.info("%s run started (failure-evidence capture armed)", agent_label)
-    limit = request_limit if request_limit is not None else agent_request_limit()
+    limit = request_limit if request_limit is not None else config.agent_request_limit
     with (
         capture_run_messages() as messages,
         track_usage(
-            usage, usage_label or agent_label, model_name(agent), messages=messages
+            usage,
+            usage_label or agent_label,
+            model_name(agent),
+            messages=messages,
+            context_windows=config.model_context_windows,
         ) as run_usage,
     ):
         try:

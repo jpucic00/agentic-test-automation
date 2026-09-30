@@ -21,7 +21,6 @@ at ERROR and are counted in an optional ``VisionStats`` the orchestrator puts in
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine
@@ -41,22 +40,13 @@ logger = logging.getLogger(__name__)
 # Shared API consumed by the Planner and Healer builders (and unit tests). Declared so the helpers
 # that are only USED from sibling modules aren't flagged as unused-within-module.
 __all__ = [
-    "_DEFAULT_STALE_AFTER_S",
     "SCREENSHOT_TOOL",
     "VisionStats",
     "_saved_screenshot_path",
-    "_stale_after_s",
     "_latest_png",
     "_make_screenshot_capture",
     "register_inspect_screen",
 ]
-
-# A screenshot older than this (seconds) is treated as stale by inspect_screen: the model must
-# take a fresh browser_take_screenshot before the vision sensor will describe "the current page".
-# The default is generous on purpose: two gateway round-trips (browser_take_screenshot, then a
-# SEPARATE inspect_screen turn) sit between capture and use, so a tight window made every real call
-# bounce as "stale" — invisibly. Override per-run with PLANNER_VISION_STALE_S.
-_DEFAULT_STALE_AFTER_S = 45.0
 
 # The Playwright MCP tool inspect_screen drives itself (via direct_call_tool) to capture the live
 # page before describing it — see _make_screenshot_capture and inspect_screen.
@@ -98,22 +88,6 @@ class VisionStats:
         return self.no_screenshot > 0 or self.backend_errors > 0
 
 
-def _stale_after_s() -> float:
-    """Staleness window (seconds) for inspect_screen, from ``PLANNER_VISION_STALE_S`` (default 45).
-
-    Invalid or non-positive values fall back to the default rather than failing the run — this is a
-    latency-tuning knob, not a correctness gate.
-    """
-    raw = os.environ.get("PLANNER_VISION_STALE_S")
-    if raw is None:
-        return _DEFAULT_STALE_AFTER_S
-    try:
-        value = float(raw)
-    except ValueError:
-        return _DEFAULT_STALE_AFTER_S
-    return value if value > 0 else _DEFAULT_STALE_AFTER_S
-
-
 def _latest_png(directory: Path) -> Path | None:
     """Newest ``*.png`` under ``directory`` by mtime, or None if there are none."""
     pngs = list(directory.rglob("*.png"))
@@ -137,8 +111,17 @@ def _saved_screenshot_path(raw: object, base_dir: Path) -> Path | None:
     return path if path.is_relative_to(root) else None
 
 
-def _fresh_fallback_png(directory: Path) -> tuple[Path | None, float | None]:
+def _fresh_fallback_png(
+    directory: Path, stale_after_s: float
+) -> tuple[Path | None, float | None]:
     """(newest ``*.png`` under ``directory``, None) if within the staleness window.
+
+    A screenshot older than ``stale_after_s`` (``config.vision_stale_after_s``, from
+    ``PLANNER_VISION_STALE_S``, default 45) is stale: the model must take a fresh
+    browser_take_screenshot before the vision sensor will describe "the current page". The
+    default is generous on purpose: two gateway round-trips (browser_take_screenshot, then a
+    SEPARATE inspect_screen turn) sit between capture and use, so a tight window made every real
+    call bounce as "stale" — invisibly.
 
     Otherwise (None, age of the stale newest PNG in seconds), or (None, None) when there is none.
     """
@@ -146,7 +129,7 @@ def _fresh_fallback_png(directory: Path) -> tuple[Path | None, float | None]:
     if png is None:
         return None, None
     age = time.time() - png.stat().st_mtime
-    return (None, age) if age > _stale_after_s() else (png, None)
+    return (None, age) if age > stale_after_s else (png, None)
 
 
 def _make_screenshot_capture(
@@ -260,10 +243,10 @@ def register_inspect_screen(
                         config.snapshots_dir,
                     )
         if png is None:
-            png, stale_age = _fresh_fallback_png(config.snapshots_dir)
+            png, stale_age = _fresh_fallback_png(config.snapshots_dir, config.vision_stale_after_s)
         if png is None:
             counts.no_screenshot += 1
-            stale_after = _stale_after_s()
+            stale_after = config.vision_stale_after_s
             problem = (
                 "no PNG there"
                 if stale_age is None
@@ -330,7 +313,7 @@ def register_inspect_screen(
         agent_label,
         max_calls,
         config.vision_model,
-        _stale_after_s(),
+        config.vision_stale_after_s,
         config.snapshots_dir,
     )
     return inspect_screen

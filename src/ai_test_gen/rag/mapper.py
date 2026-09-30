@@ -43,7 +43,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, AgentRetries
 
-from ..agents.runtime.context import agent_output_retries, agent_retries
 from ..agents.runtime.run import run_agent_logged
 from ..core.config import Config
 from ..net.gateway import build_openai_model
@@ -209,7 +208,7 @@ def build_mapper(config: Config, tools: RepoTools) -> Agent[None, MapDraft]:
         output_type=MapDraft,
         system_prompt=system_prompt,
         model_settings=seeding_model_settings(config),
-        retries=AgentRetries(tools=agent_retries(), output=agent_output_retries()),
+        retries=AgentRetries(tools=config.agent_mcp_retries, output=config.agent_output_retries),
     )
     tools.register(agent)
     return agent
@@ -221,7 +220,11 @@ def _default_run_draft(config: Config) -> RunDraft:
         # The Mapper has no MCP toolset, so run_agent_logged's context-enter is a no-op;
         # we reuse it for the same structured-output failure evidence the agents get.
         return await run_agent_logged(
-            agent, message, agent_label="Mapper", request_limit=config.distiller_request_limit
+            agent,
+            message,
+            config=config,
+            agent_label="Mapper",
+            request_limit=config.distiller_request_limit,
         )
 
     return run

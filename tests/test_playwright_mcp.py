@@ -70,14 +70,13 @@ def test_build_playwright_mcp_constructs_node_toolset_when_cli_present(cfg, monk
     assert isinstance(toolset, pm.AbstractToolset)
 
 
-def test_resolve_config_headless_by_default(monkeypatch):
-    monkeypatch.delenv("PLAYWRIGHT_MCP_HEADED", raising=False)
-    assert pm._resolve_config_path() == str(pm.MCP_CONFIG_PATH)
+def test_resolve_config_headless_by_default(cfg):
+    assert cfg.playwright_mcp_headed is False
+    assert pm._resolve_config_path(cfg.playwright_mcp_headed) == str(pm.MCP_CONFIG_PATH)
 
 
-def test_resolve_config_headed_writes_temp_with_headless_false(monkeypatch):
-    monkeypatch.setenv("PLAYWRIGHT_MCP_HEADED", "1")
-    path = pm._resolve_config_path()
+def test_resolve_config_headed_writes_temp_with_headless_false():
+    path = pm._resolve_config_path(True)  # PLAYWRIGHT_MCP_HEADED on
     assert path != str(pm.MCP_CONFIG_PATH)
     data = json.loads(Path(path).read_text())
     assert data["browser"]["launchOptions"]["headless"] is False

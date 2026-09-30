@@ -5,7 +5,7 @@ re-sends its growing history 41 times — so it says nothing about how full the 
 Every ``ModelResponse`` in a run's captured history carries its own ``usage.input_tokens``:
 the exact size of the prompt that produced it. ``profile_context`` reads those into a
 per-request curve (first / peak / final) and, when the model's window size is configured
-(``MODEL_CONTEXT_WINDOWS``), the peak as a share of that window.
+(``MODEL_CONTEXT_WINDOWS``, parsed by ``core/config.py``), the peak as a share of that window.
 
 **Composition** of the peak request is an estimate, attributed from measured numbers:
 
@@ -28,8 +28,7 @@ the server's chat template actually replays earlier reasoning is model-specific.
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TypedDict
 
 from pydantic_ai.messages import (
@@ -64,26 +63,6 @@ class ContextProfile(TypedDict):
     window: int | None
     peak_pct: float | None
     composition: dict[str, int]
-
-
-def context_windows() -> dict[str, int]:
-    """``MODEL_CONTEXT_WINDOWS`` as ``{model name: tokens}``; malformed entries are skipped.
-
-    Format: ``model=tokens`` pairs, comma-separated — the model name exactly as the usage
-    table shows it, e.g. ``openai/gpt-oss-120b=131072,mistralai/devstral-2512=262144``.
-    """
-    windows: dict[str, int] = {}
-    for entry in os.environ.get("MODEL_CONTEXT_WINDOWS", "").split(","):
-        name, sep, raw = entry.strip().rpartition("=")
-        if not sep or not name.strip():
-            continue
-        try:
-            tokens = int(raw.strip())
-        except ValueError:
-            continue
-        if tokens > 0:
-            windows[name.strip()] = tokens
-    return windows
 
 
 def _user_prompt_chars(part: UserPromptPart) -> int:
@@ -173,8 +152,15 @@ def _composition(
     return dict(sorted(rounded.items(), key=lambda item: item[1], reverse=True))
 
 
-def profile_context(messages: Sequence[ModelMessage], model: str) -> ContextProfile | None:
+def profile_context(
+    messages: Sequence[ModelMessage],
+    model: str,
+    windows: Mapping[str, int] | None = None,
+) -> ContextProfile | None:
     """Context profile of one agent run from its captured history; ``None`` without usage data.
+
+    ``windows`` maps model names to context-window sizes (``config.model_context_windows``);
+    without an entry for ``model`` the profile carries no window share.
 
     Only responses that report ``input_tokens`` are profiled — a gateway that returns no
     per-response usage gives no profile rather than a curve of zeros.
@@ -188,7 +174,7 @@ def profile_context(messages: Sequence[ModelMessage], model: str) -> ContextProf
         return None
     tokens = [messages[i].usage.input_tokens for i in response_indices]  # type: ignore[union-attr]
     peak_at = max(range(len(tokens)), key=tokens.__getitem__)
-    window = context_windows().get(model)
+    window = (windows or {}).get(model)
     return ContextProfile(
         requests=len(tokens),
         per_request=tokens,

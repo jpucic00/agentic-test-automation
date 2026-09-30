@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from types import SimpleNamespace
 from typing import Any, cast
@@ -118,13 +119,17 @@ class _FakeAgent:
         )
 
 
-def test_taskgroup_wrapped_exhaustion_still_logs_evidence(caplog):
+def test_taskgroup_wrapped_exhaustion_still_logs_evidence(cfg, caplog):
     # The laptop failure mode: pydantic-ai's exhaustion surfaces inside an ExceptionGroup, so
     # a plain `except UnexpectedModelBehavior` never fires — the group handler must log the
     # leaves AND the evidence block, then re-raise the group unchanged.
     with caplog.at_level(logging.ERROR, logger="ai_test_gen.agents.runtime.run"):
         with pytest.raises(BaseExceptionGroup):
-            asyncio.run(run_agent_logged(cast(Any, _FakeAgent()), "go", agent_label="Planner"))
+            asyncio.run(
+                run_agent_logged(
+                    cast(Any, _FakeAgent()), "go", config=cfg, agent_label="Planner"
+                )
+            )
 
     assert "task-group failure" in caplog.text
     assert "Exceeded maximum retries (5) for output validation" in caplog.text
@@ -144,13 +149,15 @@ class _FakePlainCrashAgent:
         raise RuntimeError("connection dropped mid-turn")
 
 
-def test_any_exception_logs_marker_and_evidence_backstop(caplog):
+def test_any_exception_logs_marker_and_evidence_backstop(cfg, caplog):
     # Nothing may leave the frame silently: the catch-all logs any exception shape, and the
     # INFO start marker proves in the run log that the evidence-capture code is running.
     with caplog.at_level(logging.INFO, logger="ai_test_gen.agents.runtime.run"):
         with pytest.raises(RuntimeError):
             asyncio.run(
-                run_agent_logged(cast(Any, _FakePlainCrashAgent()), "go", agent_label="Planner")
+                run_agent_logged(
+                    cast(Any, _FakePlainCrashAgent()), "go", config=cfg, agent_label="Planner"
+                )
             )
 
     assert "failure-evidence capture armed" in caplog.text
@@ -174,18 +181,20 @@ class _RecordingAgent:
         return SimpleNamespace(output="done")
 
 
-def test_request_limit_override_and_shared_default_reach_usage_limits(monkeypatch):
+def test_request_limit_override_and_shared_default_reach_usage_limits(cfg):
     # request_limit is the seeding agents' seam (Mapper/Distiller bound their exploration
     # via DISTILLER_REQUEST_LIMIT): an explicit value must reach UsageLimits unchanged,
-    # and omitting it keeps every browser-agent caller on agent_request_limit().
-    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "44")
+    # and omitting it keeps every browser-agent caller on config.agent_request_limit.
+    cfg = dataclasses.replace(cfg, agent_request_limit=44)
     agent = _RecordingAgent()
 
     out = asyncio.run(
-        run_agent_logged(cast(Any, agent), "go", agent_label="Distiller", request_limit=7)
+        run_agent_logged(
+            cast(Any, agent), "go", config=cfg, agent_label="Distiller", request_limit=7
+        )
     )
     assert out == "done"
     assert agent.run_kwargs[0]["usage_limits"].request_limit == 7
 
-    asyncio.run(run_agent_logged(cast(Any, agent), "go", agent_label="Planner"))
+    asyncio.run(run_agent_logged(cast(Any, agent), "go", config=cfg, agent_label="Planner"))
     assert agent.run_kwargs[1]["usage_limits"].request_limit == 44
