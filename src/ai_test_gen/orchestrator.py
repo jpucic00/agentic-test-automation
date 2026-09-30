@@ -55,7 +55,7 @@ from .agents.tools.inspect_screen import VisionStats
 from .browser.runner import classify_failure, run_test
 from .core.config import PROJECT_ROOT, Config, load_config
 from .core.models import EnvironmentRunResult, GeneratedTest, TestPlan, TestRunResult
-from .core.usage import UsageLog, format_usage
+from .core.usage import UsageLog, format_context, format_usage
 from .pipeline.heal_loop import (
     MAX_CONSECUTIVE_ABORTED_HEALS,
     NO_FIX_VERDICT,
@@ -565,6 +565,10 @@ def main() -> None:
     if "usage" in result:
         print("\n=== Model usage ===")
         print(textwrap.indent(format_usage(result["usage"]), "  "))
+        context = format_context(result["usage"])
+        if context:
+            print("\n=== Context windows (peak request) ===")
+            print(textwrap.indent(context, "  "))
     print(f"\nFull DEBUG log: {log_path}")
 
 

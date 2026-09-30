@@ -952,5 +952,5 @@ def test_main_prints_usage_as_a_table_not_a_raw_dict(monkeypatch, capsys, tmp_pa
     printed = capsys.readouterr().out
     assert "usage: {" not in printed  # not the raw dict
     assert "=== Model usage ===" in printed
-    assert "  Planner  planner-model        41  512,340  6,210       0  4m03s" in printed
-    assert "  total                         41  512,340  6,210       0  5m00s" in printed
+    assert "  Planner  planner-model        41  512,340  6,210       0         -  4m03s" in printed
+    assert "  total                         41  512,340  6,210       0            5m00s" in printed

@@ -178,15 +178,18 @@ async def run_agent_logged[OutputT](
     Every run is timed and its token usage logged in one INFO line when it ends — success or
     failure — and added to ``usage`` (the run's ``UsageLog``) under ``usage_label`` (default
     ``agent_label``; e.g. ``"Healer attempt 2"``). An aborted run reports what it spent up to the
-    failure (see ``usage.track_usage``).
+    failure (see ``usage.track_usage``). The captured history also gives the run a context
+    profile — per-request prompt size, peak, and what filled it (``core/context_window.py``).
     """
     # Version marker: this line in a run log PROVES the evidence-capture code is running —
     # its absence means the run used an older checkout, not that nothing failed.
     logger.info("%s run started (failure-evidence capture armed)", agent_label)
     limit = request_limit if request_limit is not None else agent_request_limit()
     with (
-        track_usage(usage, usage_label or agent_label, model_name(agent)) as run_usage,
         capture_run_messages() as messages,
+        track_usage(
+            usage, usage_label or agent_label, model_name(agent), messages=messages
+        ) as run_usage,
     ):
         try:
             async with agent:

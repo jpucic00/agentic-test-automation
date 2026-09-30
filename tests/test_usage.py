@@ -86,8 +86,12 @@ def test_format_usage_is_an_aligned_table_with_a_total_line():
     table = format_usage(log.summary(420.0))
     lines = table.splitlines()
 
-    assert lines[0].split() == ["agent", "model", "requests", "in", "out", "nudges", "wall"]
-    assert lines[1].split() == ["Planner", "gpt-oss-120b", "41", "512,340", "6,210", "0", "4m03s"]
+    assert lines[0].split() == [
+        "agent", "model", "requests", "in", "out", "nudges", "peak", "ctx", "wall"
+    ]
+    assert lines[1].split() == [
+        "Planner", "gpt-oss-120b", "41", "512,340", "6,210", "0", "-", "4m03s"
+    ]
     assert lines[2].endswith("(aborted)")
     assert lines[3].split() == ["total", "50", "600,340", "7,710", "0", "7m00s"]
     # Right-aligned numeric columns: the "requests" figures end in the same column.
@@ -141,6 +145,10 @@ def test_successful_run_records_usage_and_logs_one_line(caplog):
     assert (rec["requests"], rec["input_tokens"], rec["output_tokens"]) == (2, 220, 10)
     assert rec["tool_calls"] == 1
     assert rec["outcome"] == "ok"
+    # Per-request prompt sizes come from each response's own usage, not the run total.
+    assert rec["context"] is not None
+    assert rec["context"]["per_request"] == [100, 120]
+    assert (rec["context"]["peak"], rec["context"]["peak_request"]) == (120, 2)
     lines = [r.getMessage() for r in caplog.records if "usage:" in r.getMessage()]
     assert len(lines) == 1
     assert lines[0].startswith("Generator usage: 2 requests, in=220 out=10 tokens, ")
@@ -162,6 +170,7 @@ def test_aborted_run_still_records_partial_usage(caplog):
     # The completed first turn is reported; the request that died carried no usage.
     assert (rec["requests"], rec["input_tokens"], rec["output_tokens"]) == (1, 100, 7)
     assert rec["outcome"] == "error"
+    assert rec["context"] is not None and rec["context"]["per_request"] == [100]
     assert any(
         r.getMessage().startswith("Planner usage: 1 request, in=100 out=7 tokens")
         and r.getMessage().endswith("(aborted)")

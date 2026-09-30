@@ -9,7 +9,7 @@ import time
 from ..agents.tools.inspect_screen import VisionStats
 from ..core.config import Config
 from ..core.models import EnvironmentRunResult, TestRunResult
-from ..core.usage import UsageLog, describe, format_usage
+from ..core.usage import UsageLog, describe, format_context, format_usage
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +58,13 @@ def with_usage(summary: dict, usage: UsageLog, started: float) -> dict:
     report = usage.summary(time.monotonic() - started)
     summary["usage"] = report
     total = report["total"]
+    context = format_context(report)
     logger.info(
-        "[%s] Usage total: %s (%d agent run record(s))\n%s",
+        "[%s] Usage total: %s (%d agent run record(s))\n%s%s",
         summary["issue_key"],
         describe(total["requests"], total["input_tokens"], total["output_tokens"], total["wall_s"]),
         len(report["agents"]),
         format_usage(report),
+        f"\nContext windows:\n{context}" if context else "",
     )
     return summary
