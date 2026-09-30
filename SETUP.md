@@ -243,12 +243,19 @@ heals on failure (up to the configured cap), and — unless `GITLAB_ENABLED=fals
 The generated test and its plan are written to `output/`. To run the whole thing in a container instead, see
 the [Docker section in the README](README.md#run-in-docker).
 
-Generated tests navigate the app with baseURL-relative paths (`page.goto('/notes')`), and
-`output/playwright.config.ts` takes `baseURL` from the `BASE_URL` environment variable, which the pipeline
-sets for every run. To re-run a generated test by hand, set it yourself:
+Generated tests navigate the app with baseURL-relative paths (`page.goto('/notes')`). To re-run a
+generated test by hand, run Playwright from `output/`. It targets the first `STAGING_BASE_URL` entry,
+read from the environment or from the repo's `.env`:
 
 ```bash
-cd output && BASE_URL=https://staging.yourapp.internal npx playwright test tests/QA-1234-login.spec.ts
+cd output && npx playwright test tests/QA-1234-login.spec.ts
+```
+
+To run it against a different environment, set `BASE_URL`, which takes precedence. The pipeline sets it
+itself for every run (the primary environment, then each other `STAGING_BASE_URL` entry):
+
+```bash
+cd output && BASE_URL=https://qa.yourapp.internal npx playwright test tests/QA-1234-login.spec.ts
 ```
 
 With several `STAGING_BASE_URL` environments, the result summary printed at the end (and the MR
